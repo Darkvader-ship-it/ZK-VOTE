@@ -208,7 +208,7 @@ describe("Homepage", () => {
       fireEvent.click(screen.getByText("View on GitHub"));
 
       expect(mockOpen).toHaveBeenCalledWith(
-        "https://github.com/ashfrancis/zkvote",
+        "https://github.com/ZK-VOTE/ZK-VOTE",
         "_blank",
       );
 

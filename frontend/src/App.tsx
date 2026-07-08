@@ -467,7 +467,7 @@ function App() {
                 <ul className="space-y-3 text-sm text-muted-foreground">
                   <li>
                     <a
-                      href="https://github.com/ashfrancis/zkvote"
+                      href="https://github.com/ZK-VOTE/ZK-VOTE"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-foreground transition-colors"
@@ -508,7 +508,7 @@ function App() {
             </p>
             <div className="flex items-center gap-6">
               <a
-                href="https://github.com/ashfrancis/zkvote"
+                href="https://github.com/ZK-VOTE/ZK-VOTE"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground hover:text-foreground transition-colors"

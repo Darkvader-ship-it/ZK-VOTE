@@ -696,7 +696,7 @@ export function Homepage() {
               variant="outline"
               size="lg"
               onClick={() =>
-                window.open("https://github.com/ashfrancis/zkvote", "_blank")
+                window.open("https://github.com/ZK-VOTE/ZK-VOTE", "_blank")
               }
               className="h-12 px-8"
             >
