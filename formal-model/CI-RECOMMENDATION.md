@@ -27,18 +27,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run TLC model checker
-        uses: aerben/tlaplus-github-action@v1
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
-          spec: formal-model/ZKVote.tla
-          config: formal-model/ZKVote.cfg
-          tlc_params: -workers auto -deadlock -depth 20
+          distribution: temurin
+          java-version: 17
+      - name: Download TLA+ tools
+        run: |
+          curl -sL -o tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+      - name: Run TLC model checker
+        run: |
+          java -cp tla2tools.jar tlc2.TLC \
+            formal-model/ZKVote.tla \
+            -config formal-model/ZKVote.cfg \
+            -depth 20 -workers auto
 ```
 
 **Estimated compute cost:**
-- Small model (2 DAOs, 3 members, 2 proposals, depth 20): ~30-60 seconds, < 1 GB RAM
-- Medium model (3 DAOs, 5 members, 3 proposals, depth 30): ~5-10 minutes, ~4 GB RAM
-- Full model (5 DAOs, 10 members, 5 proposals, depth 50): ~2-4 hours, ~16 GB RAM
+- FIFO eviction model (2 DAOs, 35 members, 2 proposals, depth 20): ~2-5 minutes, ~4 GB RAM
+- Medium model (3 DAOs, 10 members, 3 proposals, depth 30): ~10-20 minutes, ~8 GB RAM
+- Full model (5 DAOs, 35 members, 5 proposals, depth 50): ~4-8 hours, ~32 GB RAM
 
 ### Option 2: Apalache (Symbolic Model Checker)
 

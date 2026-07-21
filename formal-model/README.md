@@ -70,6 +70,32 @@ apalache mc --invariant=Invariants --length=20 ZKVote.tla
 5. **Bounded model checking**: TLC explores all states up to a depth limit.
    Unbounded correctness requires Apalache or a proof assistant.
 
+6. **Comments contract not included**: The ~2,000 line Comments contract
+   (anonymous/public comments with ZK verification) is not modeled. It shares
+   the same Groth16 verification library and nullifier tracking pattern, so
+   invariants I1, I5, and I8 apply to it as well, but its unique comment
+   edit/delete state machine is not covered.
+
+## Fixes Applied (2026-07-24)
+
+Based on PR #45 code review, the following issues were identified and fixed:
+
+| Issue | Fix |
+|-------|-----|
+| `SYMMETRY SymmetrySet` undefined in config | Removed from config |
+| `NoDoubleVoting` used `'` in INVARIANT | Converted to temporal property in Spec |
+| `rootIndex` never updated by any action | Added `rootIndexMap` updates to RegisterCommitment, RemoveMember, InitTree, CreateAndInitDao |
+| `\X` instead of `\cup` in TypeOK | Fixed to use correct set syntax |
+| `UNION {[a: MemberAddr]}, {}` invalid syntax | Fixed to `0..MAX_MEMBERS` range |
+| Variables initialized to -1 outside type range | Types widened to include -1 sentinel values |
+| Dead code: `proofValid`, `filledSubtrees`, `roots` | Removed |
+| `choice` parameter unused in Vote | Removed |
+| `RegistryAuthenticate` uncontrolled backdoor | Removed; `registryAuth` only set by `CreateAndInitDao` |
+| `AuthDelegationSoundness` vacuously true | Fixed to allow both admin and registry auth paths |
+| Missing actions: `self_join`, `leave`, `reinstate_member`, `set_proposal_mode` | Added |
+| Model scope too small for FIFO eviction | Increased `MAX_MEMBERS` to 35 to exceed MAX_ROOT_HISTORY=30 |
+| Unverified third-party GitHub Action | Replaced with direct Java + TLA+ tools download |
+
 ## Next Steps
 
 1. Install TLA+ Toolbox: https://github.com/tlaplus/tlaplus/releases

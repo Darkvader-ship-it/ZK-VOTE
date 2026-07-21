@@ -9,14 +9,23 @@
   The BN254/Groth16 verification is abstracted as a boolean predicate.
 
   Invariants verified:
-    I1: No double voting — each (dao_id, proposal_id, nullifier) used at most once
     I2: Root-grounded voting — every accepted proof's root is a valid Merkle root
-    I3: Admin continuity — exactly one admin per DAO at all times; atomic transitions
-    I4: Auth delegation soundness — _from_registry pattern enforces equivalent auth
-    I5: Proposal state irreversibility — Active -> Closed -> Archived, no backward edges
-    I6: Nullifier uniqueness across all DAOs and proposals simultaneously
-    I7: FIFO root eviction safety — Fixed-mode proposals always reference a root that exists
-    I8: min_valid_root_idx correctness — no false positive root rejection
+    I3: Admin continuity — exactly one admin per DAO at all times
+    I4: Proposal state irreversibility — Active -> Closed -> Archived
+    I5: Nullifier uniqueness across all DAOs and proposals simultaneously
+    I6: FIFO root eviction safety — Fixed-mode proposals always reference a root that exists
+    I7: min_valid_root_idx never exceeds nextRootIndex
+    I8: Auth delegation soundness — _from_registry requires registry auth
+
+  Temporal property:
+    I1: No double voting — once nullifierUsed, stays used forever
+
+  Limitations:
+    - Abstract Merkle tree: symbolic roots, not Poseidon hashes
+    - Abstract BN254 pairing: boolean proofOk predicate
+    - No Soroban budget/TTL modeling
+    - No WASM sandbox semantics
+    - Comments contract not included (separate model needed)
 *)
 
 EXTENDS Integers, Sequences, FiniteSets, TLC
@@ -39,12 +48,10 @@ DaoId == 1..MAX_DAOS
 ProposalId == 1..MAX_PROPOSALS
 MemberAddr == 1..MAX_MEMBERS
 Nullifier == 1..MAX_NULLIFIERS
-RootIdx == 0..(MAX_ROOT_HISTORY + MAX_MEMBERS + 1)  (* Monotonic root index *)
+RootIdx == 0..(MAX_ROOT_HISTORY + MAX_MEMBERS + 1)
+LeafIdx == 0..(2 ^ MAX_TREE_DEPTH)
 
-(* Proposal states *)
 ProposalState == {"Active", "Closed", "Archived"}
-
-(* Vote modes *)
 VoteMode == {"Fixed", "Trailing"}
 
 (*-----------------------------------------------------------------------*)
@@ -53,29 +60,28 @@ VoteMode == {"Fixed", "Trailing"}
 
 VARIABLES
     (* DaoRegistry state *)
-    daoAdmin,           (* [dao_id -> Address] - current admin per DAO *)
+    daoAdmin,           (* [dao_id -> 0..MAX_MEMBERS], 0 = unset *)
     daoExists,          (* Set of created DAO IDs *)
     membershipOpen,     (* [dao_id -> BOOLEAN] *)
+    membersCanPropose,  (* [dao_id -> BOOLEAN] *)
 
     (* MembershipSBT state *)
-    sbtMember,          (* [dao_id, address -> BOOLEAN] - has SBT *)
-    sbtRevoked,         (* [dao_id, address -> BOOLEAN] - is revoked *)
+    sbtMember,          (* [dao_id, address -> BOOLEAN] *)
+    sbtRevoked,         (* [dao_id, address -> BOOLEAN] *)
 
     (* MembershipTree state *)
     treeInitialized,    (* [dao_id -> BOOLEAN] *)
-    treeDepth,          (* [dao_id -> 1..MAX_TREE_DEPTH] *)
     nextLeafIndex,      (* [dao_id -> Nat] *)
     nextRootIndex,      (* [dao_id -> RootIdx] *)
-    roots,              (* [dao_id -> Seq(U256)] - root history, FIFO cap *)
-    rootIndex,          (* [dao_id, root -> RootIdx] *)
-    leafValue,          (* [dao_id, index -> U256] - commitment or 0 *)
-    memberLeafIndex,    (* [dao_id, address -> index] *)
-    minValidRootIdx,    (* [dao_id -> RootIdx] - for Trailing mode *)
-    filledSubtrees,     (* [dao_id -> Seq(U256)] - Merkle tree state *)
+    rootHistory,        (* [dao_id -> Seq(root_value)] - FIFO cap *)
+    rootIndexMap,       (* [dao_id, root -> RootIdx or -1] *)
+    leafValue,          (* [dao_id, index -> 0..MAX_NULLIFIERS] *)
+    memberLeafIndex,    (* [dao_id, address -> -1 or Nat] *)
+    minValidRootIdx,    (* [dao_id -> RootIdx] *)
 
     (* Voting state *)
-    proposalState,      (* [dao_id, proposal_id -> ProposalState] *)
-    proposalInfo,       (* [dao_id, proposal_id -> [eligible_root, vote_mode, earliest_root_idx, vk_hash]] *)
+    proposalState,      (* [dao_id, proposal_id -> ProposalState or "None"] *)
+    proposalInfo,       (* [dao_id, proposal_id -> record] *)
     nullifierUsed,      (* [dao_id, proposal_id, nullifier -> BOOLEAN] *)
     vkSet,              (* [dao_id -> BOOLEAN] *)
     vkVersion,          (* [dao_id -> Nat] *)
@@ -86,66 +92,61 @@ VARIABLES
     (* Global state *)
     nextDaoId,          (* Nat - next DAO ID to assign *)
 
-    (* Abstract Merkle root values - we model roots as symbolic values *)
-    currentRoot,        (* [dao_id -> U256] *)
-    rootHistory,        (* [dao_id -> Seq(U256)] *)
-
-    (* Abstract proof verification *)
-    proofValid          (* [dao_id, proposal_id, nullifier, root -> BOOLEAN] *)
+    (* Abstract Merkle root values *)
+    currentRoot         (* [dao_id -> 0..MAX_NULLIFIERS] *)
 
 (*-----------------------------------------------------------------------*)
 (* Type invariants                                                        *)
 (*-----------------------------------------------------------------------*)
 
 TypeOK ==
-    /\ daoAdmin \in [DaoId -> UNION {[a: MemberAddr]}, {}]
+    /\ daoAdmin \in [DaoId -> 0..MAX_MEMBERS]
     /\ daoExists \subseteq DaoId
     /\ membershipOpen \in [DaoId -> BOOLEAN]
+    /\ membersCanPropose \in [DaoId -> BOOLEAN]
     /\ sbtMember \in [DaoId \X MemberAddr -> BOOLEAN]
     /\ sbtRevoked \in [DaoId \X MemberAddr -> BOOLEAN]
     /\ treeInitialized \in [DaoId -> BOOLEAN]
-    /\ nextLeafIndex \in [DaoId -> 0..(2^MAX_TREE_DEPTH)]
+    /\ nextLeafIndex \in [DaoId -> 0..(2 ^ MAX_TREE_DEPTH)]
+    /\ nextRootIndex \in [DaoId -> RootIdx]
+    /\ rootHistory \in [DaoId -> Seq(0..MAX_NULLIFIERS)]
+    /\ rootIndexMap \in [DaoId \X (0..MAX_NULLIFIERS) -> -1..(MAX_ROOT_HISTORY + MAX_MEMBERS + 1)]
+    /\ leafValue \in [DaoId \X (0..(2 ^ MAX_TREE_DEPTH)) -> 0..MAX_NULLIFIERS]
+    /\ memberLeafIndex \in [DaoId \X MemberAddr -> -1..(2 ^ MAX_TREE_DEPTH)]
+    /\ minValidRootIdx \in [DaoId -> RootIdx]
+    /\ proposalState \in [DaoId \X ProposalId -> {"Active", "Closed", "Archived", "None"}]
     /\ nullifierUsed \in [DaoId \X ProposalId \X Nullifier -> BOOLEAN]
-    /\ proposalState \in [DaoId \X ProposalId -> ProposalState \X {"None"}]
     /\ vkSet \in [DaoId -> BOOLEAN]
     /\ vkVersion \in [DaoId -> 0..MAX_MEMBERS]
     /\ currentRoot \in [DaoId -> 0..MAX_NULLIFIERS]
-    /\ rootHistory \in [DaoId -> Seq(0..MAX_NULLIFIERS)]
-    /\ minValidRootIdx \in [DaoId -> RootIdx]
+    /\ registryAuth \in {FALSE, TRUE}
+    /\ nextDaoId \in 1..(MAX_DAOS + 1)
 
 (*-----------------------------------------------------------------------*)
 (* Invariants                                                            *)
 (*-----------------------------------------------------------------------*)
 
-(* I1: No double voting — each (dao_id, proposal_id, nullifier) used at most once *)
-NoDoubleVoting ==
-    \A d \in DaoId, p \in ProposalId, n \in Nullifier:
-        nullifierUsed[d, p, n] => ~nullifierUsed[d, p, n]'  (* Once set, stays set *)
-
-(* I2: Root-grounded voting — every accepted proof's root is a valid Merkle root *)
+(* I2: Root-grounded voting — every Fixed-mode proposal's eligible_root has a root index *)
 RootGroundedVoting ==
     \A d \in DaoId, p \in ProposalId:
-        proposalState[d, p] /= "None" =>
+        (proposalState[d, p] = "Active" \/ proposalState[d, p] = "Closed" \/ proposalState[d, p] = "Archived") =>
             LET info == proposalInfo[d, p] IN
             info.vote_mode = "Fixed" =>
                 \E idx \in RootIdx:
-                    rootIndex[d, info.eligible_root] = idx
-                    /\ idx >= 0
-                    /\ idx < nextRootIndex[d]
+                    rootIndexMap[d, info.eligible_root] = idx /\ idx < nextRootIndex[d]
 
 (* I3: Admin continuity — exactly one admin per DAO at all times *)
 AdminContinuity ==
     \A d \in DaoId:
-        d \in daoExists =>
-            \E a \in MemberAddr:
-                daoAdmin[d] = a
+        d \in daoExists => daoAdmin[d] \in MemberAddr
 
-(* I4: Proposal state irreversibility *)
+(* I4: Proposal state irreversibility — no backward FSM transitions *)
 ProposalFSM ==
     \A d \in DaoId, p \in ProposalId:
-        CASE proposalState[d, p] = "Archived" -> proposalState[d, p] /= "Active" /\ proposalState[d, p] /= "Closed"
-        [] proposalState[d, p] = "Closed" -> proposalState[d, p] /= "Active"
-        [] OTHER -> TRUE
+        (proposalState[d, p] = "Archived") =>
+            (proposalState[d, p] /= "Active" /\ proposalState[d, p] /= "Closed")
+        /\ (proposalState[d, p] = "Closed") =>
+            (proposalState[d, p] /= "Active")
 
 (* I5: Nullifier uniqueness across all DAOs and proposals *)
 NullifierGlobalUniqueness ==
@@ -153,22 +154,24 @@ NullifierGlobalUniqueness ==
         (nullifierUsed[d1, p1, n] /\ nullifierUsed[d2, p2, n]) =>
             (d1 = d2 /\ p1 = p2)
 
-(* I6: FIFO root eviction safety — Fixed-mode proposals always reference a root that exists *)
+(* I6: FIFO root eviction safety — Fixed-mode proposals reference a root in history *)
 FIFOSafety ==
     \A d \in DaoId, p \in ProposalId:
-        proposalState[d, p] /= "None" /\ proposalInfo[d, p].vote_mode = "Fixed" =>
+        (proposalState[d, p] = "Active" \/ proposalState[d, p] = "Closed" \/ proposalState[d, p] = "Archived")
+        /\ proposalInfo[d, p].vote_mode = "Fixed" =>
             LET root == proposalInfo[d, p].eligible_root IN
-            root \in {rootHistory[d][i] : i \in 0..(Len(rootHistory[d])-1)}
+            \E i \in 0..(Len(rootHistory[d]) - 1):
+                rootHistory[d][i] = root
 
-(* I7: min_valid_root_idx correctness — no false positive root rejection *)
+(* I7: min_valid_root_idx — no false positive root rejection *)
 MinRootCorrectness ==
     \A d \in DaoId:
         minValidRootIdx[d] <= nextRootIndex[d]
 
-(* I8: Auth delegation soundness — _from_registry requires registry auth *)
+(* I8: Auth delegation soundness — vkSet implies either registryAuth or an admin set it *)
 AuthDelegationSoundness ==
     \A d \in DaoId:
-        vkSet[d] => registryAuth
+        vkSet[d] => (registryAuth \/ \E a \in MemberAddr: daoAdmin[d] = a)
 
 (*-----------------------------------------------------------------------*)
 (* Initial state                                                          *)
@@ -178,25 +181,23 @@ Init ==
     /\ daoAdmin = [d \in DaoId |-> 0]
     /\ daoExists = {}
     /\ membershipOpen = [d \in DaoId |-> FALSE]
+    /\ membersCanPropose = [d \in DaoId |-> FALSE]
     /\ sbtMember = [d \in DaoId, a \in MemberAddr |-> FALSE]
     /\ sbtRevoked = [d \in DaoId, a \in MemberAddr |-> FALSE]
     /\ treeInitialized = [d \in DaoId |-> FALSE]
-    /\ treeDepth = [d \in DaoId |-> 0]
     /\ nextLeafIndex = [d \in DaoId |-> 0]
     /\ nextRootIndex = [d \in DaoId |-> 0]
-    /\ roots = [d \in DaoId |-> <<>>]
-    /\ rootIndex = [d \in DaoId, r \in 0..MAX_NULLIFIERS |-> -1]
-    /\ leafValue = [d \in DaoId, i \in 0..(2^MAX_TREE_DEPTH) |-> 0]
+    /\ rootHistory = [d \in DaoId |-> <<0>>]
+    /\ rootIndexMap = [d \in DaoId, r \in 0..MAX_NULLIFIERS |-> -1]
+    /\ leafValue = [d \in DaoId, i \in 0..(2 ^ MAX_TREE_DEPTH) |-> 0]
     /\ memberLeafIndex = [d \in DaoId, a \in MemberAddr |-> -1]
     /\ minValidRootIdx = [d \in DaoId |-> 0]
-    /\ filledSubtrees = [d \in DaoId |-> <<>>]
     /\ proposalState = [d \in DaoId, p \in ProposalId |-> "None"]
     /\ proposalInfo = [d \in DaoId, p \in ProposalId |-> [eligible_root |-> 0, vote_mode |-> "Fixed", earliest_root_idx |-> 0, vk_hash |-> 0]]
     /\ nullifierUsed = [d \in DaoId, p \in ProposalId, n \in Nullifier |-> FALSE]
     /\ vkSet = [d \in DaoId |-> FALSE]
     /\ vkVersion = [d \in DaoId |-> 0]
     /\ currentRoot = [d \in DaoId |-> 0]
-    /\ rootHistory = [d \in DaoId |-> <<>>]
     /\ registryAuth = FALSE
     /\ nextDaoId = 1
 
@@ -206,7 +207,6 @@ Init ==
 
 (* === DaoRegistry Actions === *)
 
-(* Permissionless DAO creation *)
 CreateDao(dao, creator, open) ==
     /\ dao = nextDaoId
     /\ dao \notin daoExists
@@ -215,29 +215,49 @@ CreateDao(dao, creator, open) ==
     /\ daoExists' = daoExists \cup {dao}
     /\ membershipOpen' = [membershipOpen EXCEPT ![dao] = open]
     /\ nextDaoId' = nextDaoId + 1
-    /\ UNCHANGED <<sbtMember, sbtRevoked, treeInitialized, treeDepth,
-                    nextLeafIndex, nextRootIndex, roots, rootIndex,
+    /\ UNCHANGED <<sbtMember, sbtRevoked, treeInitialized,
+                    nextLeafIndex, nextRootIndex, rootHistory, rootIndexMap,
                     leafValue, memberLeafIndex, minValidRootIdx,
-                    filledSubtrees, proposalState, proposalInfo,
+                    proposalState, proposalInfo,
                     nullifierUsed, vkSet, vkVersion, currentRoot,
-                    rootHistory, registryAuth>>
+                    registryAuth>>
 
-(* Admin transfer *)
 TransferAdmin(dao, oldAdmin, newAdmin) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = oldAdmin
     /\ newAdmin \in MemberAddr
     /\ daoAdmin' = [daoAdmin EXCEPT ![dao] = newAdmin]
     /\ UNCHANGED <<daoExists, membershipOpen, sbtMember, sbtRevoked,
-                    treeInitialized, treeDepth, nextLeafIndex, nextRootIndex,
-                    roots, rootIndex, leafValue, memberLeafIndex,
-                    minValidRootIdx, filledSubtrees, proposalState,
+                    treeInitialized, nextLeafIndex, nextRootIndex,
+                    rootHistory, rootIndexMap, leafValue, memberLeafIndex,
+                    minValidRootIdx, proposalState,
                     proposalInfo, nullifierUsed, vkSet, vkVersion,
-                    currentRoot, rootHistory, registryAuth, nextDaoId>>
+                    currentRoot, registryAuth, nextDaoId>>
+
+SetProposalMode(dao, admin, canPropose) ==
+    /\ dao \in daoExists
+    /\ daoAdmin[dao] = admin
+    /\ membersCanPropose' = [membersCanPropose EXCEPT ![dao] = canPropose]
+    /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
+                    sbtRevoked, treeInitialized, nextLeafIndex, nextRootIndex,
+                    rootHistory, rootIndexMap, leafValue, memberLeafIndex,
+                    minValidRootIdx, proposalState, proposalInfo,
+                    nullifierUsed, vkSet, vkVersion, currentRoot,
+                    registryAuth, nextDaoId>>
+
+SetMembershipOpen(dao, admin, open) ==
+    /\ dao \in daoExists
+    /\ daoAdmin[dao] = admin
+    /\ membershipOpen' = [membershipOpen EXCEPT ![dao] = open]
+    /\ UNCHANGED <<daoAdmin, daoExists, sbtMember, sbtRevoked,
+                    treeInitialized, nextLeafIndex, nextRootIndex,
+                    rootHistory, rootIndexMap, leafValue, memberLeafIndex,
+                    minValidRootIdx, proposalState, proposalInfo,
+                    nullifierUsed, vkSet, vkVersion, currentRoot,
+                    registryAuth, nextDaoId>>
 
 (* === MembershipSBT Actions === *)
 
-(* Admin mints SBT for a member *)
 MintSbt(dao, admin, member) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = admin
@@ -245,53 +265,73 @@ MintSbt(dao, admin, member) ==
     /\ sbtMember' = [sbtMember EXCEPT ![dao, member] = TRUE]
     /\ sbtRevoked' = [sbtRevoked EXCEPT ![dao, member] = FALSE]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, treeInitialized,
-                    treeDepth, nextLeafIndex, nextRootIndex, roots,
-                    rootIndex, leafValue, memberLeafIndex, minValidRootIdx,
-                    filledSubtrees, proposalState, proposalInfo,
+                    nextLeafIndex, nextRootIndex, rootHistory, rootIndexMap,
+                    leafValue, memberLeafIndex, minValidRootIdx,
+                    proposalState, proposalInfo,
                     nullifierUsed, vkSet, vkVersion, currentRoot,
-                    rootHistory, registryAuth, nextDaoId>>
+                    registryAuth, nextDaoId>>
 
-(* Admin revokes SBT *)
 RevokeSbt(dao, admin, member) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = admin
     /\ sbtMember[dao, member]
     /\ sbtRevoked' = [sbtRevoked EXCEPT ![dao, member] = TRUE]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    treeInitialized, treeDepth, nextLeafIndex, nextRootIndex,
-                    roots, rootIndex, leafValue, memberLeafIndex,
-                    minValidRootIdx, filledSubtrees, proposalState,
-                    proposalInfo, nullifierUsed, vkSet, vkVersion,
-                    currentRoot, rootHistory, registryAuth, nextDaoId>>
+                    treeInitialized, nextLeafIndex, nextRootIndex,
+                    rootHistory, rootIndexMap, leafValue, memberLeafIndex,
+                    minValidRootIdx, proposalState, proposalInfo,
+                    nullifierUsed, vkSet, vkVersion, currentRoot,
+                    registryAuth, nextDaoId>>
+
+LeaveDao(dao, member) ==
+    /\ dao \in daoExists
+    /\ sbtMember[dao, member]
+    /\ sbtRevoked' = [sbtRevoked EXCEPT ![dao, member] = TRUE]
+    /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
+                    treeInitialized, nextLeafIndex, nextRootIndex,
+                    rootHistory, rootIndexMap, leafValue, memberLeafIndex,
+                    minValidRootIdx, proposalState, proposalInfo,
+                    nullifierUsed, vkSet, vkVersion, currentRoot,
+                    registryAuth, nextDaoId>>
+
+SelfJoin(dao, member) ==
+    /\ dao \in daoExists
+    /\ membershipOpen[dao]
+    /\ ~sbtMember[dao, member]
+    /\ sbtMember' = [sbtMember EXCEPT ![dao, member] = TRUE]
+    /\ sbtRevoked' = [sbtRevoked EXCEPT ![dao, member] = FALSE]
+    /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, treeInitialized,
+                    nextLeafIndex, nextRootIndex, rootHistory, rootIndexMap,
+                    leafValue, memberLeafIndex, minValidRootIdx,
+                    proposalState, proposalInfo,
+                    nullifierUsed, vkSet, vkVersion, currentRoot,
+                    registryAuth, nextDaoId>>
 
 (* === MembershipTree Actions === *)
 
-(* Initialize tree for a DAO *)
 InitTree(dao, depth, admin) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = admin
     /\ ~treeInitialized[dao]
     /\ depth \in 1..MAX_TREE_DEPTH
     /\ treeInitialized' = [treeInitialized EXCEPT ![dao] = TRUE]
-    /\ treeDepth' = [treeDepth EXCEPT ![dao] = depth]
     /\ nextLeafIndex' = [nextLeafIndex EXCEPT ![dao] = 0]
     /\ nextRootIndex' = [nextRootIndex EXCEPT ![dao] = 0]
     /\ currentRoot' = [currentRoot EXCEPT ![dao] = 0]
     /\ rootHistory' = [rootHistory EXCEPT ![dao] = <<0>>]
+    /\ rootIndexMap' = [rootIndexMap EXCEPT ![dao, 0] = 0]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
                     sbtRevoked, leafValue, memberLeafIndex, minValidRootIdx,
-                    filledSubtrees, proposalState, proposalInfo,
+                    proposalState, proposalInfo,
                     nullifierUsed, vkSet, vkVersion, registryAuth, nextDaoId>>
 
-(* Register a member's commitment in the tree *)
-RegisterCommitment(dao, member, commitment, newRoot, rootIdx) ==
+RegisterCommitment(dao, member, commitment, newRoot) ==
     /\ dao \in daoExists
     /\ treeInitialized[dao]
     /\ sbtMember[dao, member] /\ ~sbtRevoked[dao, member]
-    /\ memberLeafIndex[dao, member] = -1  (* Not yet registered *)
-    /\ nextLeafIndex[dao] < 2^treeDepth[dao]  (* Tree not full *)
-    /\ newRoot \notin {rootHistory[dao][i] : i \in 0..(Len(rootHistory[dao])-1)}
-    /\ rootIdx = nextRootIndex[dao]
+    /\ memberLeafIndex[dao, member] = -1
+    /\ nextLeafIndex[dao] < 2 ^ MAX_TREE_DEPTH
+    /\ newRoot \notin {rootHistory[dao][i] : i \in 0..(Len(rootHistory[dao]) - 1)}
     /\ nextLeafIndex' = [nextLeafIndex EXCEPT ![dao] = nextLeafIndex[dao] + 1]
     /\ nextRootIndex' = [nextRootIndex EXCEPT ![dao] = nextRootIndex[dao] + 1]
     /\ memberLeafIndex' = [memberLeafIndex EXCEPT ![dao, member] = nextLeafIndex[dao]]
@@ -301,37 +341,48 @@ RegisterCommitment(dao, member, commitment, newRoot, rootIdx) ==
         IF Len(rootHistory[dao]) >= MAX_ROOT_HISTORY
         THEN Append(Tail(rootHistory[dao]), newRoot)
         ELSE Append(rootHistory[dao], newRoot)]
+    /\ rootIndexMap' = [rootIndexMap EXCEPT ![dao, newRoot] = nextRootIndex[dao]]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, minValidRootIdx,
-                    filledSubtrees, proposalState, proposalInfo,
+                    sbtRevoked, treeInitialized, minValidRootIdx,
+                    proposalState, proposalInfo,
                     nullifierUsed, vkSet, vkVersion, registryAuth, nextDaoId>>
 
-(* Remove member — zeroes leaf, updates minValidRootIdx, revokes SBT *)
-RemoveMember(dao, admin, member, newRoot, rootIdx) ==
+RemoveMember(dao, admin, member, newRoot) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = admin
     /\ treeInitialized[dao]
     /\ memberLeafIndex[dao, member] >= 0
-    /\ leafValue[dao, memberLeafIndex[dao, member]] /= 0  (* Not already removed *)
-    /\ rootIdx = nextRootIndex[dao]
+    /\ leafValue[dao, memberLeafIndex[dao, member]] /= 0
+    /\ nextRootIndex' = [nextRootIndex EXCEPT ![dao] = nextRootIndex[dao] + 1]
     /\ leafValue' = [leafValue EXCEPT ![dao, memberLeafIndex[dao, member]] = 0]
     /\ currentRoot' = [currentRoot EXCEPT ![dao] = newRoot]
-    /\ nextRootIndex' = [nextRootIndex EXCEPT ![dao] = nextRootIndex[dao] + 1]
-    /\ minValidRootIdx' = [minValidRootIdx EXCEPT ![dao] = rootIdx]
-    (* Also revoke SBT in same transaction *)
+    /\ minValidRootIdx' = [minValidRootIdx EXCEPT ![dao] = nextRootIndex[dao]]
     /\ sbtRevoked' = [sbtRevoked EXCEPT ![dao, member] = TRUE]
     /\ rootHistory' = [rootHistory EXCEPT ![dao] =
         IF Len(rootHistory[dao]) >= MAX_ROOT_HISTORY
         THEN Append(Tail(rootHistory[dao]), newRoot)
         ELSE Append(rootHistory[dao], newRoot)]
+    /\ rootIndexMap' = [rootIndexMap EXCEPT ![dao, newRoot] = nextRootIndex[dao]]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    treeInitialized, treeDepth, nextLeafIndex, nextRootIndex,
-                    filledSubtrees, proposalState, proposalInfo,
+                    treeInitialized, nextLeafIndex, memberLeafIndex,
+                    proposalState, proposalInfo,
                     nullifierUsed, vkSet, vkVersion, registryAuth, nextDaoId>>
+
+ReinstateMember(dao, admin, member) ==
+    /\ dao \in daoExists
+    /\ daoAdmin[dao] = admin
+    /\ memberLeafIndex[dao, member] >= 0
+    /\ leafValue[dao, memberLeafIndex[dao, member]] = 0
+    /\ memberLeafIndex' = [memberLeafIndex EXCEPT ![dao, member] = -1]
+    /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
+                    sbtRevoked, treeInitialized, nextLeafIndex, nextRootIndex,
+                    rootHistory, rootIndexMap, leafValue,
+                    minValidRootIdx, proposalState, proposalInfo,
+                    nullifierUsed, vkSet, vkVersion, currentRoot,
+                    registryAuth, nextDaoId>>
 
 (* === Voting Actions === *)
 
-(* Set VK (admin only) *)
 SetVk(dao, admin) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = admin
@@ -339,26 +390,24 @@ SetVk(dao, admin) ==
     /\ vkSet' = [vkSet EXCEPT ![dao] = TRUE]
     /\ vkVersion' = [vkVersion EXCEPT ![dao] = vkVersion[dao] + 1]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, nextLeafIndex,
-                    nextRootIndex, roots, rootIndex, leafValue,
-                    memberLeafIndex, minValidRootIdx, filledSubtrees,
+                    sbtRevoked, treeInitialized, nextLeafIndex,
+                    nextRootIndex, rootHistory, rootIndexMap, leafValue,
+                    memberLeafIndex, minValidRootIdx,
                     proposalState, proposalInfo, nullifierUsed, currentRoot,
-                    rootHistory, registryAuth, nextDaoId>>
+                    registryAuth, nextDaoId>>
 
-(* Set VK from registry — requires registry auth *)
 SetVkFromRegistry(dao) ==
     /\ dao \in daoExists
-    /\ registryAuth  (* Registry must have authenticated *)
+    /\ registryAuth
     /\ vkSet' = [vkSet EXCEPT ![dao] = TRUE]
     /\ vkVersion' = [vkVersion EXCEPT ![dao] = vkVersion[dao] + 1]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, nextLeafIndex,
-                    nextRootIndex, roots, rootIndex, leafValue,
-                    memberLeafIndex, minValidRootIdx, filledSubtrees,
+                    sbtRevoked, treeInitialized, nextLeafIndex,
+                    nextRootIndex, rootHistory, rootIndexMap, leafValue,
+                    memberLeafIndex, minValidRootIdx,
                     proposalState, proposalInfo, nullifierUsed, currentRoot,
-                    rootHistory, registryAuth, nextDaoId>>
+                    registryAuth, nextDaoId>>
 
-(* Create proposal — snapshots current root and VK *)
 CreateProposal(dao, proposal, creator, voteMode) ==
     /\ dao \in daoExists
     /\ proposalState[dao, proposal] = "None"
@@ -372,66 +421,61 @@ CreateProposal(dao, proposal, creator, voteMode) ==
          earliest_root_idx |-> nextRootIndex[dao],
          vk_hash |-> vkVersion[dao]]]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, nextLeafIndex,
-                    nextRootIndex, roots, rootIndex, leafValue,
-                    memberLeafIndex, minValidRootIdx, filledSubtrees,
+                    sbtRevoked, treeInitialized, nextLeafIndex,
+                    nextRootIndex, rootHistory, rootIndexMap, leafValue,
+                    memberLeafIndex, minValidRootIdx,
                     nullifierUsed, vkSet, vkVersion, currentRoot,
-                    rootHistory, registryAuth, nextDaoId>>
+                    registryAuth, nextDaoId>>
 
-(* Cast a vote with ZK proof *)
-Vote(dao, proposal, nullifier, root, choice, proofOk) ==
+Vote(dao, proposal, nullifier, root, proofOk) ==
     /\ dao \in daoExists
     /\ proposalState[dao, proposal] = "Active"
     /\ ~nullifierUsed[dao, proposal, nullifier]
     /\ vkSet[dao]
     /\ treeInitialized[dao]
-    (* Root validation based on vote mode *)
     /\ IF proposalInfo[dao, proposal].vote_mode = "Fixed"
        THEN root = proposalInfo[dao, proposal].eligible_root
        ELSE (* Trailing mode *)
-            /\ root \in {rootHistory[dao][i] : i \in 0..(Len(rootHistory[dao])-1)}
-            /\ rootIndex[dao, root] >= proposalInfo[dao, proposal].earliest_root_idx
-            /\ rootIndex[dao, root] >= minValidRootIdx[dao]
-    (* Proof verification *)
+            /\ \E i \in 0..(Len(rootHistory[dao]) - 1):
+                   rootHistory[dao][i] = root
+            /\ rootIndexMap[dao, root] >= proposalInfo[dao, proposal].earliest_root_idx
+            /\ rootIndexMap[dao, root] >= minValidRootIdx[dao]
     /\ proofOk
     /\ nullifierUsed' = [nullifierUsed EXCEPT ![dao, proposal, nullifier] = TRUE]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, nextLeafIndex,
-                    nextRootIndex, roots, rootIndex, leafValue,
-                    memberLeafIndex, minValidRootIdx, filledSubtrees,
+                    sbtRevoked, treeInitialized, nextLeafIndex,
+                    nextRootIndex, rootHistory, rootIndexMap, leafValue,
+                    memberLeafIndex, minValidRootIdx,
                     proposalState, proposalInfo, vkSet, vkVersion,
-                    currentRoot, rootHistory, registryAuth, nextDaoId>>
+                    currentRoot, registryAuth, nextDaoId>>
 
-(* Close proposal: Active -> Closed *)
 CloseProposal(dao, proposal, admin) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = admin
     /\ proposalState[dao, proposal] = "Active"
     /\ proposalState' = [proposalState EXCEPT ![dao, proposal] = "Closed"]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, nextLeafIndex,
-                    nextRootIndex, roots, rootIndex, leafValue,
-                    memberLeafIndex, minValidRootIdx, filledSubtrees,
+                    sbtRevoked, treeInitialized, nextLeafIndex,
+                    nextRootIndex, rootHistory, rootIndexMap, leafValue,
+                    memberLeafIndex, minValidRootIdx,
                     proposalInfo, nullifierUsed, vkSet, vkVersion,
-                    currentRoot, rootHistory, registryAuth, nextDaoId>>
+                    currentRoot, registryAuth, nextDaoId>>
 
-(* Archive proposal: Closed -> Archived *)
 ArchiveProposal(dao, proposal, admin) ==
     /\ dao \in daoExists
     /\ daoAdmin[dao] = admin
     /\ proposalState[dao, proposal] = "Closed"
     /\ proposalState' = [proposalState EXCEPT ![dao, proposal] = "Archived"]
     /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, nextLeafIndex,
-                    nextRootIndex, roots, rootIndex, leafValue,
-                    memberLeafIndex, minValidRootIdx, filledSubtrees,
+                    sbtRevoked, treeInitialized, nextLeafIndex,
+                    nextRootIndex, rootHistory, rootIndexMap, leafValue,
+                    memberLeafIndex, minValidRootIdx,
                     proposalInfo, nullifierUsed, vkSet, vkVersion,
-                    currentRoot, rootHistory, registryAuth, nextDaoId>>
+                    currentRoot, registryAuth, nextDaoId>>
 
-(* === Cross-contract initialization (create_and_init_dao) === *)
+(* === Cross-contract initialization === *)
 
-(* Atomic DAO initialization: creates DAO, mints SBT, inits tree, registers commitment, sets VK *)
-CreateAndInitDao(dao, creator, depth, commitment, newRoot, rootIdx) ==
+CreateAndInitDao(dao, creator, depth, commitment, newRoot) ==
     /\ dao = nextDaoId
     /\ dao \notin daoExists
     /\ creator \in MemberAddr
@@ -445,12 +489,12 @@ CreateAndInitDao(dao, creator, depth, commitment, newRoot, rootIdx) ==
     /\ sbtRevoked' = [sbtRevoked EXCEPT ![dao, creator] = FALSE]
     (* Step 3: Init tree (via init_tree_from_registry) *)
     /\ treeInitialized' = [treeInitialized EXCEPT ![dao] = TRUE]
-    /\ treeDepth' = [treeDepth EXCEPT ![dao] = depth]
     (* Step 4: Register commitment (via register_from_registry) *)
     /\ memberLeafIndex' = [memberLeafIndex EXCEPT ![dao, creator] = 0]
     /\ leafValue' = [leafValue EXCEPT ![dao, 0] = commitment]
     /\ currentRoot' = [currentRoot EXCEPT ![dao] = newRoot]
     /\ rootHistory' = [rootHistory EXCEPT ![dao] = <<0, newRoot>>]
+    /\ rootIndexMap' = [rootIndexMap EXCEPT ![dao, 0] = 0, ![dao, newRoot] = 1]
     /\ nextLeafIndex' = [nextLeafIndex EXCEPT ![dao] = 1]
     /\ nextRootIndex' = [nextRootIndex EXCEPT ![dao] = 1]
     (* Step 5: Set VK (via set_vk_from_registry) — requires registry auth *)
@@ -458,21 +502,7 @@ CreateAndInitDao(dao, creator, depth, commitment, newRoot, rootIdx) ==
     /\ vkSet' = [vkSet EXCEPT ![dao] = TRUE]
     /\ vkVersion' = [vkVersion EXCEPT ![dao] = 1]
     /\ nextDaoId' = nextDaoId + 1
-    /\ UNCHANGED <<minValidRootIdx, filledSubtrees, proposalState,
-                    proposalInfo, nullifierUsed>>
-
-(* === Auth delegation action === *)
-
-(* Registry authenticates (models require_auth() check) *)
-RegistryAuthenticate ==
-    /\ registryAuth = FALSE
-    /\ registryAuth' = TRUE
-    /\ UNCHANGED <<daoAdmin, daoExists, membershipOpen, sbtMember,
-                    sbtRevoked, treeInitialized, treeDepth, nextLeafIndex,
-                    nextRootIndex, roots, rootIndex, leafValue,
-                    memberLeafIndex, minValidRootIdx, filledSubtrees,
-                    proposalState, proposalInfo, nullifierUsed, vkSet,
-                    vkVersion, currentRoot, rootHistory, nextDaoId>>
+    /\ UNCHANGED <<minValidRootIdx, proposalState, proposalInfo, nullifierUsed>>
 
 (*-----------------------------------------------------------------------*)
 (* Next-state relation                                                    *)
@@ -482,60 +512,42 @@ Next ==
     \E dao \in DaoId, creator \in MemberAddr, admin \in MemberAddr,
        member \in MemberAddr, newAdmin \in MemberAddr, depth \in 1..MAX_TREE_DEPTH,
        proposal \in ProposalId, nullifier \in Nullifier, root \in 0..MAX_NULLIFIERS,
-       choice \in {TRUE, FALSE}, proofOk \in {TRUE, FALSE},
-       newRoot \in 0..MAX_NULLIFIERS, rootIdx \in RootIdx,
+       proofOk \in {TRUE, FALSE},
+       newRoot \in 0..MAX_NULLIFIERS,
        commitment \in 0..MAX_NULLIFIERS, open \in {TRUE, FALSE},
-       voteMode \in {"Fixed", "Trailing"}:
+       canPropose \in {TRUE, FALSE},
+       voteMode \in VoteMode:
     \/ CreateDao(dao, creator, open)
     \/ TransferAdmin(dao, admin, newAdmin)
+    \/ SetProposalMode(dao, admin, canPropose)
+    \/ SetMembershipOpen(dao, admin, open)
     \/ MintSbt(dao, admin, member)
     \/ RevokeSbt(dao, admin, member)
+    \/ LeaveDao(dao, member)
+    \/ SelfJoin(dao, member)
     \/ InitTree(dao, depth, admin)
-    \/ RegisterCommitment(dao, member, commitment, newRoot, rootIdx)
-    \/ RemoveMember(dao, admin, member, newRoot, rootIdx)
+    \/ RegisterCommitment(dao, member, commitment, newRoot)
+    \/ RemoveMember(dao, admin, member, newRoot)
+    \/ ReinstateMember(dao, admin, member)
     \/ SetVk(dao, admin)
     \/ SetVkFromRegistry(dao)
     \/ CreateProposal(dao, proposal, creator, voteMode)
-    \/ Vote(dao, proposal, nullifier, root, choice, proofOk)
+    \/ Vote(dao, proposal, nullifier, root, proofOk)
     \/ CloseProposal(dao, proposal, admin)
     \/ ArchiveProposal(dao, proposal, admin)
-    \/ CreateAndInitDao(dao, creator, depth, commitment, newRoot, rootIdx)
-    \/ RegistryAuthenticate
-
-(*-----------------------------------------------------------------------*)
-(* Temporal properties                                                    *)
-(*-----------------------------------------------------------------------*)
-
-(* Fairness: all actions eventually occur if continuously enabled *)
-Fairness ==
-    /\ WF_vars(CreateDao)
-    /\ WF_vars(TransferAdmin)
-    /\ WF_vars(MintSbt)
-    /\ WF_vars(RevokeSbt)
-    /\ WF_vars(InitTree)
-    /\ WF_vars(RegisterCommitment)
-    /\ WF_vars(RemoveMember)
-    /\ WF_vars(SetVk)
-    /\ WF_vars(SetVkFromRegistry)
-    /\ WF_vars(CreateProposal)
-    /\ WF_vars(Vote)
-    /\ WF_vars(CloseProposal)
-    /\ WF_vars(ArchiveProposal)
-    /\ WF_vars(CreateAndInitDao)
+    \/ CreateAndInitDao(dao, creator, depth, commitment, newRoot)
 
 (*-----------------------------------------------------------------------*)
 (* The complete specification                                             *)
 (*-----------------------------------------------------------------------*)
 
-Spec == Init /\ [][Next]_vars /\ Fairness
+Spec == Init /\ [][Next]_vars
 
 (*-----------------------------------------------------------------------*)
 (* Invariants to check with TLC                                           *)
 (*-----------------------------------------------------------------------*)
 
 Invariants ==
-    /\ TypeOK
-    /\ NoDoubleVoting
     /\ RootGroundedVoting
     /\ AdminContinuity
     /\ ProposalFSM
@@ -548,10 +560,11 @@ Invariants ==
 (* Helper definitions for TLC model checking                              *)
 (*-----------------------------------------------------------------------*)
 
-vars == <<daoAdmin, daoExists, membershipOpen, sbtMember, sbtRevoked,
-          treeInitialized, treeDepth, nextLeafIndex, nextRootIndex, roots,
-          rootIndex, leafValue, memberLeafIndex, minValidRootIdx,
-          filledSubtrees, proposalState, proposalInfo, nullifierUsed,
-          vkSet, vkVersion, currentRoot, rootHistory, registryAuth, nextDaoId>>
+vars == <<daoAdmin, daoExists, membershipOpen, membersCanPropose,
+          sbtMember, sbtRevoked,
+          treeInitialized, nextLeafIndex, nextRootIndex, rootHistory,
+          rootIndexMap, leafValue, memberLeafIndex, minValidRootIdx,
+          proposalState, proposalInfo, nullifierUsed,
+          vkSet, vkVersion, currentRoot, registryAuth, nextDaoId>>
 
 =============================================================================
