@@ -12,12 +12,19 @@ Run it with:
 cargo test -p zkvote-groth16 --test bn254_edge_case_corpus -- --nocapture
 ```
 
+Run the explicit testutils stub documentation path with:
+
+```bash
+cargo test -p zkvote-groth16 --features testutils --test bn254_edge_case_corpus testutils_feature_uses_stubbed_verifier -- --nocapture
+```
+
 ## Corpus Coverage
 
 The corpus includes one valid control plus more than 50 edge cases:
 
 - Proof G1 infinity encodings for `a` and `c`
 - Proof G2 infinity encoding for `b`
+- Proof G2 non-subgroup h-torsion for `b`
 - All-proof infinity
 - Coordinates equal to the BN254 base-field modulus
 - All-`0xff` point encodings
@@ -27,6 +34,7 @@ The corpus includes one valid control plus more than 50 edge cases:
 - Wrong root, nullifier, DAO ID, proposal ID, and vote choice
 - Root/nullifier at scalar-field modulus as caller-guarded observations
 - VK alpha/beta/gamma/delta infinity encodings
+- VK beta/gamma/delta non-subgroup h-torsion encodings
 - VK G1/G2 coordinate-boundary mutations
 - Duplicate IC entries
 - Short and long IC vectors
@@ -53,20 +61,21 @@ Recommended follow-up:
 - Keep field validation at every verifier call site.
 - Add a wrapper API that validates signals before calling the low-level verifier.
 
-### Medium: G2 subgroup validation is delegated to Soroban host pairing
+### Medium: G2 subgroup validation is delegated to Soroban host parsing
 
-ZKVote does not implement explicit G2 subgroup checks. This is acceptable only while Soroban's BN254 host implementation rejects invalid G2 encodings during deserialization or pairing.
+ZKVote does not implement explicit G2 subgroup checks. This is acceptable only while Soroban's BN254 host implementation rejects invalid G2 encodings during deserialization or pairing setup.
 
 Reproduction:
 
 1. Run the edge-case corpus.
-2. Review `proof_b_*` and `vk_*_coordinates_at_fp_modulus` outcomes.
+2. Review `proof_b_*`, `vk_*_coordinates_at_fp_modulus`, and `*_non_subgroup_g2_torsion` outcomes.
 3. Any `Accepted` outcome outside caller-guarded public-signal observations is a bypass.
 
 Current mitigation:
 
 - The pairing host function is the validation boundary.
-- The corpus now provides regression coverage for that boundary.
+- Soroban's host parser performs a G2 subgroup check before pairing.
+- The corpus now provides deterministic h-torsion regression coverage for that boundary.
 
 Recommended follow-up:
 

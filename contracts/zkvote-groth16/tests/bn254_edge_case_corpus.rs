@@ -1,3 +1,8 @@
+#![cfg_attr(feature = "testutils", allow(dead_code, unused_imports))]
+
+use ark_bn254::{Fq, Fq2, Fr, G2Affine as ArkG2Affine};
+use ark_ec::{AffineRepr, CurveGroup};
+use ark_ff::{BigInteger, PrimeField};
 use soroban_sdk::{Bytes, BytesN, Env, Vec, U256};
 use zkvote_groth16::{verify_groth16, Proof, VerificationKey, BN254_FR_MODULUS};
 
@@ -99,6 +104,10 @@ fn g1_negate_y(mut point: [u8; 64]) -> [u8; 64] {
     if y.iter().all(|b| *b == 0) {
         return point;
     }
+    if y == BN254_FP_MODULUS.as_slice() {
+        point[32..64].fill(0);
+        return point;
+    }
 
     let mut neg_y = [0u8; 32];
     let mut borrow = 0u16;
@@ -115,6 +124,56 @@ fn g1_negate_y(mut point: [u8; 64]) -> [u8; 64] {
     }
     point[32..64].copy_from_slice(&neg_y);
     point
+}
+
+fn fq_to_be(fq: &Fq) -> [u8; 32] {
+    let bytes = fq.into_bigint().to_bytes_be();
+    let mut out = [0u8; 32];
+    out[32 - bytes.len()..].copy_from_slice(&bytes);
+    out
+}
+
+fn g2_to_soroban_bytes(point: &ArkG2Affine) -> [u8; 128] {
+    let (x, y) = point.xy().expect("non-infinity G2 point");
+    let mut out = [0u8; 128];
+
+    // Soroban BN254 follows Ethereum Fp2 byte order: c1 || c0, big-endian.
+    out[0..32].copy_from_slice(&fq_to_be(&x.c1));
+    out[32..64].copy_from_slice(&fq_to_be(&x.c0));
+    out[64..96].copy_from_slice(&fq_to_be(&y.c1));
+    out[96..128].copy_from_slice(&fq_to_be(&y.c0));
+    out
+}
+
+fn deterministic_g2_torsion_bytes() -> [u8; 128] {
+    for seed in 1u64..1024 {
+        let x = Fq2::new(Fq::from(seed), Fq::from(seed + 1));
+        for greatest in [false, true] {
+            let Some(full_curve_point) = ArkG2Affine::get_point_from_x_unchecked(x, greatest)
+            else {
+                continue;
+            };
+            if full_curve_point.is_in_correct_subgroup_assuming_on_curve() {
+                continue;
+            }
+
+            let torsion = full_curve_point.mul_bigint(Fr::MODULUS).into_affine();
+            if torsion.is_zero()
+                || !torsion.is_on_curve()
+                || torsion.is_in_correct_subgroup_assuming_on_curve()
+            {
+                continue;
+            }
+
+            let cofactor_cleared = torsion
+                .mul_bigint(<ark_bn254::g2::Config as ark_ec::CurveConfig>::COFACTOR)
+                .into_affine();
+            assert!(cofactor_cleared.is_zero(), "fixture must be h-torsion");
+            return g2_to_soroban_bytes(&torsion);
+        }
+    }
+
+    panic!("failed to construct deterministic BN254 G2 torsion fixture");
 }
 
 fn real_proof(env: &Env) -> Proof {
@@ -179,11 +238,11 @@ fn vk_with_alpha(env: &Env, vk: &VerificationKey, alpha: [u8; 64]) -> Verificati
     out
 }
 
-fn vk_with_g2<const N: usize>(
+fn vk_with_g2(
     env: &Env,
     vk: &VerificationKey,
     field: &'static str,
-    bytes: [u8; N],
+    bytes: [u8; 128],
 ) -> VerificationKey {
     let mut out = vk.clone();
     let point = BytesN::from_array(env, &bytes);
@@ -213,6 +272,7 @@ fn run_case(env: &Env, case: &EdgeCase) -> Outcome {
     }
 }
 
+#[cfg(not(feature = "testutils"))]
 #[test]
 fn bn254_edge_case_corpus_rejects_malformed_proofs_and_documents_boundary() {
     let env = Env::default();
@@ -223,6 +283,7 @@ fn bn254_edge_case_corpus_rejects_malformed_proofs_and_documents_boundary() {
     let signals = real_public_signals(&env);
     let zero_g1 = [0u8; 64];
     let zero_g2 = [0u8; 128];
+    let g2_torsion = deterministic_g2_torsion_bytes();
     let fp_coord = BN254_FP_MODULUS;
     let fr = u256_from_be(&env, BN254_FR_MODULUS);
     let root = signals.get(0).unwrap();
@@ -241,6 +302,10 @@ fn bn254_edge_case_corpus_rejects_malformed_proofs_and_documents_boundary() {
             ("proof_a_infinity", proof_with_a(&env, &proof, zero_g1)),
             ("proof_c_infinity", proof_with_c(&env, &proof, zero_g1)),
             ("proof_b_infinity", proof_with_b(&env, &proof, zero_g2)),
+            (
+                "proof_b_non_subgroup_g2_torsion",
+                proof_with_b(&env, &proof, g2_torsion),
+            ),
             (
                 "proof_all_points_infinity",
                 proof_from_arrays(&env, zero_g1, zero_g2, zero_g1),
@@ -414,6 +479,27 @@ fn bn254_edge_case_corpus_rejects_malformed_proofs_and_documents_boundary() {
             public_signals: signals.clone(),
         },
         EdgeCase {
+            name: "vk_beta_non_subgroup_g2_torsion",
+            expectation: Expectation::Reject,
+            proof: proof.clone(),
+            vk: vk_with_g2(&env, &vk, "beta", g2_torsion),
+            public_signals: signals.clone(),
+        },
+        EdgeCase {
+            name: "vk_gamma_non_subgroup_g2_torsion",
+            expectation: Expectation::Reject,
+            proof: proof.clone(),
+            vk: vk_with_g2(&env, &vk, "gamma", g2_torsion),
+            public_signals: signals.clone(),
+        },
+        EdgeCase {
+            name: "vk_delta_non_subgroup_g2_torsion",
+            expectation: Expectation::Reject,
+            proof: proof.clone(),
+            vk: vk_with_g2(&env, &vk, "delta", g2_torsion),
+            public_signals: signals.clone(),
+        },
+        EdgeCase {
             name: "vk_alpha_coordinate_at_fp_modulus",
             expectation: Expectation::Reject,
             proof: proof.clone(),
@@ -513,4 +599,48 @@ fn bn254_edge_case_corpus_rejects_malformed_proofs_and_documents_boundary() {
         "Observed caller-guarded accepted cases: {:?}",
         accepted_observed
     );
+}
+
+#[cfg(not(feature = "testutils"))]
+#[test]
+fn production_path_rejects_known_bad_proof() {
+    let env = Env::default();
+    env.cost_estimate().budget().reset_unlimited();
+
+    let proof = real_proof(&env);
+    let case = EdgeCase {
+        name: "production_known_bad_proof_a_zero",
+        expectation: Expectation::Reject,
+        proof: proof_with_a(&env, &proof, [0u8; 64]),
+        vk: real_vk(&env),
+        public_signals: real_public_signals(&env),
+    };
+
+    assert_ne!(run_case(&env, &case), Outcome::Accepted);
+}
+
+#[test]
+fn g1_negate_y_handles_zero_and_modulus_boundaries() {
+    let zero_y = g1_point([1u8; 32], [0u8; 32]);
+    assert_eq!(g1_negate_y(zero_y), zero_y);
+
+    let modulus_y = g1_point([1u8; 32], BN254_FP_MODULUS);
+    let negated = g1_negate_y(modulus_y);
+    assert_eq!(&negated[32..64], &[0u8; 32]);
+}
+
+#[cfg(feature = "testutils")]
+#[test]
+fn testutils_feature_uses_stubbed_verifier() {
+    let env = Env::default();
+    let proof = real_proof(&env);
+    let case = EdgeCase {
+        name: "testutils_stub_accepts_bad_proof_with_valid_shape",
+        expectation: Expectation::Accept,
+        proof: proof_with_a(&env, &proof, [0u8; 64]),
+        vk: real_vk(&env),
+        public_signals: real_public_signals(&env),
+    };
+
+    assert_eq!(run_case(&env, &case), Outcome::Accepted);
 }

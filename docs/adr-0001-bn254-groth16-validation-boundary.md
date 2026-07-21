@@ -25,7 +25,9 @@ The critical boundary is split between contract-level checks and Soroban's hazma
 
 Keep Soroban's BN254 host functions as the pairing and point-decoding boundary, but keep caller-side field validation mandatory for every public signal before `verify_groth16`.
 
-The project now includes `contracts/zkvote-groth16/tests/bn254_edge_case_corpus.rs`, a production-path corpus that exercises the shared verifier directly with 50+ malformed proofs, VKs, public signal mutations, infinity encodings, out-of-field coordinates, byte flips, and IC-vector mutations.
+The project now includes `contracts/zkvote-groth16/tests/bn254_edge_case_corpus.rs`, a production-path corpus that exercises the shared verifier directly with 50+ malformed proofs, VKs, public signal mutations, infinity encodings, out-of-field coordinates, byte flips, G2 non-subgroup torsion fixtures, and IC-vector mutations.
+
+The default integration test is gated with `not(feature = "testutils")` and includes a known-bad-proof sanity assertion so the corpus fails if it is accidentally routed through the stubbed verifier. A separate `testutils` test documents the intentionally stubbed path.
 
 ## Required Caller Checks
 
@@ -44,6 +46,12 @@ All callers of `zkvote_groth16::verify_groth16` must:
 - Keep the edge-case corpus in CI as a regression test for host-function behavior.
 - Re-run the corpus whenever `soroban-sdk`, the Stellar protocol version, or circuit public-signal ordering changes.
 - Treat accepted out-of-field signal aliases in the core verifier as caller-guarded behavior, not as proof validity.
+
+## Torsion Fixture Note
+
+BN254 G1 has cofactor 1, so there are no non-identity G1 torsion points outside the scalar-order subgroup. The corpus therefore focuses torsion coverage on G2, where it deterministically constructs a full-twist point and multiplies it by the BN254 scalar modulus to obtain a non-subgroup h-torsion fixture. Soroban is expected to reject that fixture during G2 deserialization or pairing setup.
+
+The BN254 G2 cofactor is not divisible by 2, 3, 5, or 7, so the corpus does not claim small-order 2/3/5/7 fixtures for this curve. Those cases would be invalid test vectors rather than real BN254 subgroup-boundary coverage.
 
 ## Audit-Library Migration
 
