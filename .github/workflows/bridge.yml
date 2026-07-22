@@ -132,8 +132,6 @@ jobs:
         image: stellar/quickstart:soroban-dev
         ports:
           - 8000:8000
-        options: --entrypoint stellar
-        command: --standalone --enable-soroban-rpc
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
