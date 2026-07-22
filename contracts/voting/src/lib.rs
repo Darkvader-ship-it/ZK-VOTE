@@ -37,7 +37,10 @@ use soroban_sdk::{
 };
 
 // Re-export shared Groth16 types and utilities
-pub use zkvote_groth16::{Groth16Error, Proof, VerificationKey};
+pub use zkvote_groth16::{
+    Bls12381Curve, CurveId, Groth16Error, Proof, ProofBls381, VerificationKey,
+    VerificationKeyBls381,
+};
 
 const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");
@@ -104,12 +107,17 @@ const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Proposal(u64, u64),        // (dao_id, proposal_id) -> ProposalInfo
-    ProposalCount(u64),        // dao_id -> count
-    Nullifier(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool
-    VotingKey(u64),            // dao_id -> latest VerificationKey
-    VkVersion(u64),            // dao_id -> current VK version
-    VkByVersion(u64, u32),     // (dao_id, vk_version) -> VerificationKey
+    Proposal(u64, u64),          // (dao_id, proposal_id) -> ProposalInfo
+    ProposalCount(u64),          // dao_id -> count
+    Nullifier(u64, u64, U256),   // (dao_id, proposal_id, nullifier) -> bool
+    VotingKey(u64),              // dao_id -> latest VerificationKey (BN254)
+    VkVersion(u64),              // dao_id -> current BN254 VK version
+    VkByVersion(u64, u32),       // (dao_id, vk_version) -> VerificationKey (BN254)
+    CurveId(u64),                // dao_id -> CurveId (BN254 or BLS12_381)
+    VotingKeyBls381(u64),        // dao_id -> latest VerificationKeyBls381
+    VkByVersionBls381(u64, u32), // (dao_id, vk_version) -> VerificationKeyBls381
+    VkVersionBls381(u64),        // dao_id -> current BLS12-381 VK version
+    ProposalCurve(u64, u64),     // (dao_id, proposal_id) -> CurveId
     /// Test-only: overrides proof verification. Not used in production.
     VerifyOverride,
 }
@@ -252,6 +260,21 @@ impl Voting {
         }
     }
 
+    /// Validate that a U256 value is within the BLS12-381 scalar field
+    fn assert_in_field_bls381(env: &Env, value: &U256) {
+        if zkvote_groth16::assert_in_field_bls381(env, value).is_err() {
+            panic_with_error!(env, VotingError::SignalNotInField);
+        }
+    }
+
+    /// Read the curve ID for a DAO (defaults to Bn254)
+    fn get_curve_id(env: &Env, dao_id: u64) -> CurveId {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CurveId(dao_id))
+            .unwrap_or(CurveId::Bn254)
+    }
+
     /// Set verification key for a DAO (admin only)
     pub fn set_vk(env: Env, dao_id: u64, vk: VerificationKey, admin: Address) {
         Self::bump_instance(&env);
@@ -334,11 +357,50 @@ impl Voting {
         VKSetEvent { dao_id }.publish(&env);
     }
 
-    /// Internal helper to fetch a VK by version or fail with a clear error
+    /// Set BLS12-381 verification key for a DAO (admin only)
+    pub fn set_vk_bls381(env: Env, dao_id: u64, vk: VerificationKeyBls381, admin: Address) {
+        Self::bump_instance(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
+        Self::validate_vk_bls381(&env, &vk);
+
+        // Store curve ID
+        let curve_key = DataKey::CurveId(dao_id);
+        env.storage()
+            .persistent()
+            .set(&curve_key, &CurveId::Bls12381);
+        Self::bump_persistent(&env, &curve_key);
+
+        // Bump BLS12-381 VK version
+        let version_key = DataKey::VkVersionBls381(dao_id);
+        let current_version: u32 = env.storage().persistent().get(&version_key).unwrap_or(0);
+        let new_version = current_version + 1;
+        env.storage().persistent().set(&version_key, &new_version);
+        Self::bump_persistent(&env, &version_key);
+
+        let key = DataKey::VotingKeyBls381(dao_id);
+        env.storage().persistent().set(&key, &vk);
+        Self::bump_persistent(&env, &key);
+        let vk_ver_key = DataKey::VkByVersionBls381(dao_id, new_version);
+        env.storage().persistent().set(&vk_ver_key, &vk);
+        Self::bump_persistent(&env, &vk_ver_key);
+
+        VKSetEvent { dao_id }.publish(&env);
+    }
+
+    /// Internal helper to fetch a BN254 VK by version or fail with a clear error
     fn get_vk_by_version(env: &Env, dao_id: u64, version: u32) -> VerificationKey {
         env.storage()
             .persistent()
             .get(&DataKey::VkByVersion(dao_id, version))
+            .unwrap_or_else(|| panic_with_error!(env, VotingError::VkVersionMismatch))
+    }
+
+    /// Internal helper to fetch a BLS12-381 VK by version or fail with a clear error
+    fn get_vk_by_version_bls381(env: &Env, dao_id: u64, version: u32) -> VerificationKeyBls381 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::VkByVersionBls381(dao_id, version))
             .unwrap_or_else(|| panic_with_error!(env, VotingError::VkVersionMismatch))
     }
 
@@ -358,6 +420,15 @@ impl Voting {
     }
 
     fn validate_vk(env: &Env, vk: &VerificationKey) {
+        if vk.ic.len() != VOTE_CIRCUIT_IC_LEN {
+            panic_with_error!(env, VotingError::VkIcLengthMismatch);
+        }
+        if vk.ic.len() > MAX_IC_LENGTH {
+            panic_with_error!(env, VotingError::VkIcTooLarge);
+        }
+    }
+
+    fn validate_vk_bls381(env: &Env, vk: &VerificationKeyBls381) {
         if vk.ic.len() != VOTE_CIRCUIT_IC_LEN {
             panic_with_error!(env, VotingError::VkIcLengthMismatch);
         }
@@ -396,6 +467,37 @@ impl Voting {
         env.storage().persistent().set(&key, &vk);
         Self::bump_persistent(&env, &key);
         let vk_ver_key = DataKey::VkByVersion(dao_id, new_version);
+        env.storage().persistent().set(&vk_ver_key, &vk);
+        Self::bump_persistent(&env, &vk_ver_key);
+
+        VKSetEvent { dao_id }.publish(&env);
+    }
+
+    /// Set BLS12-381 verification key from registry during DAO initialization
+    pub fn set_vk_from_registry_bls381(env: Env, dao_id: u64, vk: VerificationKeyBls381) {
+        let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
+        registry.require_auth();
+        Self::bump_instance(&env);
+        Self::validate_vk_bls381(&env, &vk);
+
+        // Store curve ID
+        let curve_key = DataKey::CurveId(dao_id);
+        env.storage()
+            .persistent()
+            .set(&curve_key, &CurveId::Bls12381);
+        Self::bump_persistent(&env, &curve_key);
+
+        // Bump BLS12-381 VK version
+        let version_key = DataKey::VkVersionBls381(dao_id);
+        let current_version: u32 = env.storage().persistent().get(&version_key).unwrap_or(0);
+        let new_version = current_version + 1;
+        env.storage().persistent().set(&version_key, &new_version);
+        Self::bump_persistent(&env, &version_key);
+
+        let key = DataKey::VotingKeyBls381(dao_id);
+        env.storage().persistent().set(&key, &vk);
+        Self::bump_persistent(&env, &key);
+        let vk_ver_key = DataKey::VkByVersionBls381(dao_id, new_version);
         env.storage().persistent().set(&vk_ver_key, &vk);
         Self::bump_persistent(&env, &vk_ver_key);
 
@@ -533,22 +635,36 @@ impl Voting {
             panic_with_error!(&env, VotingError::EndTimeInvalid);
         }
 
-        // Resolve VK version to use
-        let current_version: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::VkVersion(dao_id))
-            .unwrap_or_else(|| panic_with_error!(&env, VotingError::VkNotSet));
+        // Resolve VK version to use (curve-aware)
+        let curve_id = Self::get_curve_id(&env, dao_id);
+        let current_version: u32 = match curve_id {
+            CurveId::Bls12381 => env
+                .storage()
+                .persistent()
+                .get(&DataKey::VkVersionBls381(dao_id))
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::VkNotSet)),
+            CurveId::Bn254 => env
+                .storage()
+                .persistent()
+                .get(&DataKey::VkVersion(dao_id))
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::VkNotSet)),
+        };
         let selected_version = vk_version.unwrap_or(current_version);
         if selected_version == 0 || selected_version > current_version {
             panic_with_error!(&env, VotingError::VkNotSet);
         }
 
-        // Snapshot VK by version
-        let vk = Self::get_vk_by_version(&env, dao_id, selected_version);
-
-        // Compute VK hash for immutability during proposal lifetime
-        let vk_hash = Self::hash_vk(&env, &vk);
+        // Snapshot VK by version and compute hash (curve-aware)
+        let vk_hash = match curve_id {
+            CurveId::Bls12381 => {
+                let vk = Self::get_vk_by_version_bls381(&env, dao_id, selected_version);
+                Self::hash_vk_bls381(&env, &vk)
+            }
+            CurveId::Bn254 => {
+                let vk = Self::get_vk_by_version(&env, dao_id, selected_version);
+                Self::hash_vk(&env, &vk)
+            }
+        };
 
         // Snapshot current Merkle root - defines the eligible voter set
         let eligible_root: U256 = env.invoke_contract(
@@ -588,6 +704,11 @@ impl Voting {
         env.storage().persistent().set(&key, &proposal);
         Self::bump_persistent(&env, &key);
 
+        // Store proposal curve for proof format dispatch
+        let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
+        env.storage().persistent().set(&curve_key, &curve_id);
+        Self::bump_persistent(&env, &curve_key);
+
         ProposalEvent {
             dao_id,
             proposal_id,
@@ -614,6 +735,23 @@ impl Voting {
         // Add delta (128 bytes)
         data.append(&Bytes::from_array(env, &vk.delta.to_array()));
         // Add IC points
+        for i in 0..vk.ic.len() {
+            if let Some(ic_point) = vk.ic.get(i) {
+                data.append(&Bytes::from_array(env, &ic_point.to_array()));
+            }
+        }
+
+        env.crypto().sha256(&data).into()
+    }
+
+    /// Compute SHA256 hash of BLS12-381 verification key
+    fn hash_vk_bls381(env: &Env, vk: &VerificationKeyBls381) -> BytesN<32> {
+        let mut data = Bytes::new(env);
+
+        data.append(&Bytes::from_array(env, &vk.alpha.to_array()));
+        data.append(&Bytes::from_array(env, &vk.beta.to_array()));
+        data.append(&Bytes::from_array(env, &vk.gamma.to_array()));
+        data.append(&Bytes::from_array(env, &vk.delta.to_array()));
         for i in 0..vk.ic.len() {
             if let Some(ic_point) = vk.ic.get(i) {
                 data.append(&Bytes::from_array(env, &ic_point.to_array()));
@@ -725,6 +863,17 @@ impl Voting {
             }
         }
 
+        // Verify proposal was created for BN254 curve (not BLS12-381)
+        let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
+        let proposal_curve: CurveId = env
+            .storage()
+            .persistent()
+            .get(&curve_key)
+            .unwrap_or(CurveId::Bn254);
+        if proposal_curve != CurveId::Bn254 {
+            panic_with_error!(&env, VotingError::VkNotSet);
+        }
+
         // Get verification key pinned to proposal version
         let vk: VerificationKey = Self::get_vk_by_version(&env, dao_id, proposal.vk_version);
 
@@ -765,6 +914,143 @@ impl Voting {
         Self::bump_persistent(&env, &null_key);
 
         // Update vote count
+        if vote_choice {
+            proposal.yes_votes += 1;
+        } else {
+            proposal.no_votes += 1;
+        }
+        env.storage().persistent().set(&prop_key, &proposal);
+        Self::bump_persistent(&env, &prop_key);
+
+        VoteEvent {
+            dao_id,
+            proposal_id,
+            choice: vote_choice,
+            nullifier,
+        }
+        .publish(&env);
+    }
+
+    /// Submit a vote with BLS12-381 ZK proof
+    pub fn vote_bls381(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        vote_choice: bool,
+        nullifier: U256,
+        root: U256,
+        proof: ProofBls381,
+    ) {
+        Self::bump_instance(&env);
+        Self::assert_in_field_bls381(&env, &nullifier);
+        Self::assert_in_field_bls381(&env, &root);
+
+        if nullifier == U256::from_u32(&env, 0) {
+            panic_with_error!(&env, VotingError::InvalidNullifier);
+        }
+
+        let null_key = DataKey::Nullifier(dao_id, proposal_id, nullifier.clone());
+        if env.storage().persistent().has(&null_key) {
+            panic_with_error!(&env, VotingError::NullifierUsed);
+        }
+
+        let prop_key = DataKey::Proposal(dao_id, proposal_id);
+        let mut proposal: ProposalInfo = env
+            .storage()
+            .persistent()
+            .get(&prop_key)
+            .expect("proposal not found");
+
+        let now = env.ledger().timestamp();
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
+        if proposal.end_time != 0 && now > proposal.end_time {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
+
+        match proposal.vote_mode {
+            VoteMode::Fixed => {
+                if root != proposal.eligible_root {
+                    panic_with_error!(&env, VotingError::RootMismatch);
+                }
+            }
+            VoteMode::Trailing => {
+                let tree_contract: Address = Self::tree_contract(env.clone());
+
+                let root_valid: bool = env.invoke_contract(
+                    &tree_contract,
+                    &symbol_short!("root_ok"),
+                    soroban_sdk::vec![&env, dao_id.into_val(&env), root.clone().into_val(&env)],
+                );
+                if !root_valid {
+                    panic_with_error!(&env, VotingError::RootNotInHistory);
+                }
+
+                let root_index: u32 = env.invoke_contract(
+                    &tree_contract,
+                    &symbol_short!("root_idx"),
+                    soroban_sdk::vec![&env, dao_id.into_val(&env), root.clone().into_val(&env)],
+                );
+                if root_index < proposal.earliest_root_index {
+                    panic_with_error!(&env, VotingError::RootPredatesProposal);
+                }
+
+                let min_valid_root: u32 = env.invoke_contract(
+                    &tree_contract,
+                    &symbol_short!("min_root"),
+                    soroban_sdk::vec![&env, dao_id.into_val(&env)],
+                );
+                if root_index < min_valid_root {
+                    panic_with_error!(&env, VotingError::RootPredatesRemoval);
+                }
+            }
+        }
+
+        // Verify proposal was created for BLS12-381 curve
+        let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
+        let proposal_curve: CurveId = env
+            .storage()
+            .persistent()
+            .get(&curve_key)
+            .unwrap_or(CurveId::Bn254);
+        if proposal_curve != CurveId::Bls12381 {
+            panic_with_error!(&env, VotingError::VkNotSet);
+        }
+
+        // Get BLS12-381 verification key pinned to proposal version
+        let vk = Self::get_vk_by_version_bls381(&env, dao_id, proposal.vk_version);
+
+        // Verify VK hash
+        let current_vk_hash = Self::hash_vk_bls381(&env, &vk);
+        if current_vk_hash != proposal.vk_hash {
+            panic_with_error!(&env, VotingError::VkChanged);
+        }
+
+        let vote_signal = if vote_choice {
+            U256::from_u32(&env, 1)
+        } else {
+            U256::from_u32(&env, 0)
+        };
+        let dao_signal = U256::from_u128(&env, dao_id as u128);
+        let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+
+        let pub_signals = soroban_sdk::vec![
+            &env,
+            root.clone(),
+            nullifier.clone(),
+            dao_signal,
+            proposal_signal,
+            vote_signal,
+        ];
+
+        if !Self::verify_groth16_bls381(&env, &vk, &proof, &pub_signals) {
+            panic_with_error!(&env, VotingError::InvalidProof);
+        }
+
+        env.storage().persistent().set(&null_key, &true);
+        Self::bump_persistent(&env, &null_key);
+
         if vote_choice {
             proposal.yes_votes += 1;
         } else {
@@ -953,6 +1239,25 @@ impl Voting {
         Self::get_vk_by_version(&env, dao_id, version)
     }
 
+    /// Get the current BLS12-381 VK for a DAO
+    pub fn get_vk_bls381(env: Env, dao_id: u64) -> VerificationKeyBls381 {
+        Self::bump_instance(&env);
+        let vk_ver_key = DataKey::VkVersionBls381(dao_id);
+        let version: u32 = env
+            .storage()
+            .persistent()
+            .get(&vk_ver_key)
+            .unwrap_or_else(|| panic_with_error!(&env, VotingError::VkNotSet));
+        Self::bump_persistent(&env, &vk_ver_key);
+        Self::get_vk_by_version_bls381(&env, dao_id, version)
+    }
+
+    /// Get a specific BLS12-381 VK version
+    pub fn vk_for_version_bls381(env: Env, dao_id: u64, version: u32) -> VerificationKeyBls381 {
+        Self::bump_instance(&env);
+        Self::get_vk_by_version_bls381(&env, dao_id, version)
+    }
+
     // Internal: Get next proposal ID
     fn next_proposal_id(env: &Env, dao_id: u64) -> u64 {
         let count_key = DataKey::ProposalCount(dao_id);
@@ -985,6 +1290,28 @@ impl Voting {
 
         // Delegate to shared Groth16 verification
         zkvote_groth16::verify_groth16(env, vk, proof, pub_signals)
+    }
+
+    /// Verify BLS12-381 Groth16 proof using shared verification library.
+    #[allow(unused_variables)]
+    fn verify_groth16_bls381(
+        env: &Env,
+        vk: &VerificationKeyBls381,
+        proof: &ProofBls381,
+        pub_signals: &Vec<U256>,
+    ) -> bool {
+        #[cfg(any(test, feature = "testutils"))]
+        {
+            if let Some(override_val) = env
+                .storage()
+                .instance()
+                .get::<DataKey, bool>(&DataKey::VerifyOverride)
+            {
+                return override_val;
+            }
+        }
+
+        zkvote_groth16::verify_groth16_bls381(env, vk, proof, pub_signals)
     }
 }
 

@@ -104,7 +104,7 @@ fn test_init_tree() {
     // Set admin for DAO 1
     registry_client.set_admin(&1u64, &admin);
 
-    client.init_tree(&1u64, &18u32, &admin);
+    client.init_tree(&1u64, &18u32, &Symbol::new(&env, "BN254"), &admin);
 
     let (depth, next_index, _root) = client.get_tree_info(&1u64);
     assert_eq!(depth, 18);
@@ -119,8 +119,8 @@ fn test_init_tree_twice_fails() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &18u32, &admin);
-    client.init_tree(&1u64, &18u32, &admin);
+    client.init_tree(&1u64, &18u32, &Symbol::new(&env, "BN254"), &admin);
+    client.init_tree(&1u64, &18u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn test_init_tree_invalid_depth() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &0u32, &admin);
+    client.init_tree(&1u64, &0u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn test_init_tree_depth_exceeds_max_fails() {
 
     registry_client.set_admin(&1u64, &admin);
     // Depth 19 exceeds MAX_TREE_DEPTH of 18
-    client.init_tree(&1u64, &19u32, &admin);
+    client.init_tree(&1u64, &19u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn test_init_tree_depth_extremely_large_fails() {
 
     registry_client.set_admin(&1u64, &admin);
     // Depth 32 far exceeds MAX_TREE_DEPTH
-    client.init_tree(&1u64, &32u32, &admin);
+    client.init_tree(&1u64, &32u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn test_init_tree_non_admin_fails() {
 
     // Try to init with non-admin
     let non_admin = Address::generate(&env);
-    client.init_tree(&1u64, &20u32, &non_admin);
+    client.init_tree(&1u64, &20u32, &Symbol::new(&env, "BN254"), &non_admin);
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn test_register_commitment() {
 
     // Setup: set admin, init tree and give member SBT (use small depth for tests)
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let commitment = U256::from_u32(&env, 12345);
@@ -205,7 +205,7 @@ fn test_register_without_sbt_fails() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &5u32, &admin);
+    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
 
     let commitment = U256::from_u32(&env, 12345);
     client.register_with_caller(&1u64, &commitment, &member);
@@ -221,7 +221,7 @@ fn test_register_duplicate_commitment_fails() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let commitment = U256::from_u32(&env, 12345);
@@ -238,7 +238,7 @@ fn test_root_changes_after_registration() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let root_before = tree_client.current_root(&1u64);
@@ -259,7 +259,7 @@ fn test_old_root_still_valid() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let root_before = tree_client.current_root(&1u64);
@@ -281,7 +281,7 @@ fn test_invalid_root_rejected() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &5u32, &admin);
+    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
 
     let fake_root = U256::from_u32(&env, 999999);
     assert!(!client.root_ok(&1u64, &fake_root));
@@ -298,8 +298,8 @@ fn test_different_daos_have_separate_trees() {
     // Init two DAOs with different depths
     registry_client.set_admin(&1u64, &admin);
     registry_client.set_admin(&2u64, &admin);
-    tree_client.init_tree(&1u64, &4u32, &admin);
-    tree_client.init_tree(&2u64, &6u32, &admin);
+    tree_client.init_tree(&1u64, &4u32, &Symbol::new(&env, "BN254"), &admin);
+    tree_client.init_tree(&2u64, &6u32, &Symbol::new(&env, "BN254"), &admin);
 
     sbt_client.set_member(&1u64, &member, &true);
     sbt_client.set_member(&2u64, &member, &true);
@@ -331,7 +331,7 @@ fn test_multiple_registrations() {
     let member3 = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member1, &true);
     sbt_client.set_member(&1u64, &member2, &true);
     sbt_client.set_member(&1u64, &member3, &true);
@@ -360,7 +360,7 @@ fn test_root_history_eviction_after_30_updates() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
 
     // Register 31 members to trigger root eviction (MAX_ROOTS = 30)
     let mut first_root = tree_client.current_root(&1u64);
@@ -400,7 +400,7 @@ fn test_tree_full_small_depth() {
 
     // Depth 2 = max 4 leaves (2^2)
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &2u32, &admin);
+    tree_client.init_tree(&1u64, &2u32, &Symbol::new(&env, "BN254"), &admin);
 
     // Fill tree with 4 commitments
     for i in 0u32..4 {

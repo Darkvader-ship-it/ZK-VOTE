@@ -2,7 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    BytesN, Env, String, Symbol, Vec,
+    Env, String, Symbol,
 };
 
 const DAO_COUNT: Symbol = symbol_short!("dao_cnt");
@@ -42,16 +42,7 @@ pub struct DaoInfo {
     pub metadata_cid: Option<String>,
 }
 
-/// Groth16 Verification Key for BN254
-#[contracttype]
-#[derive(Clone)]
-pub struct VerificationKey {
-    pub alpha: BytesN<64>,   // G1 point
-    pub beta: BytesN<128>,   // G2 point
-    pub gamma: BytesN<128>,  // G2 point
-    pub delta: BytesN<128>,  // G2 point
-    pub ic: Vec<BytesN<64>>, // IC points (G1)
-}
+pub use zkvote_groth16::VerificationKey;
 
 // Typed Events
 #[soroban_sdk::contractevent]
@@ -338,6 +329,7 @@ impl DaoRegistry {
     /// 2. membership_sbt.mint (mints SBT to creator)
     /// 3. membership_tree.init_tree (initializes Merkle tree)
     /// 4. voting.set_vk (sets verification key)
+    /// `field` is `"BN254"` or `"BLS12_381"`
     pub fn create_and_init_dao_no_reg(
         env: Env,
         name: String,
@@ -349,6 +341,7 @@ impl DaoRegistry {
         tree_contract: Address,
         voting_contract: Address,
         tree_depth: u32,
+        field: Symbol,
         vk: VerificationKey,
     ) -> u64 {
         Self::bump_instance(&env);
@@ -400,8 +393,12 @@ impl DaoRegistry {
         );
 
         // Step 3: Initialize Merkle tree
-        let init_tree_args =
-            soroban_sdk::vec![&env, dao_id.into_val(&env), tree_depth.into_val(&env)];
+        let init_tree_args = soroban_sdk::vec![
+            &env,
+            dao_id.into_val(&env),
+            tree_depth.into_val(&env),
+            field.into_val(&env),
+        ];
         env.invoke_contract::<()>(
             &tree_contract,
             &Symbol::new(&env, "init_tree_from_registry"),
@@ -426,6 +423,7 @@ impl DaoRegistry {
     /// 3. membership_tree.init_tree (initializes Merkle tree)
     /// 4. membership_tree.register_from_registry (registers creator's commitment)
     /// 5. voting.set_vk (sets verification key)
+    /// `field` is `"BN254"` or `"BLS12_381"`
     /// Note: metadata_cid must be set separately via set_metadata_cid (10-param limit)
     pub fn create_and_init_dao(
         env: Env,
@@ -438,6 +436,7 @@ impl DaoRegistry {
         voting_contract: Address,
         tree_depth: u32,
         creator_commitment: soroban_sdk::U256,
+        field: Symbol,
         vk: VerificationKey,
     ) -> u64 {
         Self::bump_instance(&env);
@@ -482,8 +481,12 @@ impl DaoRegistry {
         );
 
         // Step 3: Initialize Merkle tree (using init_tree_from_registry to avoid re-entrancy)
-        let init_tree_args =
-            soroban_sdk::vec![&env, dao_id.into_val(&env), tree_depth.into_val(&env)];
+        let init_tree_args = soroban_sdk::vec![
+            &env,
+            dao_id.into_val(&env),
+            tree_depth.into_val(&env),
+            field.into_val(&env),
+        ];
         env.invoke_contract::<()>(
             &tree_contract,
             &Symbol::new(&env, "init_tree_from_registry"),

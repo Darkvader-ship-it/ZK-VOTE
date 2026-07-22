@@ -4,6 +4,7 @@
 // We use a real proof generated for root_A, but pass root_B to the contract.
 // The vote MUST fail with "root must match proposal eligible root".
 
+use soroban_sdk::Symbol;
 use soroban_sdk::{
     testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec as SdkVec, U256,
 };
@@ -104,7 +105,7 @@ fn test_vote_with_wrong_root_fails() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Give admin an SBT (needed to create proposals)
     sbt_client.mint(&dao_id, &admin, &admin, &None);
@@ -255,7 +256,7 @@ fn test_vote_with_correct_root_succeeds() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Give admin an SBT (needed to create proposals)
     sbt_client.mint(&dao_id, &admin, &admin, &None);

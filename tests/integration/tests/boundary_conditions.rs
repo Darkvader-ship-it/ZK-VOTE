@@ -4,7 +4,7 @@
 // 1. Root history eviction under heavy load (>30 registrations)
 // 2. Tree at maximum practical depth
 
-use soroban_sdk::{testutils::Address as _, Address, Env, String, U256};
+use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol, U256};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -95,7 +95,7 @@ fn test_root_history_eviction_behavior() {
     );
 
     // Initialize tree with depth 6 (can hold 64 members, enough for our test)
-    tree_client.init_tree(&dao_id, &6, &admin);
+    tree_client.init_tree(&dao_id, &6, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK
     voting_client.set_vk(&dao_id, &create_mock_vk(&env), &admin);
@@ -203,8 +203,8 @@ fn test_multiple_daos_separate_root_histories() {
     );
 
     // Initialize trees
-    tree_client.init_tree(&dao_id_1, &5, &admin);
-    tree_client.init_tree(&dao_id_2, &5, &admin);
+    tree_client.init_tree(&dao_id_1, &5, &Symbol::new(&env, "BN254"), &admin);
+    tree_client.init_tree(&dao_id_2, &5, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VKs
     voting_client.set_vk(&dao_id_1, &create_mock_vk(&env), &admin);
@@ -279,7 +279,7 @@ fn test_tree_capacity_at_depth_5() {
     );
 
     // Initialize tree with depth 5 (capacity = 2^5 = 32)
-    tree_client.init_tree(&dao_id, &5, &admin);
+    tree_client.init_tree(&dao_id, &5, &Symbol::new(&env, "BN254"), &admin);
 
     // Add exactly 32 members (should all succeed)
     for i in 0..32 {
@@ -322,7 +322,7 @@ fn test_tree_full_at_capacity() {
     );
 
     // Initialize tree with depth 5 (capacity = 32)
-    tree_client.init_tree(&dao_id, &5, &admin);
+    tree_client.init_tree(&dao_id, &5, &Symbol::new(&env, "BN254"), &admin);
 
     // Add 32 members
     for i in 0..32 {
@@ -361,7 +361,7 @@ fn test_duplicate_commitment_rejected() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &5, &admin);
+    tree_client.init_tree(&dao_id, &5, &Symbol::new(&env, "BN254"), &admin);
 
     // Add first member with commitment 12345
     let member1 = Address::generate(&env);
@@ -397,7 +397,7 @@ fn test_tree_depth_exceeds_max() {
     );
 
     // Try to initialize tree with depth 19 (exceeds MAX_TREE_DEPTH of 18)
-    tree_client.init_tree(&dao_id, &19, &admin);
+    tree_client.init_tree(&dao_id, &19, &Symbol::new(&env, "BN254"), &admin);
 }
 
 // Test: Zero tree depth is rejected
@@ -422,5 +422,5 @@ fn test_tree_depth_zero_rejected() {
     );
 
     // Try to initialize tree with depth 0
-    tree_client.init_tree(&dao_id, &0, &admin);
+    tree_client.init_tree(&dao_id, &0, &Symbol::new(&env, "BN254"), &admin);
 }

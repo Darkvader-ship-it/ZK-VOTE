@@ -6,6 +6,7 @@
 //
 // These tests use REAL Groth16 proof data (BE-encoded) for accurate BN254 verification.
 
+use soroban_sdk::Symbol;
 use soroban_sdk::{
     testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec as SdkVec, U256,
 };
@@ -135,7 +136,7 @@ fn test_trailing_mode_churn_across_parallel_proposals() {
         &true,
         &None,
     );
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
     // Use mock VK/proof; in testutils path verification is bypassed.
     let vk = create_mock_vk(&env);
     voting_client.set_vk(&dao_id, &vk, &admin);
@@ -289,7 +290,7 @@ fn test_fixed_mode_late_joiner_cannot_vote() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK (mock is fine since we fail before proof verification)
     let vk = create_mock_vk(&env);
@@ -360,7 +361,7 @@ fn test_trailing_mode_late_joiner_can_vote() {
     assert_eq!(dao_id, 1, "First DAO must have ID 1 to match proof");
 
     // Initialize tree with depth 18 (matching the proof)
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set REAL VK
     let vk = get_real_vk(&env);
@@ -441,7 +442,7 @@ fn test_trailing_mode_late_joiner_can_vote_real_member2() {
         &true,
         &None,
     );
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Use real VK
     let vk = get_real_vk(&env);
@@ -517,7 +518,7 @@ fn test_trailing_mode_removed_member_cannot_vote_on_new_proposal() {
     );
 
     // Initialize tree and set VK (mock is fine since we fail before proof verification)
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let vk = create_mock_vk(&env);
     voting_client.set_vk(&dao_id, &vk, &admin);
@@ -592,7 +593,7 @@ fn test_trailing_mode_removed_member_cannot_vote_on_old_proposal() {
     );
 
     // Initialize tree and set VK (mock is fine since we fail before proof verification)
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let vk = create_mock_vk(&env);
     voting_client.set_vk(&dao_id, &vk, &admin);

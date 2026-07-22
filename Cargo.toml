@@ -6,6 +6,7 @@ members = [
     "contracts/membership-tree",
     "contracts/voting",
     "contracts/comments",
+    "contracts/poc-bls12-381",
     "tests/integration",
 ]
 resolver = "2"
