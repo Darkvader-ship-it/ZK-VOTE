@@ -142,13 +142,18 @@ describe("Cross-Chain Bridge Integration", () => {
       "function castVote(uint256,uint256,uint256,uint256,uint256,uint256,bytes) external",
       "function isNullifierUsed(uint256,uint256,uint256) view returns (bool)",
       "function updateSbtRoot(uint256,uint256) external",
+      "error SbtRootNotSet()",
+      "error NullifierUsed()",
+      "error InvalidVoteChoice()",
+      "error ZeroNullifier()",
+      "error InvalidProof()",
     ];
 
     const bridge = new ethers.Contract(BRIDGE_ADDRESS, bridgeABI, signer);
 
-    // Update SBT root first
+    // Update SBT root first (must be non-zero, contract treats 0 as "not set")
     const daoId = 1;
-    const sbtRoot = ethers.constants.HashZero;
+    const sbtRoot = ethers.utils.keccak256(ethers.utils.toUtf8Bytes("test-sbt-root"));
     await bridge.updateSbtRoot(daoId, sbtRoot);
 
     // Create mock proof (128 bytes)
