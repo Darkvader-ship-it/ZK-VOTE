@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20'
           cache: 'npm'
           cache-dependency-path: circuits/package-lock.json
       - name: Install circom
@@ -57,9 +57,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20'
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm ci --legacy-peer-deps
       - name: Compile contracts
         run: npx hardhat compile
       - name: Run tests
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
       - name: Install dependencies
@@ -141,10 +141,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '20'
       - name: Install dependencies
         run: |
-          cd contracts/bridge/evm && npm ci
+          cd contracts/bridge/evm && npm ci --legacy-peer-deps
           cd ../../.. && npm ci
       - name: Wait for services
         run: |
