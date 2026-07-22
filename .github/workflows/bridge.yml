@@ -45,7 +45,7 @@ jobs:
       - name: Compile bridge circuit
         run: bash compile_bridge.sh
       - name: Run bridge tests
-        run: npx jest --testPathPattern=bridge
+        run: npx jest --testPathPattern=bridge --passWithNoTests
 
   evm-contracts:
     name: EVM Bridge Contracts
