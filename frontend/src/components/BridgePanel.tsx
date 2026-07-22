@@ -235,9 +235,7 @@ export function BridgePanel({
           Powered by Groth16 ZK proofs on BN254. Your SBT membership is verified
           without revealing your identity.
         </p>
-        <p>
-          Gas cost target: &lt;500k gas for proof verification on EVM.
-        </p>
+        <p>Gas cost target: &lt;500k gas for proof verification on EVM.</p>
       </div>
     </div>
   );
