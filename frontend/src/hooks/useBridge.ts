@@ -1,0 +1,215 @@
+import { useState, useCallback, useEffect } from "react";
+
+interface BridgeState {
+  evmConnected: boolean;
+  evmAddress: string | null;
+  chainId: number | null;
+  isCorrectChain: boolean;
+}
+
+interface BridgeVoteParams {
+  daoId: number;
+  proposalId: number;
+  voteChoice: boolean;
+  nullifier: string;
+  voteRoot: string;
+  sbtRoot: string;
+  proof: {
+    a: string;
+    b: string;
+    c: string;
+  };
+}
+
+interface BridgeVoteResult {
+  success: boolean;
+  txHash?: string;
+  error?: string;
+}
+
+const EXPECTED_CHAIN_ID = 31337; // Anvil/Hardhat local
+
+/**
+ * useBridge - Hook for EVM wallet connection and cross-chain voting
+ */
+export function useBridge() {
+  const [state, setState] = useState<BridgeState>({
+    evmConnected: false,
+    evmAddress: null,
+    chainId: null,
+    isCorrectChain: false,
+  });
+
+  // Check if MetaMask is available
+  const isMetaMaskAvailable = typeof window !== "undefined" && window.ethereum;
+
+  // Connect to MetaMask
+  const connect = useCallback(async () => {
+    if (!window.ethereum) {
+      throw new Error("No EVM wallet detected. Please install MetaMask.");
+    }
+
+    try {
+      const accounts = await window.ethereum.request({
+        method: "eth_requestAccounts",
+      });
+
+      const chainIdHex = await window.ethereum.request({
+        method: "eth_chainId",
+      });
+      const chainId = parseInt(chainIdHex as string, 16);
+
+      if (accounts && accounts.length > 0) {
+        setState({
+          evmConnected: true,
+          evmAddress: accounts[0],
+          chainId,
+          isCorrectChain: chainId === EXPECTED_CHAIN_ID,
+        });
+      }
+    } catch (err) {
+      throw new Error("Failed to connect: " + (err as Error).message);
+    }
+  }, []);
+
+  // Disconnect
+  const disconnect = useCallback(() => {
+    setState({
+      evmConnected: false,
+      evmAddress: null,
+      chainId: null,
+      isCorrectChain: false,
+    });
+  }, []);
+
+  // Switch to correct chain
+  const switchChain = useCallback(async () => {
+    if (!window.ethereum) return;
+
+    try {
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: "0x" + EXPECTED_CHAIN_ID.toString(16) }],
+      });
+
+      const chainIdHex = await window.ethereum.request({
+        method: "eth_chainId",
+      });
+      const chainId = parseInt(chainIdHex as string, 16);
+
+      setState((prev) => ({
+        ...prev,
+        chainId,
+        isCorrectChain: chainId === EXPECTED_CHAIN_ID,
+      }));
+    } catch (err) {
+      throw new Error("Failed to switch chain: " + (err as Error).message);
+    }
+  }, []);
+
+  // Submit bridge vote
+  const submitVote = useCallback(
+    async (params: BridgeVoteParams): Promise<BridgeVoteResult> => {
+      if (!state.evmConnected || !state.evmAddress) {
+        return { success: false, error: "EVM wallet not connected" };
+      }
+
+      try {
+        const response = await fetch("/bridge/vote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...params,
+            voterAddress: state.evmAddress,
+          }),
+        });
+
+        const result = await response.json();
+        return result;
+      } catch (err) {
+        return {
+          success: false,
+          error: "Bridge vote failed: " + (err as Error).message,
+        };
+      }
+    },
+    [state.evmConnected, state.evmAddress],
+  );
+
+  // Check nullifier status
+  const checkNullifier = useCallback(
+    async (
+      daoId: number,
+      proposalId: number,
+      nullifier: string,
+    ): Promise<boolean> => {
+      try {
+        const response = await fetch(
+          `/bridge/nullifier/${daoId}/${proposalId}/${nullifier}`,
+        );
+        const result = await response.json();
+        return result.used;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
+  // Listen for account/chain changes
+  useEffect(() => {
+    if (!window.ethereum) return;
+
+    const handleAccountsChanged = (accounts: string[]) => {
+      if (accounts.length === 0) {
+        disconnect();
+      } else if (state.evmConnected) {
+        setState((prev) => ({
+          ...prev,
+          evmAddress: accounts[0],
+        }));
+      }
+    };
+
+    const handleChainChanged = (chainIdHex: string) => {
+      const chainId = parseInt(chainIdHex, 16);
+      setState((prev) => ({
+        ...prev,
+        chainId,
+        isCorrectChain: chainId === EXPECTED_CHAIN_ID,
+      }));
+    };
+
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    window.ethereum.on("chainChanged", handleChainChanged);
+
+    return () => {
+      window.ethereum?.removeListener(
+        "accountsChanged",
+        handleAccountsChanged,
+      );
+      window.ethereum?.removeListener("chainChanged", handleChainChanged);
+    };
+  }, [state.evmConnected, disconnect]);
+
+  return {
+    ...state,
+    isMetaMaskAvailable: !!isMetaMaskAvailable,
+    connect,
+    disconnect,
+    switchChain,
+    submitVote,
+    checkNullifier,
+  };
+}
+
+// Extend Window interface for MetaMask
+declare global {
+  interface Window {
+    ethereum?: {
+      request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+      on: (event: string, handler: (...args: unknown[]) => void) => void;
+      removeListener: (event: string, handler: (...args: unknown[]) => void) => void;
+    };
+  }
+}
