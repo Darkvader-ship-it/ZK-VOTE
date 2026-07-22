@@ -41,7 +41,7 @@ jobs:
           java -cp tla2tools.jar tlc2.TLC \
             formal-model/ZKVote.tla \
             -config formal-model/ZKVote.cfg \
-            -depth 20 -workers auto
+            -depth 40 -workers auto
 ```
 
 **Estimated compute cost:**

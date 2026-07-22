@@ -43,7 +43,7 @@ combined state machine across 5 Soroban contracts:
 ### Run TLC model checker
 ```bash
 cd formal-model
-java -cp /path/to/tla2tools.jar tlc2.TLC ZKVote.tla -config ZKVote.cfg -depth 20
+java -cp /path/to/tla2tools.jar tlc2.TLC ZKVote.tla -config ZKVote.cfg -depth 40
 ```
 
 ### Run Apalache (symbolic)
@@ -99,6 +99,6 @@ Based on PR #45 code review, the following issues were identified and fixed:
 ## Next Steps
 
 1. Install TLA+ Toolbox: https://github.com/tlaplus/tlaplus/releases
-2. Run `java -cp tla2tools.jar tlc2.TLC ZKVote.tla -config ZKVote.cfg -depth 20`
+2. Run `java -cp tla2tools.jar tlc2.TLC ZKVote.tla -config ZKVote.cfg -depth 40`
 3. Add the GitHub Action to `.github/workflows/formal-model.yml`
 4. For deeper analysis, install Apalache: https://apalache.informal.systems/
