@@ -172,9 +172,14 @@ jobs:
           done
           echo "Soroban RPC is up"
       - name: Deploy EVM contracts
+        id: deploy_evm
         run: |
           cd contracts/bridge/evm
-          npx hardhat run scripts/deploy.js --network localhost
+          output=$(npx hardhat run scripts/deploy.js --network localhost 2>&1)
+          echo "$output"
+          # Extract bridge address from deploy output
+          bridge_addr=$(echo "$output" | grep -oP 'Bridge deployed to: \K0x[0-9a-fA-F]{40}' || true)
+          echo "bridge_address=$bridge_addr" >> "$GITHUB_OUTPUT"
       - name: Run cross-chain tests
         run: |
           cd tests/bridge
@@ -182,3 +187,4 @@ jobs:
         env:
           ANVIL_URL: http://localhost:8545
           SOROBAN_RPC_URL: http://localhost:8000/soroban/rpc
+          BRIDGE_ADDRESS: ${{ steps.deploy_evm.outputs.bridge_address }}
