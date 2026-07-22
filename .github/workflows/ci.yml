@@ -11,9 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install Rust components
+        run: |
+          rustup component add clippy rustfmt
+          rustup target add wasm32v1-none
       - uses: actions/cache@v4
         with:
           path: |
@@ -26,11 +27,13 @@ jobs:
       - name: Clippy lint
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build WASM
-        run: |
-          rustup target add wasm32v1-none
-          cargo build --target wasm32v1-none --release
+        run: cargo build --target wasm32v1-none --release
       - name: Run tests
         run: cargo test --workspace
+      - name: Groth16 production edge corpus
+        run: cargo test -p zkvote-groth16 --test bn254_edge_case_corpus -- --nocapture
+      - name: Groth16 testutils stub behavior
+        run: cargo test -p zkvote-groth16 --features testutils --test bn254_edge_case_corpus testutils_feature_uses_stubbed_verifier -- --nocapture
       - name: Doc check
         run: cargo doc --workspace --no-deps
       - name: Security audit
