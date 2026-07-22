@@ -143,14 +143,34 @@ jobs:
           cd ../../.. && npm ci
       - name: Wait for services
         run: |
-          sleep 10
-          curl -sS http://localhost:8545 > /dev/null || exit 1
+          # wait for anvil
+          for i in {1..30}; do
+            if curl -sS http://localhost:8545 > /dev/null; then
+              echo "Anvil is up"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Anvil did not become ready in time"
+              exit 1
+            fi
+            sleep 2
+          done
 
-          # Soroban JSON-RPC health check (expects POST)
-          curl -sS -X POST http://localhost:8000/soroban/rpc \
-            -H 'content-type: application/json' \
-            --data '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
-            | grep -q '"jsonrpc"' || exit 1
+          # wait for Soroban JSON-RPC
+          for i in {1..45}; do
+            if curl -sS -X POST http://localhost:8000/soroban/rpc \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+              | grep -q '"jsonrpc"'; then
+              echo "Soroban RPC is up"
+              break
+            fi
+            if [ "$i" -eq 45 ]; then
+              echo "Soroban RPC did not become ready in time"
+              exit 1
+            fi
+            sleep 2
+          done
       - name: Deploy EVM contracts
         run: |
           cd contracts/bridge/evm
