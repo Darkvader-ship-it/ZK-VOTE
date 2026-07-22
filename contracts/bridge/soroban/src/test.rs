@@ -16,7 +16,11 @@ fn create_test_env() -> (Env, Address, Address) {
 
 fn setup_bridge(env: &Env, voting_contract: &Address) -> Address {
     let bridge_contract = env.register_contract(None, Bridge);
-    Bridge::constructor(env.clone(), bridge_contract.clone(), voting_contract.clone());
+    Bridge::constructor(
+        env.clone(),
+        bridge_contract.clone(),
+        voting_contract.clone(),
+    );
     bridge_contract
 }
 

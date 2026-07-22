@@ -50,7 +50,7 @@ pub enum BridgeError {
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Nullifier(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool
+    Nullifier(u64, u64, U256),    // (dao_id, proposal_id, nullifier) -> bool
     VoteRecorded(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool
 }
 
@@ -209,12 +209,7 @@ impl Bridge {
     }
 
     /// Check if a nullifier has been used (for cross-chain verification)
-    pub fn is_nullifier_used(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-        nullifier: U256,
-    ) -> bool {
+    pub fn is_nullifier_used(env: Env, dao_id: u64, proposal_id: u64, nullifier: U256) -> bool {
         Self::bump_instance(&env);
         let key = DataKey::Nullifier(dao_id, proposal_id, nullifier);
         env.storage().persistent().has(&key)
