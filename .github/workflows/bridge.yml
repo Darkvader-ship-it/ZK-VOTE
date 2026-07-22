@@ -141,6 +141,7 @@ jobs:
         run: |
           cd contracts/bridge/evm && npm ci --legacy-peer-deps
           cd ../../.. && npm ci
+          cd tests/bridge && npm ci
       - name: Debug Soroban service
         if: always()
         run: |

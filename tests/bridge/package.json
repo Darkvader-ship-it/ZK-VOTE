@@ -1,0 +1,10 @@
+{
+  "name": "zkvote-bridge-tests",
+  "version": "1.0.0",
+  "private": true,
+  "devDependencies": {
+    "ethers": "^5.8.0",
+    "@stellar/stellar-sdk": "^15.1.0",
+    "jest": "^29.7.0"
+  }
+}
