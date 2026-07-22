@@ -91,7 +91,7 @@ fn setup_dao_with_options(
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(env, "BN254"), &admin);
     sbt.mint(&dao_id, &admin, &admin, &None);
     voting.set_vk(&dao_id, &dummy_vk(env), &admin);
 

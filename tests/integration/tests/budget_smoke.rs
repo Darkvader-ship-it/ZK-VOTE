@@ -71,7 +71,7 @@ fn setup(
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(env, "BN254"), &admin);
 
     // Ensure admin has SBT so proposal creation passes membership check
     sbt.mint(&dao_id, &admin, &admin, &None);

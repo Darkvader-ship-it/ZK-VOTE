@@ -620,7 +620,7 @@ mod tests {
             let env = Env::default();
             env.cost_estimate().disable_resource_limits();
 
-            let contract_id = env.register_contract(None, BenchContract);
+            let contract_id = env.register(BenchContract, ());
 
             let cases: [(&str, &str); 6] = [
                 ("field check BN254", "bench_field_bn254"),
@@ -657,7 +657,7 @@ mod tests {
             }
             std::println!("  {}", "-".repeat(68));
 
-            if let (Some(bn), Some(bls)) = (results.get(0), results.get(1)) {
+            if let (Some(bn), Some(bls)) = (results.first(), results.get(1)) {
                 let ratio = if bn.instructions > 0 {
                     bls.instructions as f64 / bn.instructions as f64
                 } else {
