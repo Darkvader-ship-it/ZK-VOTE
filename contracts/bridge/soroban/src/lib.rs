@@ -17,13 +17,9 @@
 
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype,
-    crypto::bn254::{Bn254G1Affine, Bn254G2Affine, Fr},
-    panic_with_error, symbol_short, Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec, U256,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
+    Env, Symbol, U256,
 };
-
-// Re-export shared Groth16 types
-pub use zkvote_groth16::{Groth16Error, Proof, VerificationKey};
 
 const VOTING_CONTRACT: Symbol = symbol_short!("voting");
 const VERSION: u32 = 1;
@@ -144,52 +140,17 @@ impl Bridge {
             panic_with_error!(&env, BridgeError::NullifierAlreadyUsed);
         }
 
-        // Get voting contract address
-        let voting_contract: Address = env
+        // Verify voting contract is configured
+        let _: Address = env
             .storage()
             .instance()
             .get(&VOTING_CONTRACT)
             .unwrap_or_else(|| panic_with_error!(&env, BridgeError::VotingContractNotSet));
 
-        // Record vote in the voting contract
-        // The voting contract handles nullifier storage and vote counting
-        let vote_signal = if vote_choice {
-            U256::from_u32(&env, 1)
-        } else {
-            U256::from_u32(&env, 0)
-        };
-        let dao_signal = U256::from_u128(&env, dao_id as u128);
-        let proposal_signal = U256::from_u128(&env, proposal_id as u128);
-
-        // Build the public signals array matching the bridge circuit
-        // [sbtContractAddr, memberAddr, daoId, proposalId, nullifier, voteChoice, voteRoot, sbtRoot]
-        // For relay, we pass the nullifier and vote choice to the voting contract
-        // The voting contract's vote() function expects:
-        // (dao_id, proposal_id, vote_choice, nullifier, root, proof)
-        //
-        // Since the proof was already verified on EVM, we use a relay-specific path
-        // that trusts the EVM bridge contract's verification
-
-        // Mark nullifier as used before calling voting contract
+        // Mark nullifier as used before recording vote
         // This prevents re-entrancy attacks
         env.storage().persistent().set(&null_key, &true);
         Self::bump_persistent(&env, &null_key);
-
-        // Call voting contract to record the vote
-        // We use a special relay function that trusts the bridge contract
-        // Instead of verify_proof, we directly record the vote
-        //
-        // Option 1: Call voting contract's vote() with a mock proof
-        //   - Requires the voting contract to have a relay mode
-        //
-        // Option 2: Store the vote locally in the bridge contract
-        //   - Simpler but decentralized counting requires syncing
-        //
-        // Option 3: Call voting contract with a special admin function
-        //   - The voting contract trusts the bridge contract address
-        //
-        // For this implementation, we'll store the vote locally and
-        // emit an event for the indexer to pick up
 
         // Store vote record
         let record_key = DataKey::VoteRecorded(dao_id, proposal_id, nullifier.clone());
