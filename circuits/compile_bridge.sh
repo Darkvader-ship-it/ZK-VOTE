@@ -23,15 +23,15 @@ ${SNARKJS} r1cs info ${BUILD_DIR}/${CIRCUIT_NAME}.r1cs
 
 echo "=== Trusted setup (Groth16) ==="
 # Phase 1: Powers of Tau (use existing pot or generate new one)
-PTAU_FILE="pot14_final.ptau"
+PTAU_FILE="pot15_final.ptau"
 if [ ! -f "${PTAU_FILE}" ]; then
     echo "Generating powers of tau..."
-    ${SNARKJS} powersoftau new bn128 14 ${BUILD_DIR}/pot14_0000.ptau -v
-    ${SNARKJS} powersoftau contribute ${BUILD_DIR}/pot14_0000.ptau \
-        ${BUILD_DIR}/pot14_0001.ptau \
+    ${SNARKJS} powersoftau new bn128 15 ${BUILD_DIR}/pot15_0000.ptau -v
+    ${SNARKJS} powersoftau contribute ${BUILD_DIR}/pot15_0000.ptau \
+        ${BUILD_DIR}/pot15_0001.ptau \
         --name="Phase 1 contribution" -v -e="random entropy"
     ${SNARKJS} powersoftau prepare phase2 \
-        ${BUILD_DIR}/pot14_0001.ptau ${BUILD_DIR}/${PTAU_FILE} -v
+        ${BUILD_DIR}/pot15_0001.ptau ${BUILD_DIR}/${PTAU_FILE} -v
 else
     echo "Using existing ${PTAU_FILE}"
     cp ${PTAU_FILE} ${BUILD_DIR}/${PTAU_FILE}
