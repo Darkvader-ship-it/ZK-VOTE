@@ -22,7 +22,7 @@ import {
   withSequenceLock,
   u256ToScVal,
 } from "../services/stellar.js";
-import { relayVote, startRelay, stopRelay } from "../services/bridge.js";
+
 import {
   authGuard,
   queryLimiter,
@@ -65,7 +65,7 @@ router.post("/bridge/vote", validateBody(bridgeVoteSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId, voteChoice, nullifier, voteRoot, sbtRoot, proof } =
+  const { daoId, proposalId, voteChoice, nullifier, voteRoot, sbtRoot } =
     config.stripRequestBodies ? {} : req.body;
 
   try {
@@ -74,11 +74,9 @@ router.post("/bridge/vote", validateBody(bridgeVoteSchema), (async (
     // Convert inputs to Soroban types
     let scNullifier: StellarSdk.xdr.ScVal;
     let scRoot: StellarSdk.xdr.ScVal;
-    let scSbtRoot: StellarSdk.xdr.ScVal;
     try {
       scNullifier = u256ToScVal(nullifier);
       scRoot = u256ToScVal(voteRoot);
-      scSbtRoot = u256ToScVal(sbtRoot);
     } catch (err) {
       return res.status(400).json({ error: (err as Error).message });
     }
