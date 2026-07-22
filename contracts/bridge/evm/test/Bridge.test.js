@@ -9,7 +9,7 @@ describe("Bridge", function () {
   const voteChoice = 1n;
   const nullifier = 999n;
   const voteRoot = ethers.ZeroHash;
-  const sbtRoot = ethers.ZeroHash;
+  const sbtRoot = ethers.keccak256(ethers.toUtf8Bytes("test-sbt-root"));
 
   beforeEach(async function () {
     [owner, user, relayer] = await ethers.getSigners();
@@ -85,10 +85,8 @@ describe("Bridge", function () {
   });
 
   describe("castVote", function () {
-    // Create a mock proof (128 bytes)
-    const mockProof = ethers.hexlify(ethers.randomBytes(256));
-
     it("should emit VoteForwarded on valid proof", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       await expect(
         bridge.castVote(
           daoId,
@@ -105,6 +103,7 @@ describe("Bridge", function () {
     });
 
     it("should mark nullifier as used", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       await bridge.castVote(
         daoId,
         proposalId,
@@ -120,6 +119,7 @@ describe("Bridge", function () {
     });
 
     it("should revert on double-voting (same nullifier)", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       await bridge.castVote(
         daoId,
         proposalId,
@@ -143,6 +143,7 @@ describe("Bridge", function () {
     });
 
     it("should revert on zero nullifier", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       await expect(
         bridge.castVote(
           daoId,
@@ -157,6 +158,7 @@ describe("Bridge", function () {
     });
 
     it("should revert on invalid vote choice", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       await expect(
         bridge.castVote(
           daoId,
@@ -171,6 +173,7 @@ describe("Bridge", function () {
     });
 
     it("should revert when SBT root not set", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       const newDaoId = 999n;
       await expect(
         bridge.castVote(
@@ -186,6 +189,7 @@ describe("Bridge", function () {
     });
 
     it("should revert when provided sbtRoot mismatches", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       const wrongRoot = ethers.keccak256(ethers.toUtf8Bytes("wrong"));
       await expect(
         bridge.castVote(
@@ -201,6 +205,7 @@ describe("Bridge", function () {
     });
 
     it("should revert on invalid proof (mock verifier rejects)", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       await verifier.setShouldVerify(false);
       await expect(
         bridge.castVote(
@@ -216,6 +221,7 @@ describe("Bridge", function () {
     });
 
     it("should allow different nullifiers for same DAO+proposal", async function () {
+      const mockProof = ethers.hexlify(ethers.randomBytes(256));
       await bridge.castVote(
         daoId,
         proposalId,
