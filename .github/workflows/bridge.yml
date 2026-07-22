@@ -132,6 +132,7 @@ jobs:
         image: stellar/quickstart:soroban-dev
         ports:
           - 8000:8000
+        command: --standalone --enable-soroban-rpc --soroban-rpc-port 8000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -157,15 +158,19 @@ jobs:
           done
 
           # wait for Soroban JSON-RPC
-          for i in {1..45}; do
-            if curl -sS -X POST http://localhost:8000/soroban/rpc \
+          for i in {1..60}; do
+            resp=$(curl -sS -X POST http://localhost:8000/soroban/rpc \
               -H 'content-type: application/json' \
-              --data '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
-              | grep -q '"jsonrpc"'; then
-              echo "Soroban RPC is up"
-              break
+              --data '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' || true)
+
+            if echo "$resp" | grep -Eq '"jsonrpc"'; then
+              if echo "$resp" | grep -Eq '"result"|"error"'; then
+                echo "Soroban RPC is up"
+                break
+              fi
             fi
-            if [ "$i" -eq 45 ]; then
+
+            if [ "$i" -eq 60 ]; then
               echo "Soroban RPC did not become ready in time"
               exit 1
             fi
