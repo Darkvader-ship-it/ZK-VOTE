@@ -28,11 +28,11 @@ const SOROBAN_BRIDGE_ID = process.env.SOROBAN_BRIDGE_ID;
 // HELPERS
 // ============================================
 
-async function getAnvilProvider() {
-  return new ethers.JsonRpcProvider(ANVIL_URL);
+function getAnvilProvider() {
+  return new ethers.providers.JsonRpcProvider(ANVIL_URL);
 }
 
-async function getSorobanServer() {
+function getSorobanServer() {
   return new StellarSdk.rpc.Server(SOROBAN_RPC, { allowHttp: true });
 }
 
@@ -45,8 +45,8 @@ describe("Cross-Chain Bridge Integration", () => {
   let stellarServer;
 
   beforeAll(async () => {
-    evmProvider = await getAnvilProvider();
-    stellarServer = await getSorobanServer();
+    evmProvider = getAnvilProvider();
+    stellarServer = getSorobanServer();
 
     // Verify both chains are running
     const evmBlock = await evmProvider.getBlockNumber();
@@ -54,7 +54,7 @@ describe("Cross-Chain Bridge Integration", () => {
 
     const stellarHealth = await stellarServer.getHealth();
     expect(stellarHealth.status).toBe("OK");
-  });
+  }, 30000);
 
   test("EVM bridge contract is deployed", async () => {
     if (!BRIDGE_ADDRESS) {
@@ -74,14 +74,15 @@ describe("Cross-Chain Bridge Integration", () => {
     }
 
     const contract = new StellarSdk.Contract(SOROBAN_BRIDGE_ID);
-    const account = await stellarServer.getAccount(
-      "GTESTRELAYERADDRESS000000000000000000000000000000000000"
-    );
+    const account = await evmProvider.getSigner(0);
 
-    const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100000",
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
+    const tx = new StellarSdk.TransactionBuilder(
+      await StellarSdk.nativeToScVal("GTEST", { type: "address" }),
+      {
+        fee: "100000",
+        networkPassphrase: NETWORK_PASSPHRASE,
+      },
+    )
       .addOperation(contract.call("version"))
       .setTimeout(30)
       .build();
@@ -96,8 +97,7 @@ describe("Cross-Chain Bridge Integration", () => {
       return;
     }
 
-    const signers = await evmProvider.listAccounts();
-    const signer = signers[0];
+    const signer = await evmProvider.getSigner(0);
 
     const bridgeABI = [
       "function castVote(uint256,uint256,uint256,uint256,uint256,uint256,bytes) external",
@@ -109,11 +109,11 @@ describe("Cross-Chain Bridge Integration", () => {
 
     // Update SBT root first
     const daoId = 1;
-    const sbtRoot = ethers.ZeroHash;
+    const sbtRoot = ethers.constants.HashZero;
     await bridge.updateSbtRoot(daoId, sbtRoot);
 
     // Create mock proof (128 bytes)
-    const mockProof = ethers.hexlify(ethers.randomBytes(256));
+    const mockProof = ethers.utils.hexlify(ethers.utils.randomBytes(256));
 
     // Submit vote
     const tx = await bridge.castVote(
@@ -121,16 +121,16 @@ describe("Cross-Chain Bridge Integration", () => {
       1, // proposalId
       1, // voteChoice
       12345, // nullifier
-      ethers.ZeroHash, // voteRoot
+      ethers.constants.HashZero, // voteRoot
       sbtRoot,
-      mockProof
+      mockProof,
     );
 
     const receipt = await tx.wait();
     expect(receipt.status).toBe(1);
 
     // Verify VoteForwarded event
-    const iface = new ethers.Interface([
+    const iface = new ethers.utils.Interface([
       "event VoteForwarded(uint256 indexed,uint256 indexed,uint256,uint256,uint256)",
     ]);
 
@@ -157,10 +157,13 @@ describe("Cross-Chain Bridge Integration", () => {
 
     const contract = new StellarSdk.Contract(SOROBAN_BRIDGE_ID);
     const relayer = StellarSdk.Keypair.fromSecret(
-      process.env.RELAYER_SECRET_KEY || "S..."
+      process.env.RELAYER_SECRET_KEY || "S...",
     );
 
-    const account = await stellarServer.getAccount(relayer.publicKey());
+    const account = await StellarSdk.rpc.Server.prototype.getAccount.call(
+      stellarServer,
+      relayer.publicKey(),
+    );
 
     const tx = new StellarSdk.TransactionBuilder(account, {
       fee: "100000",
@@ -169,12 +172,12 @@ describe("Cross-Chain Bridge Integration", () => {
       .addOperation(
         contract.call(
           "relay_vote",
-          StellarSdk.nativeToScVal(1, { type: "u64" }), // daoId
-          StellarSdk.nativeToScVal(1, { type: "u64" }), // proposalId
-          StellarSdk.nativeToScVal(true, { type: "bool" }), // voteChoice
-          StellarSdk.nativeToScVal(999, { type: "u256" }), // nullifier
-          StellarSdk.nativeToScVal(0, { type: "u256" }) // voteRoot
-        )
+          StellarSdk.nativeToScVal(1, { type: "u64" }),
+          StellarSdk.nativeToScVal(1, { type: "u64" }),
+          StellarSdk.nativeToScVal(true, { type: "bool" }),
+          StellarSdk.nativeToScVal(999, { type: "u256" }),
+          StellarSdk.nativeToScVal(0, { type: "u256" }),
+        ),
       )
       .setTimeout(30)
       .build();
@@ -191,8 +194,10 @@ describe("Cross-Chain Bridge Integration", () => {
 
     // Check nullifier on Soroban
     const contract = new StellarSdk.Contract(SOROBAN_BRIDGE_ID);
-    const account = await stellarServer.getAccount(
-      "GTESTRELAYERADDRESS000000000000000000000000000000000000"
+
+    const account = await StellarSdk.rpc.Server.prototype.getAccount.call(
+      stellarServer,
+      "GTESTRELAYERADDRESS000000000000000000000000000000000000",
     );
 
     const tx = new StellarSdk.TransactionBuilder(account, {
@@ -204,8 +209,8 @@ describe("Cross-Chain Bridge Integration", () => {
           "is_nullifier_used",
           StellarSdk.nativeToScVal(1, { type: "u64" }),
           StellarSdk.nativeToScVal(1, { type: "u64" }),
-          StellarSdk.nativeToScVal(12345, { type: "u256" })
-        )
+          StellarSdk.nativeToScVal(12345, { type: "u256" }),
+        ),
       )
       .setTimeout(30)
       .build();
