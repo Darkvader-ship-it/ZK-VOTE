@@ -50,11 +50,14 @@ export function BridgePanel({
         return;
       }
 
-      const accounts = await window.ethereum.request({
+      const result = await window.ethereum.request({
         method: "eth_requestAccounts",
       });
+      const accounts = Array.isArray(result)
+        ? result.filter((a): a is string => typeof a === "string")
+        : [];
 
-      if (accounts && accounts.length > 0) {
+      if (accounts.length > 0) {
         setEvmAddress(accounts[0]);
         setEvmConnected(true);
       }

@@ -50,16 +50,19 @@ export function useBridge() {
     }
 
     try {
-      const accounts = await window.ethereum.request({
+      const result = await window.ethereum.request({
         method: "eth_requestAccounts",
       });
+      const accounts = Array.isArray(result)
+        ? result.filter((a): a is string => typeof a === "string")
+        : [];
 
       const chainIdHex = await window.ethereum.request({
         method: "eth_chainId",
       });
       const chainId = parseInt(chainIdHex as string, 16);
 
-      if (accounts && accounts.length > 0) {
+      if (accounts.length > 0) {
         setState({
           evmConnected: true,
           evmAddress: accounts[0],
@@ -160,7 +163,12 @@ export function useBridge() {
   useEffect(() => {
     if (!window.ethereum) return;
 
-    const handleAccountsChanged = (accounts: string[]) => {
+    const handleAccountsChanged = (...args: unknown[]) => {
+      const first = args[0];
+      const accounts = Array.isArray(first)
+        ? first.filter((a): a is string => typeof a === "string")
+        : [];
+
       if (accounts.length === 0) {
         disconnect();
       } else if (state.evmConnected) {
@@ -171,13 +179,16 @@ export function useBridge() {
       }
     };
 
-    const handleChainChanged = (chainIdHex: string) => {
-      const chainId = parseInt(chainIdHex, 16);
-      setState((prev) => ({
-        ...prev,
-        chainId,
-        isCorrectChain: chainId === EXPECTED_CHAIN_ID,
-      }));
+    const handleChainChanged = (...args: unknown[]) => {
+      const first = args[0];
+      if (typeof first === "string") {
+        const chainId = parseInt(first, 16);
+        setState((prev) => ({
+          ...prev,
+          chainId,
+          isCorrectChain: chainId === EXPECTED_CHAIN_ID,
+        }));
+      }
     };
 
     window.ethereum.on("accountsChanged", handleAccountsChanged);
