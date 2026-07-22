@@ -10,7 +10,7 @@
 //
 // Run with: cargo test --test pairing_security_boundary -- --nocapture
 
-use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec, U256};
+use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec, U256, Symbol, };
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -141,7 +141,7 @@ fn test_pairing_security_boundary() {
     sbt_client.mint(&dao_id, &admin, &admin, &None);
 
     println!("Initializing tree (depth 18)...\n");
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     println!("Registering commitment...\n");
     // Commitment: Poseidon(999888777666, 111222333444)

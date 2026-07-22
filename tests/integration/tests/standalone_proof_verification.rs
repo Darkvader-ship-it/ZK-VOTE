@@ -21,7 +21,7 @@
 //   - First vote submission: SUCCESS (proof verifies)
 //   - Second vote (same nullifier): FAIL (double vote detected)
 
-use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec, U256};
+use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec, U256, Symbol, };
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -178,7 +178,7 @@ fn test_real_groth16_proof_verification() {
     println!("Step 4: Initializing membership tree (depth 18)...");
     println!("===================================================\n");
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
     println!("✅ Tree initialized\n");
 
     println!("Step 5: Registering commitment...");

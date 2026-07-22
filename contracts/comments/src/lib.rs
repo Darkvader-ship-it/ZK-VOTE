@@ -25,7 +25,7 @@ use soroban_sdk::{
 };
 
 // Re-export shared Groth16 types and utilities
-pub use zkvote_groth16::{Groth16Error, Proof, VerificationKey};
+pub use zkvote_groth16::{CurveId, Groth16Error, Proof, ProofBls381, VerificationKey, VerificationKeyBls381};
 
 const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");
@@ -202,12 +202,29 @@ impl Comments {
         }
     }
 
-    /// Get VK from voting contract (single source of truth)
+    /// Validate that a U256 value is within the BLS12-381 scalar field
+    fn assert_in_field_bls381(env: &Env, value: &U256) {
+        if zkvote_groth16::assert_in_field_bls381(env, value).is_err() {
+            panic_with_error!(env, CommentsError::SignalNotInField);
+        }
+    }
+
+    /// Get VK from voting contract (single source of truth) - BN254
     fn get_vk_from_voting(env: &Env, dao_id: u64) -> VerificationKey {
         let voting_contract: Address = Self::voting_contract(env.clone());
         env.invoke_contract(
             &voting_contract,
             &symbol_short!("get_vk"),
+            soroban_sdk::vec![env, dao_id.into_val(env)],
+        )
+    }
+
+    /// Get BLS12-381 VK from voting contract
+    fn get_vk_from_voting_bls381(env: &Env, dao_id: u64) -> VerificationKeyBls381 {
+        let voting_contract: Address = Self::voting_contract(env.clone());
+        env.invoke_contract(
+            &voting_contract,
+            &Symbol::new(env, "get_vk_bls381"),
             soroban_sdk::vec![env, dao_id.into_val(env)],
         )
     }
@@ -479,6 +496,97 @@ impl Comments {
         comment_id
     }
 
+    /// Add an anonymous comment with BLS12-381 ZK proof
+    pub fn add_anonymous_comment_bls381(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        content_cid: String,
+        parent_id: Option<u64>,
+        nullifier: U256,
+        root: U256,
+        vote_choice: bool,
+        proof: ProofBls381,
+    ) -> u64 {
+        Self::bump_instance(&env);
+        Self::assert_in_field_bls381(&env, &nullifier);
+        Self::assert_in_field_bls381(&env, &root);
+
+        if nullifier == U256::from_u32(&env, 0) {
+            panic_with_error!(&env, CommentsError::InvalidNullifier);
+        }
+
+        if content_cid.len() > MAX_CID_LEN {
+            panic_with_error!(&env, CommentsError::CommentContentTooLong);
+        }
+
+        if let Some(pid) = parent_id {
+            let parent_key = DataKey::Comment(dao_id, proposal_id, pid);
+            if !env.storage().persistent().has(&parent_key) {
+                panic_with_error!(&env, CommentsError::InvalidParentComment);
+            }
+        }
+
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, dao_id, proposal_id, &root);
+
+        let vk = Self::get_vk_from_voting_bls381(&env, dao_id);
+
+        let dao_signal = U256::from_u128(&env, dao_id as u128);
+        let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+        let choice_signal = if vote_choice {
+            U256::from_u32(&env, 1)
+        } else {
+            U256::from_u32(&env, 0)
+        };
+
+        let pub_signals = soroban_sdk::vec![
+            &env,
+            root.clone(),
+            nullifier.clone(),
+            dao_signal,
+            proposal_signal,
+            choice_signal,
+        ];
+
+        if !Self::verify_groth16_bls381(&env, &vk, &proof, &pub_signals) {
+            panic_with_error!(&env, CommentsError::InvalidProof);
+        }
+
+        let comment_id = Self::next_comment_id(&env, dao_id, proposal_id);
+        let now = env.ledger().timestamp();
+
+        let comment = CommentInfo {
+            id: comment_id,
+            dao_id,
+            proposal_id,
+            author: None,
+            content_cid,
+            parent_id,
+            created_at: now,
+            updated_at: now,
+            revision_cids: Vec::new(&env),
+            deleted: false,
+            deleted_by: DELETED_BY_NONE,
+            nullifier: Some(nullifier),
+            comment_nonce: None,
+        };
+
+        let key = DataKey::Comment(dao_id, proposal_id, comment_id);
+        env.storage().persistent().set(&key, &comment);
+        Self::bump_persistent(&env, &key);
+
+        CommentCreatedEvent {
+            dao_id,
+            proposal_id,
+            comment_id,
+            is_anonymous: true,
+        }
+        .publish(&env);
+
+        comment_id
+    }
+
     /// Edit a public comment (owner only)
     pub fn edit_comment(
         env: Env,
@@ -597,6 +705,87 @@ impl Comments {
         ];
 
         if !Self::verify_groth16(&env, &vk, &proof, &pub_signals) {
+            panic_with_error!(&env, CommentsError::InvalidProof);
+        }
+
+        if comment.revision_cids.len() < MAX_REVISIONS {
+            comment.revision_cids.push_back(comment.content_cid.clone());
+        }
+
+        comment.content_cid = new_content_cid;
+        comment.updated_at = env.ledger().timestamp();
+
+        env.storage().persistent().set(&key, &comment);
+        Self::bump_persistent(&env, &key);
+
+        CommentEditedEvent {
+            dao_id,
+            proposal_id,
+            comment_id,
+        }
+        .publish(&env);
+    }
+
+    /// Edit an anonymous comment with BLS12-381 proof (requires proof with same nullifier)
+    pub fn edit_anonymous_comment_bls381(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        comment_id: u64,
+        new_content_cid: String,
+        nullifier: U256,
+        root: U256,
+        vote_choice: bool,
+        proof: ProofBls381,
+    ) {
+        Self::bump_instance(&env);
+        Self::assert_in_field_bls381(&env, &nullifier);
+        Self::assert_in_field_bls381(&env, &root);
+
+        if new_content_cid.len() > MAX_CID_LEN {
+            panic_with_error!(&env, CommentsError::CommentContentTooLong);
+        }
+
+        let key = DataKey::Comment(dao_id, proposal_id, comment_id);
+        let mut comment: CommentInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, CommentsError::CommentNotFound));
+
+        if comment.deleted {
+            panic_with_error!(&env, CommentsError::CommentDeleted);
+        }
+
+        match &comment.nullifier {
+            Some(original_nullifier) => {
+                if &nullifier != original_nullifier {
+                    panic_with_error!(&env, CommentsError::NotCommentOwner);
+                }
+            }
+            _ => panic_with_error!(&env, CommentsError::NotCommentOwner),
+        }
+
+        let vk = Self::get_vk_from_voting_bls381(&env, dao_id);
+
+        let dao_signal = U256::from_u128(&env, dao_id as u128);
+        let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+        let choice_signal = if vote_choice {
+            U256::from_u32(&env, 1)
+        } else {
+            U256::from_u32(&env, 0)
+        };
+
+        let pub_signals = soroban_sdk::vec![
+            &env,
+            root.clone(),
+            nullifier.clone(),
+            dao_signal,
+            proposal_signal,
+            choice_signal,
+        ];
+
+        if !Self::verify_groth16_bls381(&env, &vk, &proof, &pub_signals) {
             panic_with_error!(&env, CommentsError::InvalidProof);
         }
 
@@ -918,6 +1107,16 @@ impl Comments {
         pub_signals: &Vec<U256>,
     ) -> bool {
         zkvote_groth16::verify_groth16(env, vk, proof, pub_signals)
+    }
+
+    /// Verify BLS12-381 Groth16 proof using shared verification library.
+    fn verify_groth16_bls381(
+        env: &Env,
+        vk: &VerificationKeyBls381,
+        proof: &ProofBls381,
+        pub_signals: &Vec<U256>,
+    ) -> bool {
+        zkvote_groth16::verify_groth16_bls381(env, vk, proof, pub_signals)
     }
 }
 

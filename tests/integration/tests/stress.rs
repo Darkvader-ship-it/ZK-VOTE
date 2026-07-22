@@ -12,7 +12,7 @@
 //! - Concurrent operations: Tests parallel member/proposal operations
 //! - Tree operations: Tests Merkle tree under load
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, U256};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, U256, Symbol, };
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -91,7 +91,7 @@ fn setup_dao_with_options(
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
     sbt.mint(&dao_id, &admin, &admin, &None);
     voting.set_vk(&dao_id, &dummy_vk(env), &admin);
 
@@ -179,7 +179,7 @@ fn stress_many_daos() {
         let dao_id = registry.create_dao(&name, &admin, &false, &true, &None);
 
         // Initialize each DAO
-        tree.init_tree(&dao_id, &18, &admin);
+        tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
         sbt.mint(&dao_id, &admin, &admin, &None);
         voting.set_vk(&dao_id, &dummy_vk(&env), &admin);
 
@@ -338,7 +338,7 @@ fn stress_mixed_operations() {
         let name = String::from_str(&env, &format!("Mixed DAO {}", i));
         let dao_id = registry.create_dao(&name, &admin, &true, &true, &None); // open_membership=true for self_register
 
-        tree.init_tree(&dao_id, &18, &admin);
+        tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
         sbt.mint(&dao_id, &admin, &admin, &None);
         voting.set_vk(&dao_id, &dummy_vk(&env), &admin);
 

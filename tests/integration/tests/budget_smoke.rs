@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, };
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -71,7 +71,7 @@ fn setup(
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Ensure admin has SBT so proposal creation passes membership check
     sbt.mint(&dao_id, &admin, &admin, &None);
@@ -144,7 +144,7 @@ fn budget_set_vk_within_limit() {
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let vk = get_real_vk(&env);
 

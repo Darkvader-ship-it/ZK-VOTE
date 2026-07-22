@@ -6,6 +6,7 @@
 // 3. end_time = 0 means no deadline (voting never closes)
 // 4. Creating proposal with past end_time fails
 
+use soroban_sdk::Symbol;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env, String, U256,
@@ -57,7 +58,7 @@ fn test_create_proposal_with_future_deadline() {
     sbt.mint(&dao_id, &admin, &admin, &None);
 
     // Initialize tree with proper admin verification
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Register admin's commitment so tree has a valid root
     let admin_commitment = U256::from_u32(&env, 12345);
@@ -132,7 +133,7 @@ fn test_create_proposal_with_past_deadline_fails() {
     sbt.mint(&dao_id, &admin, &admin, &None);
 
     // Initialize tree with proper admin verification
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Register admin's commitment so tree has a valid root
     let admin_commitment = U256::from_u32(&env, 12345);
@@ -209,7 +210,7 @@ fn test_create_proposal_with_no_deadline() {
     sbt.mint(&dao_id, &admin, &admin, &None);
 
     // Initialize tree with proper admin verification
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Register admin's commitment so tree has a valid root
     let admin_commitment = U256::from_u32(&env, 12345);

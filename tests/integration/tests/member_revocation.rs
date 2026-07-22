@@ -3,6 +3,7 @@
 // Tests for the commitment-based revocation feature which allows admins to
 // revoke and reinstate members without expensive tree updates.
 
+use soroban_sdk::Symbol;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env, String, U256,
@@ -97,7 +98,7 @@ fn test_admin_can_revoke_member() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Add member
     let member = Address::generate(&env);
@@ -151,7 +152,7 @@ fn test_admin_can_reinstate_member() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let member = Address::generate(&env);
     sbt_client.mint(&dao_id, &member, &admin, &None);
@@ -231,7 +232,7 @@ fn test_multiple_revoke_reinstate_cycles() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let member = Address::generate(&env);
     sbt_client.mint(&dao_id, &member, &admin, &None);
@@ -335,7 +336,7 @@ fn test_only_admin_can_remove_member() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     sbt_client.mint(&dao_id, &member, &admin, &None);
     let commitment = U256::from_u32(&env, 12345);
@@ -370,7 +371,7 @@ fn test_only_admin_can_reinstate_member() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     sbt_client.mint(&dao_id, &member, &admin, &None);
     let commitment = U256::from_u32(&env, 12345);
@@ -406,7 +407,7 @@ fn test_revoked_member_cannot_vote_mid_proposal() {
         &true,
         &None,
     );
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Member setup
     let member = Address::generate(&env);
@@ -461,7 +462,7 @@ fn test_revoked_then_reinstated_only_new_proposals_accept_vote() {
         &true,
         &None,
     );
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let member = Address::generate(&env);
     sbt_client.mint(&dao_id, &member, &admin, &None);

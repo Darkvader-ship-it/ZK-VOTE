@@ -5,6 +5,7 @@
 // 2. Wrong VK for proof
 // 3. Nullifier reuse across DAOs (should succeed - different domains)
 
+use soroban_sdk::Symbol;
 use soroban_sdk::{
     contracttype, testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec as SdkVec, U256,
 };
@@ -173,7 +174,7 @@ fn test_corrupted_proof_fails() {
     assert_eq!(dao_id, 1);
 
     // Initialize tree with depth 18
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set REAL VK
     voting_client.set_vk(&dao_id, &get_real_vk(&env), &admin);
@@ -238,7 +239,7 @@ fn test_wrong_vk_fails() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set REAL VK initially
     voting_client.set_vk(&dao_id, &get_real_vk(&env), &admin);
@@ -303,7 +304,7 @@ fn test_real_proof_double_vote_rejected() {
         &true,
         &None,
     );
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set real VK and register member
     voting_client.set_vk(&dao_id, &get_real_vk(&env), &admin);
@@ -370,8 +371,8 @@ fn test_nullifier_reusable_across_daos() {
     assert_eq!(dao_id_2, 2);
 
     // Initialize trees for both DAOs
-    tree_client.init_tree(&dao_id_1, &18, &admin);
-    tree_client.init_tree(&dao_id_2, &18, &admin);
+    tree_client.init_tree(&dao_id_1, &18, &Symbol::new(&env, "BN254"), &admin);
+    tree_client.init_tree(&dao_id_2, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK for both DAOs
     let vk = get_real_vk(&env);
@@ -469,7 +470,7 @@ fn test_proof_for_wrong_dao_fails() {
     );
 
     // Initialize tree for DAO 2
-    tree_client.init_tree(&dao_id_2, &18, &admin);
+    tree_client.init_tree(&dao_id_2, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK for DAO 2
     voting_client.set_vk(&dao_id_2, &get_real_vk(&env), &admin);
@@ -528,7 +529,7 @@ fn test_proof_for_wrong_proposal_fails() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK
     voting_client.set_vk(&dao_id, &get_real_vk(&env), &admin);
