@@ -196,4 +196,5 @@ impl Bridge {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod test;

@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use soroban_sdk::{testutils::Address as _, Address, Env, U256};
 
 use crate::{Bridge, BridgeClient};
