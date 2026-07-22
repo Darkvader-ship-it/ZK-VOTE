@@ -132,7 +132,6 @@ jobs:
         image: stellar/quickstart:soroban-dev
         ports:
           - 8000:8000
-        command: --standalone --enable-soroban-rpc --soroban-rpc-port 8000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -142,40 +141,28 @@ jobs:
         run: |
           cd contracts/bridge/evm && npm ci --legacy-peer-deps
           cd ../../.. && npm ci
+      - name: Debug Soroban service
+        if: always()
+        run: |
+          docker ps -a
+          docker logs $(docker ps -aq --filter "ancestor=stellar/quickstart:soroban-dev") 2>&1 | tail -50 || true
       - name: Wait for services
         run: |
           # wait for anvil
           for i in {1..30}; do
-            if curl -sS http://localhost:8545 > /dev/null; then
-              echo "Anvil is up"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "Anvil did not become ready in time"
-              exit 1
-            fi
+            curl -sS http://localhost:8545 > /dev/null && break
+            [ "$i" -eq 30 ] && echo "Anvil did not become ready in time" && exit 1
             sleep 2
           done
+          echo "Anvil is up"
 
-          # wait for Soroban JSON-RPC
+          # wait for Soroban RPC port
           for i in {1..60}; do
-            resp=$(curl -sS -X POST http://localhost:8000/soroban/rpc \
-              -H 'content-type: application/json' \
-              --data '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' || true)
-
-            if echo "$resp" | grep -Eq '"jsonrpc"'; then
-              if echo "$resp" | grep -Eq '"result"|"error"'; then
-                echo "Soroban RPC is up"
-                break
-              fi
-            fi
-
-            if [ "$i" -eq 60 ]; then
-              echo "Soroban RPC did not become ready in time"
-              exit 1
-            fi
+            nc -z localhost 8000 && break
+            [ "$i" -eq 60 ] && echo "Soroban RPC port 8000 not reachable" && exit 1
             sleep 2
           done
+          echo "Soroban port is up"
       - name: Deploy EVM contracts
         run: |
           cd contracts/bridge/evm
