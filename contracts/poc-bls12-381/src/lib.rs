@@ -61,9 +61,15 @@ impl Groth16Curve for Bls12381Curve {
     type G2 = Bls12381G2Affine;
     type Fr = Fr;
 
-    fn scalar_field_modulus() -> [u8; 32] { BLS12_381_FR_MODULUS }
-    fn g1_serialized_size() -> usize { 96 }
-    fn g2_serialized_size() -> usize { 192 }
+    fn scalar_field_modulus() -> [u8; 32] {
+        BLS12_381_FR_MODULUS
+    }
+    fn g1_serialized_size() -> usize {
+        96
+    }
+    fn g2_serialized_size() -> usize {
+        192
+    }
 
     fn g1_from_bytes(bytes: &BytesN<96>) -> Self::G1 {
         Bls12381G1Affine::from_bytes(bytes.clone())
@@ -71,7 +77,9 @@ impl Groth16Curve for Bls12381Curve {
     fn g2_from_bytes(bytes: &BytesN<192>) -> Self::G2 {
         Bls12381G2Affine::from_bytes(bytes.clone())
     }
-    fn fr_from_u256(value: &U256) -> Self::Fr { Fr::from(value.clone()) }
+    fn fr_from_u256(value: &U256) -> Self::Fr {
+        Fr::from(value.clone())
+    }
     fn g1_add(env: &Env, a: &Self::G1, b: &Self::G1) -> Self::G1 {
         env.crypto().bls12_381().g1_add(a, b)
     }

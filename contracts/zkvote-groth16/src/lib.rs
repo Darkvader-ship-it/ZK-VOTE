@@ -2,8 +2,8 @@
 
 use soroban_sdk::{
     contracterror, contracttype,
-    crypto::bn254::{Bn254G1Affine, Bn254G2Affine, Fr as Bn254Fr},
     crypto::bls12_381::{Bls12381G1Affine, Bls12381G2Affine, Fr as BlsFr},
+    crypto::bn254::{Bn254G1Affine, Bn254G2Affine, Fr as Bn254Fr},
     Bytes, BytesN, Env, IntoVal, TryFromVal, Val, Vec, U256,
 };
 
@@ -65,7 +65,9 @@ impl Groth16Curve for Bn254Curve {
     type G2 = Bn254G2Affine;
     type Fr = Bn254Fr;
 
-    fn scalar_field_modulus() -> [u8; 32] { BN254_FR_MODULUS }
+    fn scalar_field_modulus() -> [u8; 32] {
+        BN254_FR_MODULUS
+    }
 
     fn g1_from_bytes(env: &Env, bytes: &Bytes) -> Self::G1 {
         let _ = env;
@@ -77,7 +79,9 @@ impl Groth16Curve for Bn254Curve {
         let fixed: BytesN<128> = bytes.clone().try_into().expect("Bn254 G2: wrong length");
         Bn254G2Affine::from_bytes(fixed)
     }
-    fn fr_from_u256(value: &U256) -> Self::Fr { Bn254Fr::from(value.clone()) }
+    fn fr_from_u256(value: &U256) -> Self::Fr {
+        Bn254Fr::from(value.clone())
+    }
     fn g1_add(env: &Env, a: &Self::G1, b: &Self::G1) -> Self::G1 {
         let _ = env;
         a.clone() + b.clone()
@@ -128,19 +132,29 @@ impl Groth16Curve for Bls12381Curve {
     type G2 = Bls12381G2Affine;
     type Fr = BlsFr;
 
-    fn scalar_field_modulus() -> [u8; 32] { BLS12_381_FR_MODULUS }
+    fn scalar_field_modulus() -> [u8; 32] {
+        BLS12_381_FR_MODULUS
+    }
 
     fn g1_from_bytes(env: &Env, bytes: &Bytes) -> Self::G1 {
         let _ = env;
-        let fixed: BytesN<96> = bytes.clone().try_into().expect("BLS12-381 G1: wrong length");
+        let fixed: BytesN<96> = bytes
+            .clone()
+            .try_into()
+            .expect("BLS12-381 G1: wrong length");
         Bls12381G1Affine::from_bytes(fixed)
     }
     fn g2_from_bytes(env: &Env, bytes: &Bytes) -> Self::G2 {
         let _ = env;
-        let fixed: BytesN<192> = bytes.clone().try_into().expect("BLS12-381 G2: wrong length");
+        let fixed: BytesN<192> = bytes
+            .clone()
+            .try_into()
+            .expect("BLS12-381 G2: wrong length");
         Bls12381G2Affine::from_bytes(fixed)
     }
-    fn fr_from_u256(value: &U256) -> Self::Fr { BlsFr::from(value.clone()) }
+    fn fr_from_u256(value: &U256) -> Self::Fr {
+        BlsFr::from(value.clone())
+    }
     fn g1_add(env: &Env, a: &Self::G1, b: &Self::G1) -> Self::G1 {
         env.crypto().bls12_381().g1_add(a, b)
     }
@@ -529,11 +543,8 @@ mod tests {
             name: &'static str,
             func: &str,
         ) -> BenchResult {
-            let _: bool = env.invoke_contract(
-                contract_id,
-                &Symbol::new(env, func),
-                soroban_sdk::vec![env],
-            );
+            let _: bool =
+                env.invoke_contract(contract_id, &Symbol::new(env, func), soroban_sdk::vec![env]);
             let res = env.cost_estimate().resources();
             BenchResult {
                 name,
@@ -617,7 +628,10 @@ mod tests {
                 ("5 pub signals", "bench_signals"),
                 ("U256 mul", "bench_u256_mul"),
                 ("G1 from_bytes BN254 (64B)", "bench_g1_from_bytes_bn254"),
-                ("G1 from_bytes BLS12-381 (96B)", "bench_g1_from_bytes_bls381"),
+                (
+                    "G1 from_bytes BLS12-381 (96B)",
+                    "bench_g1_from_bytes_bls381",
+                ),
             ];
 
             let mut results: std::vec::Vec<BenchResult> = std::vec::Vec::new();
@@ -628,13 +642,17 @@ mod tests {
             std::println!("\n=== ZK-VOTE: On-Chain Cost Benchmark ===");
             std::println!(
                 "  {:<35} {:>15} {:>15}",
-                "Operation", "Instructions", "Mem (bytes)"
+                "Operation",
+                "Instructions",
+                "Mem (bytes)"
             );
             std::println!("  {}", "-".repeat(68));
             for r in &results {
                 std::println!(
                     "  {:<35} {:>15} {:>15}",
-                    r.name, r.instructions, r.mem_bytes
+                    r.name,
+                    r.instructions,
+                    r.mem_bytes
                 );
             }
             std::println!("  {}", "-".repeat(68));
@@ -647,7 +665,9 @@ mod tests {
                 };
                 std::println!(
                     "  {:<35} {:>13.2}x {:>15}",
-                    "BLS12-381 / BN254 field check ratio", ratio, ""
+                    "BLS12-381 / BN254 field check ratio",
+                    ratio,
+                    ""
                 );
             }
             if let (Some(bn), Some(bls)) = (results.get(4), results.get(5)) {
@@ -658,13 +678,17 @@ mod tests {
                 };
                 std::println!(
                     "  {:<35} {:>13.2}x {:>15}",
-                    "BLS12-381 / BN254 G1 from_bytes ratio", ratio, ""
+                    "BLS12-381 / BN254 G1 from_bytes ratio",
+                    ratio,
+                    ""
                 );
             }
 
             std::println!();
             std::println!("Note: env.register_contract() — Wasm VM overhead excluded.");
-            std::println!("Full Groth16 verification = 1 pairing + 4x G1 ops + 3x G2 from_bytes + signals.");
+            std::println!(
+                "Full Groth16 verification = 1 pairing + 4x G1 ops + 3x G2 from_bytes + signals."
+            );
             std::println!("Pairing cost not directly measured (needs valid curve points).");
             std::println!("Expected pairing ratio ~1.5x based on field size (381/254).");
         }

@@ -6,7 +6,7 @@
 // - Anyone can create proposals
 // - All registered members can vote
 
-use soroban_sdk::{testutils::Address as _, Address, Env, String, U256, Symbol, };
+use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol, U256};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;

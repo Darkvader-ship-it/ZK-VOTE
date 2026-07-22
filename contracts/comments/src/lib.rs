@@ -25,7 +25,9 @@ use soroban_sdk::{
 };
 
 // Re-export shared Groth16 types and utilities
-pub use zkvote_groth16::{CurveId, Groth16Error, Proof, ProofBls381, VerificationKey, VerificationKeyBls381};
+pub use zkvote_groth16::{
+    CurveId, Groth16Error, Proof, ProofBls381, VerificationKey, VerificationKeyBls381,
+};
 
 const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");

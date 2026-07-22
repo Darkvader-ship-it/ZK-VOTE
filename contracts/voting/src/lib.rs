@@ -107,17 +107,17 @@ const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    Proposal(u64, u64),           // (dao_id, proposal_id) -> ProposalInfo
-    ProposalCount(u64),           // dao_id -> count
-    Nullifier(u64, u64, U256),    // (dao_id, proposal_id, nullifier) -> bool
-    VotingKey(u64),               // dao_id -> latest VerificationKey (BN254)
-    VkVersion(u64),               // dao_id -> current BN254 VK version
-    VkByVersion(u64, u32),        // (dao_id, vk_version) -> VerificationKey (BN254)
-    CurveId(u64),                 // dao_id -> CurveId (BN254 or BLS12_381)
-    VotingKeyBls381(u64),         // dao_id -> latest VerificationKeyBls381
-    VkByVersionBls381(u64, u32),  // (dao_id, vk_version) -> VerificationKeyBls381
-    VkVersionBls381(u64),         // dao_id -> current BLS12-381 VK version
-    ProposalCurve(u64, u64),      // (dao_id, proposal_id) -> CurveId
+    Proposal(u64, u64),          // (dao_id, proposal_id) -> ProposalInfo
+    ProposalCount(u64),          // dao_id -> count
+    Nullifier(u64, u64, U256),   // (dao_id, proposal_id, nullifier) -> bool
+    VotingKey(u64),              // dao_id -> latest VerificationKey (BN254)
+    VkVersion(u64),              // dao_id -> current BN254 VK version
+    VkByVersion(u64, u32),       // (dao_id, vk_version) -> VerificationKey (BN254)
+    CurveId(u64),                // dao_id -> CurveId (BN254 or BLS12_381)
+    VotingKeyBls381(u64),        // dao_id -> latest VerificationKeyBls381
+    VkByVersionBls381(u64, u32), // (dao_id, vk_version) -> VerificationKeyBls381
+    VkVersionBls381(u64),        // dao_id -> current BLS12-381 VK version
+    ProposalCurve(u64, u64),     // (dao_id, proposal_id) -> CurveId
     /// Test-only: overrides proof verification. Not used in production.
     VerifyOverride,
 }
@@ -366,7 +366,9 @@ impl Voting {
 
         // Store curve ID
         let curve_key = DataKey::CurveId(dao_id);
-        env.storage().persistent().set(&curve_key, &CurveId::Bls12381);
+        env.storage()
+            .persistent()
+            .set(&curve_key, &CurveId::Bls12381);
         Self::bump_persistent(&env, &curve_key);
 
         // Bump BLS12-381 VK version
@@ -480,7 +482,9 @@ impl Voting {
 
         // Store curve ID
         let curve_key = DataKey::CurveId(dao_id);
-        env.storage().persistent().set(&curve_key, &CurveId::Bls12381);
+        env.storage()
+            .persistent()
+            .set(&curve_key, &CurveId::Bls12381);
         Self::bump_persistent(&env, &curve_key);
 
         // Bump BLS12-381 VK version
@@ -861,7 +865,11 @@ impl Voting {
 
         // Verify proposal was created for BN254 curve (not BLS12-381)
         let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
-        let proposal_curve: CurveId = env.storage().persistent().get(&curve_key).unwrap_or(CurveId::Bn254);
+        let proposal_curve: CurveId = env
+            .storage()
+            .persistent()
+            .get(&curve_key)
+            .unwrap_or(CurveId::Bn254);
         if proposal_curve != CurveId::Bn254 {
             panic_with_error!(&env, VotingError::VkNotSet);
         }
@@ -1001,7 +1009,11 @@ impl Voting {
 
         // Verify proposal was created for BLS12-381 curve
         let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
-        let proposal_curve: CurveId = env.storage().persistent().get(&curve_key).unwrap_or(CurveId::Bn254);
+        let proposal_curve: CurveId = env
+            .storage()
+            .persistent()
+            .get(&curve_key)
+            .unwrap_or(CurveId::Bn254);
         if proposal_curve != CurveId::Bls12381 {
             panic_with_error!(&env, VotingError::VkNotSet);
         }

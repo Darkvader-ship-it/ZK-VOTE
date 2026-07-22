@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, };
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;

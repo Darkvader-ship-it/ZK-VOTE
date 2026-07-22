@@ -10,7 +10,9 @@
 //
 // Run with: cargo test --test pairing_security_boundary -- --nocapture
 
-use soroban_sdk::{testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec, U256, Symbol, };
+use soroban_sdk::{
+    testutils::Address as _, Address, Bytes, BytesN, Env, String, Symbol, Vec, U256,
+};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;

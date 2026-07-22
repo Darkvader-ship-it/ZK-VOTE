@@ -12,7 +12,7 @@
 //! - Concurrent operations: Tests parallel member/proposal operations
 //! - Tree operations: Tests Merkle tree under load
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, U256, Symbol, };
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, U256};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
