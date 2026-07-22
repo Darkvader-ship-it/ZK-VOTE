@@ -65,7 +65,7 @@ router.post("/bridge/vote", validateBody(bridgeVoteSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId, voteChoice, nullifier, voteRoot, sbtRoot } =
+  const { daoId, proposalId, voteChoice, nullifier, voteRoot } =
     config.stripRequestBodies ? {} : req.body;
 
   try {
