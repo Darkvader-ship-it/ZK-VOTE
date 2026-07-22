@@ -25,6 +25,41 @@ const BRIDGE_ADDRESS = process.env.BRIDGE_ADDRESS;
 const SOROBAN_BRIDGE_ID = process.env.SOROBAN_BRIDGE_ID;
 
 // ============================================
+// RPC PREFLIGHT
+// ============================================
+
+async function waitForJsonRpc(url, method, attempts = 30, delayMs = 2000) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: [] }),
+      });
+
+      const data = await response.json();
+
+      // accept valid JSON-RPC response (result OR error means endpoint is alive)
+      if (
+        response.status < 500 &&
+        data &&
+        data.jsonrpc === "2.0" &&
+        ("result" in data || "error" in data)
+      ) {
+        return;
+      }
+
+      lastErr = new Error(`status=${response.status} body=${JSON.stringify(data)}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  throw new Error(`RPC not ready: ${url} (${method}) -> ${lastErr?.message}`);
+}
+
+// ============================================
 // HELPERS
 // ============================================
 
@@ -45,6 +80,10 @@ describe("Cross-Chain Bridge Integration", () => {
   let stellarServer;
 
   beforeAll(async () => {
+    // Wait for RPC endpoints to be ready
+    await waitForJsonRpc(ANVIL_URL, "eth_chainId");
+    await waitForJsonRpc(SOROBAN_RPC, "getLatestLedger");
+
     evmProvider = getAnvilProvider();
     stellarServer = getSorobanServer();
 
@@ -54,7 +93,7 @@ describe("Cross-Chain Bridge Integration", () => {
 
     const stellarHealth = await stellarServer.getHealth();
     expect(stellarHealth.status).toBe("OK");
-  }, 30000);
+  }, 120000);
 
   test("EVM bridge contract is deployed", async () => {
     if (!BRIDGE_ADDRESS) {
@@ -74,15 +113,14 @@ describe("Cross-Chain Bridge Integration", () => {
     }
 
     const contract = new StellarSdk.Contract(SOROBAN_BRIDGE_ID);
-    const account = await evmProvider.getSigner(0);
+    const account = await stellarServer.getAccount(
+      "GTESTRELAYERADDRESS000000000000000000000000000000000000",
+    );
 
-    const tx = new StellarSdk.TransactionBuilder(
-      await StellarSdk.nativeToScVal("GTEST", { type: "address" }),
-      {
-        fee: "100000",
-        networkPassphrase: NETWORK_PASSPHRASE,
-      },
-    )
+    const tx = new StellarSdk.TransactionBuilder(account, {
+      fee: "100000",
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
       .addOperation(contract.call("version"))
       .setTimeout(30)
       .build();
@@ -160,10 +198,7 @@ describe("Cross-Chain Bridge Integration", () => {
       process.env.RELAYER_SECRET_KEY || "S...",
     );
 
-    const account = await StellarSdk.rpc.Server.prototype.getAccount.call(
-      stellarServer,
-      relayer.publicKey(),
-    );
+    const account = await stellarServer.getAccount(relayer.publicKey());
 
     const tx = new StellarSdk.TransactionBuilder(account, {
       fee: "100000",
@@ -195,8 +230,7 @@ describe("Cross-Chain Bridge Integration", () => {
     // Check nullifier on Soroban
     const contract = new StellarSdk.Contract(SOROBAN_BRIDGE_ID);
 
-    const account = await StellarSdk.rpc.Server.prototype.getAccount.call(
-      stellarServer,
+    const account = await stellarServer.getAccount(
       "GTESTRELAYERADDRESS000000000000000000000000000000000000",
     );
 

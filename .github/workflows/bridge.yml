@@ -132,6 +132,7 @@ jobs:
         image: stellar/quickstart:soroban-dev
         ports:
           - 8000:8000
+        command: --standalone --enable-soroban-rpc
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -149,21 +150,27 @@ jobs:
           docker logs $(docker ps -aq --filter "ancestor=stellar/quickstart:soroban-dev") 2>&1 | tail -50 || true
       - name: Wait for services
         run: |
-          # wait for anvil
-          for i in {1..30}; do
-            curl -sS http://localhost:8545 > /dev/null && break
-            [ "$i" -eq 30 ] && echo "Anvil did not become ready in time" && exit 1
+          # wait for Anvil RPC
+          for i in {1..40}; do
+            resp=$(curl -sS -X POST http://localhost:8545 \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' || true)
+            echo "$resp" | grep -q '"jsonrpc":"2.0"' && break
+            [ "$i" -eq 40 ] && echo "Anvil RPC not ready" && exit 1
             sleep 2
           done
-          echo "Anvil is up"
+          echo "Anvil RPC is up"
 
-          # wait for Soroban RPC port
+          # wait for Soroban RPC
           for i in {1..60}; do
-            nc -z localhost 8000 && break
-            [ "$i" -eq 60 ] && echo "Soroban RPC port 8000 not reachable" && exit 1
+            resp=$(curl -sS -X POST http://localhost:8000/soroban/rpc \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger","params":[]}' || true)
+            echo "$resp" | grep -q '"jsonrpc"' && break
+            [ "$i" -eq 60 ] && echo "Soroban RPC not ready" && exit 1
             sleep 2
           done
-          echo "Soroban port is up"
+          echo "Soroban RPC is up"
       - name: Deploy EVM contracts
         run: |
           cd contracts/bridge/evm
