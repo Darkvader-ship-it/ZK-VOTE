@@ -263,17 +263,17 @@ impl Voting {
         // Point Validation Strategy:
         // ===========================
         //
-        // This contract performs explicit G1 curve validation before proof verification:
+        // This contract validates VK shape and public signal field bounds before proof verification:
         //
         // 1. G1 curve membership: y² = x³ + 3 (mod p) for all G1 points
         // 2. Coordinate bounds: x, y < field modulus p
         // 3. Point at infinity: all-zeros is valid
         //
-        // G1 validation is performed in verify_groth16() for:
+        // G1 decoding and validation is delegated to Soroban BN254 host functions for:
         // - Proof points: a, c
         // - VK points: alpha, all IC points
         //
-        // G2 validation relies on the pairing check for implicit validation.
+        // G2 decoding and validation also relies on Soroban BN254 host functions.
         // Invalid G2 points will cause the pairing equation to fail.
         //
         // The 256-bit modular arithmetic uses 64-bit limb schoolbook multiplication
@@ -315,7 +315,7 @@ impl Voting {
         // - Invalid curve attacks (CVE-2023-40141) target parsers, not pairings
         // - Soroban host function validates G2 curve + subgroup before pairing
         // - Small subgroup attacks mitigated by host's explicit subgroup check
-        // - G1 points validated explicitly in contract via validate_g1_point()
+        // - Public signals validated explicitly before scalar conversion
         //
         // References:
         // - [CAP-0074](https://github.com/stellar/stellar-protocol/blob/master/core/cap-0074.md)
