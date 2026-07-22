@@ -7,6 +7,8 @@ set -euo pipefail
 CIRCUIT_NAME="bridge"
 BUILD_DIR="build"
 
+mkdir -p ${BUILD_DIR}
+
 echo "=== Compiling ${CIRCUIT_NAME}.circom ==="
 circom ${CIRCUIT_NAME}.circom \
     --r1cs \
