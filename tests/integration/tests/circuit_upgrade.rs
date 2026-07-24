@@ -1,13 +1,13 @@
 #![no_std]
 extern crate std;
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec, U256};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec, U256};
 
 use circuit_registry::CircuitRegistryClient;
 use dao_registry::DaoRegistryClient;
 use membership_sbt::MembershipSbtClient;
 use membership_tree::MembershipTreeClient;
-use voting::{CircuitType, Proof, VerificationKey, VoteMode, VotingClient};
+use voting::{Proof, VerificationKey, VoteMode, VotingClient};
 
 fn create_test_vk(env: &Env) -> VerificationKey {
     let g1_gen = {
@@ -165,7 +165,7 @@ fn test_migrate_dao_and_vote_in_overlap() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &5, &admin);
+    tree_client.init_tree(&dao_id, &5, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.mint(&dao_id, &member, &admin, &None);
 
     let commitment = U256::from_u32(&env, 12345);
@@ -254,7 +254,7 @@ fn test_wrong_circuit_id_rejected() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &5, &admin);
+    tree_client.init_tree(&dao_id, &5, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.mint(&dao_id, &member, &admin, &None);
 
     let commitment = U256::from_u32(&env, 12345);
@@ -378,7 +378,7 @@ fn test_vote_with_circuit_id() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &5, &admin);
+    tree_client.init_tree(&dao_id, &5, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.mint(&dao_id, &member, &admin, &None);
 
     let commitment = U256::from_u32(&env, 42);
@@ -388,7 +388,7 @@ fn test_vote_with_circuit_id() {
     voting_client.set_vk(&dao_id, &vk, &admin);
     voting_client.set_circuit_registry(&circuit_reg_id);
 
-    let now = env.ledger().timestamp();
+    let _now = env.ledger().timestamp();
     let proposal_id = voting_client.create_proposal(
         &dao_id,
         &String::from_str(&env, "Circuit Vote Test"),

@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![allow(unused_imports)]
 extern crate std;
 
 use super::*;
@@ -58,7 +58,7 @@ fn create_test_vk(env: &Env) -> VerificationKey {
 
 #[test]
 fn test_register_circuit() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let circuit_id = String::from_str(&env, "vote_v1");
@@ -74,7 +74,7 @@ fn test_register_circuit() {
 
 #[test]
 fn test_get_vk() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let circuit_id = String::from_str(&env, "vote_v1");
@@ -88,7 +88,7 @@ fn test_get_vk() {
 
 #[test]
 fn test_dao_migration() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -113,7 +113,7 @@ fn test_dao_migration() {
 
 #[test]
 fn test_overlap_window() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -137,7 +137,7 @@ fn test_overlap_window() {
 
 #[test]
 fn test_finalize_migration() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -162,7 +162,7 @@ fn test_finalize_migration() {
 
 #[test]
 fn test_dao_current_circuit() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -178,7 +178,7 @@ fn test_dao_current_circuit() {
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_cannot_register_duplicate_circuit() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -191,7 +191,7 @@ fn test_cannot_register_duplicate_circuit() {
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_cannot_get_expired_circuit() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let vk = create_test_vk(&env);
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -214,7 +214,7 @@ fn test_cannot_get_expired_circuit() {
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_cannot_migrate_nonexistent_circuit() {
-    let (env, registry, governance) = setup_env();
+    let (env, registry, _governance) = setup_env();
     let client = CircuitRegistryClient::new(&env, &registry);
     let now = env.ledger().timestamp();
 
