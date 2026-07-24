@@ -1,7 +1,7 @@
 // ZK Proof generation utilities using snarkjs
 
 import { groth16 } from "snarkjs";
-import type { Groth16Proof } from "snarkjs";
+import type { CircuitSignals, Groth16Proof } from "snarkjs";
 
 export interface VoteProofInput {
   secret: string;
@@ -56,7 +56,7 @@ export async function generateVoteProof(
   try {
     const circuitVersion = input.circuitVersion || "v1";
 
-    let circuitInput: Record<string, unknown>;
+    let circuitInput: CircuitSignals;
 
     if (circuitVersion === "v2") {
       // vote_v2.circom - adds chainId as 6th public signal
@@ -133,7 +133,7 @@ export async function generateCommentProof(
   try {
     const circuitVersion = input.circuitVersion || "v1";
 
-    let circuitInput: Record<string, unknown>;
+    let circuitInput: CircuitSignals;
 
     if (circuitVersion === "v2") {
       // comment_v2.circom - adds parentCommentId as 7th public signal

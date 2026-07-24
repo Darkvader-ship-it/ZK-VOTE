@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, Clock, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { CircuitStatusResponse } from "../types/index";
-import { RELAYER_URL, RELAYER_AUTH_TOKEN } from "../lib/api";
+import { relayerFetch } from "../lib/api";
 
 interface CircuitUpgradePanelProps {
   daoId: number;
@@ -77,14 +77,8 @@ export default function CircuitUpgradePanel({
   const { data, isLoading, error, refetch } = useQuery<CircuitStatusResponse>({
     queryKey: ["circuit-status", daoId, circuitType],
     queryFn: async () => {
-      const res = await fetch(
-        `${RELAYER_URL}/api/circuits/${daoId}/${circuitType.toLowerCase()}/status`,
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${RELAYER_AUTH_TOKEN}`,
-          },
-        },
+      const res = await relayerFetch(
+        `/api/circuits/${daoId}/${circuitType.toLowerCase()}/status`,
       );
       if (!res.ok) throw new Error("Failed to fetch circuit status");
       return res.json();

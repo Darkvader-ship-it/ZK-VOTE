@@ -142,14 +142,14 @@ impl CircuitRegistry {
         Self::bump_instance(&env);
         Self::assert_governance(&env);
 
-        let key = DataKey::Circuit(circuit_id.clone(), circuit_type.clone());
+        let key = DataKey::Circuit(circuit_id.clone(), circuit_type);
         if env.storage().persistent().has(&key) {
             panic_with_error!(&env, RegistryError::CircuitAlreadyRegistered);
         }
 
         let circuit = CircuitInfo {
             circuit_id: circuit_id.clone(),
-            circuit_type: circuit_type.clone(),
+            circuit_type,
             vk,
             wasm_hash,
             registered_at: env.ledger().timestamp(),
@@ -170,7 +170,7 @@ impl CircuitRegistry {
 
     pub fn get_circuit(env: Env, circuit_id: String, circuit_type: CircuitType) -> CircuitInfo {
         Self::bump_instance(&env);
-        let key = DataKey::Circuit(circuit_id.clone(), circuit_type.clone());
+        let key = DataKey::Circuit(circuit_id.clone(), circuit_type);
         let circuit: CircuitInfo = env
             .storage()
             .persistent()
@@ -182,7 +182,7 @@ impl CircuitRegistry {
 
     pub fn get_vk(env: Env, circuit_id: String, circuit_type: CircuitType) -> CircuitVKMap {
         Self::bump_instance(&env);
-        let key = DataKey::Circuit(circuit_id.clone(), circuit_type.clone());
+        let key = DataKey::Circuit(circuit_id.clone(), circuit_type);
         let circuit: CircuitInfo = env
             .storage()
             .persistent()
@@ -212,12 +212,12 @@ impl CircuitRegistry {
         Self::bump_instance(&env);
         Self::assert_governance(&env);
 
-        let from_key = DataKey::Circuit(from_circuit_id.clone(), circuit_type.clone());
+        let from_key = DataKey::Circuit(from_circuit_id.clone(), circuit_type);
         if !env.storage().persistent().has(&from_key) {
             panic_with_error!(&env, RegistryError::CircuitNotFound);
         }
 
-        let to_key = DataKey::Circuit(to_circuit_id.clone(), circuit_type.clone());
+        let to_key = DataKey::Circuit(to_circuit_id.clone(), circuit_type);
         if !env.storage().persistent().has(&to_key) {
             panic_with_error!(&env, RegistryError::CircuitNotFound);
         }
@@ -276,7 +276,7 @@ impl CircuitRegistry {
         env.storage().persistent().set(&migration_key, &migration);
         Self::bump_persistent(&env, &migration_key);
 
-        let current_key = DataKey::DaoCurrentCircuit(dao_id, circuit_type.clone());
+        let current_key = DataKey::DaoCurrentCircuit(dao_id, circuit_type);
         env.storage()
             .persistent()
             .set(&current_key, &migration.to_circuit_id);
@@ -334,7 +334,7 @@ impl CircuitRegistry {
         Self::bump_instance(&env);
         Self::assert_governance(&env);
 
-        let circuit_key = DataKey::Circuit(circuit_id.clone(), circuit_type.clone());
+        let circuit_key = DataKey::Circuit(circuit_id.clone(), circuit_type);
         if !env.storage().persistent().has(&circuit_key) {
             panic_with_error!(&env, RegistryError::CircuitNotFound);
         }
