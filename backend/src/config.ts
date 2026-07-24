@@ -51,6 +51,7 @@ export const config = {
   daoRegistryContractId: process.env.DAO_REGISTRY_CONTRACT_ID,
   membershipSbtContractId: process.env.MEMBERSHIP_SBT_CONTRACT_ID,
   bridgeContractId: process.env.BRIDGE_CONTRACT_ID,
+  circuitRegistryContractId: process.env.CIRCUIT_REGISTRY_CONTRACT_ID,
 
   // VK Version
   staticVkVersion: process.env.VOTING_VK_VERSION
