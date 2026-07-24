@@ -1,11 +1,7 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { config } from "../config.js";
 import { logger } from "./logger.js";
-import {
-  server,
-  relayerKeypair,
-  callWithTimeout,
-} from "./stellar.js";
+import { server, relayerKeypair, callWithTimeout } from "./stellar.js";
 
 export interface CircuitInfo {
   circuitId: string;
@@ -89,7 +85,9 @@ async function simulateContractCall(
   }
 
   try {
-    const sourceAccount = await rpcServer.getAccount(relayerKeypair.publicKey());
+    const sourceAccount = await rpcServer.getAccount(
+      relayerKeypair.publicKey(),
+    );
     const contract = new StellarSdk.Contract(contractId);
 
     const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
