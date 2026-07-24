@@ -1362,7 +1362,10 @@ impl Voting {
     pub fn get_dao_current_circuit(env: Env, dao_id: u64) -> String {
         Self::bump_instance(&env);
         let key = DataKey::DaoCurrentCircuit(dao_id);
-        env.storage().persistent().get(&key).unwrap_or_else(|| String::from_str(&env, "vote_v1"))
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| String::from_str(&env, "vote_v1"))
     }
 
     pub fn set_migration(
