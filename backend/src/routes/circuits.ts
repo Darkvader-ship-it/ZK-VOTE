@@ -50,7 +50,7 @@ router.get("/circuits/:dao/:type/status", queryLimiter, (async (
       error: (error as Error).message,
     });
     return res.status(500).json({ error: "Failed to fetch circuit status" });
-  },
+  }
 }) as AsyncHandler);
 
 export default router;
