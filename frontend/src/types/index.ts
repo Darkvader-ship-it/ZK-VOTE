@@ -226,7 +226,8 @@ export const CircuitRegistryError = {
   MigrationDeadlinePassed: 7,
   CircuitExpired: 8,
 } as const;
-export type CircuitRegistryError = (typeof CircuitRegistryError)[keyof typeof CircuitRegistryError];
+export type CircuitRegistryError =
+  (typeof CircuitRegistryError)[keyof typeof CircuitRegistryError];
 
 /**
  * Circuit Registry types
@@ -338,13 +339,16 @@ export const ERROR_MESSAGES: Record<string, Record<number, string>> = {
     [VotingError.InvalidNullifier]: "Invalid nullifier (cannot be zero)",
   },
   CircuitRegistry: {
-    [CircuitRegistryError.NotGovernance]: "Only governance can perform this action",
+    [CircuitRegistryError.NotGovernance]:
+      "Only governance can perform this action",
     [CircuitRegistryError.CircuitNotFound]: "Circuit not found in registry",
-    [CircuitRegistryError.CircuitAlreadyRegistered]: "Circuit already registered",
+    [CircuitRegistryError.CircuitAlreadyRegistered]:
+      "Circuit already registered",
     [CircuitRegistryError.InvalidCircuitType]: "Invalid circuit type",
     [CircuitRegistryError.MigrationNotFound]: "Migration not found",
     [CircuitRegistryError.MigrationAlreadyExists]: "Migration already exists",
-    [CircuitRegistryError.MigrationDeadlinePassed]: "Migration deadline has passed",
+    [CircuitRegistryError.MigrationDeadlinePassed]:
+      "Migration deadline has passed",
     [CircuitRegistryError.CircuitExpired]: "Circuit has expired",
   },
   Comments: {

@@ -267,7 +267,12 @@ export async function calculateNullifier(
   let hash;
   if (circuitVersion === "v2" && chainId !== undefined) {
     hash = poseidon.F.toString(
-      poseidon([BigInt(secret), BigInt(daoId), BigInt(proposalId), BigInt(chainId)]),
+      poseidon([
+        BigInt(secret),
+        BigInt(daoId),
+        BigInt(proposalId),
+        BigInt(chainId),
+      ]),
     );
   } else {
     hash = poseidon.F.toString(
