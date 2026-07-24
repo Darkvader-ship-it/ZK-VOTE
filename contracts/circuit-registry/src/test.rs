@@ -45,8 +45,12 @@ fn create_test_vk(env: &Env) -> VerificationKey {
         ic: Vec::from_array(
             env,
             [
-                g1_gen.clone(), g1_gen.clone(), g1_gen.clone(),
-                g1_gen.clone(), g1_gen.clone(), g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
             ],
         ),
     }
@@ -60,14 +64,7 @@ fn test_register_circuit() {
     let circuit_id = String::from_str(&env, "vote_v1");
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
 
-    client.register_circuit(
-        &circuit_id,
-        &CircuitType::Vote,
-        &vk,
-        &wasm_hash,
-        &0,
-        &5,
-    );
+    client.register_circuit(&circuit_id, &CircuitType::Vote, &vk, &wasm_hash, &0, &5);
 
     let circuit = client.get_circuit(&circuit_id, &CircuitType::Vote);
     assert_eq!(circuit.circuit_id, circuit_id);
@@ -83,14 +80,7 @@ fn test_get_vk() {
     let circuit_id = String::from_str(&env, "vote_v1");
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
 
-    client.register_circuit(
-        &circuit_id,
-        &CircuitType::Vote,
-        &vk,
-        &wasm_hash,
-        &0,
-        &5,
-    );
+    client.register_circuit(&circuit_id, &CircuitType::Vote, &vk, &wasm_hash, &0, &5);
 
     let vk_map = client.get_vk(&circuit_id, &CircuitType::Vote);
     assert_eq!(vk_map.num_public_signals, 5);
@@ -208,7 +198,14 @@ fn test_cannot_get_expired_circuit() {
 
     let now = env.ledger().timestamp();
     let circuit_id = String::from_str(&env, "vote_v1");
-    client.register_circuit(&circuit_id, &CircuitType::Vote, &vk, &wasm_hash, &(now + 100), &5);
+    client.register_circuit(
+        &circuit_id,
+        &CircuitType::Vote,
+        &vk,
+        &wasm_hash,
+        &(now + 100),
+        &5,
+    );
 
     env.ledger().with_mut(|l| l.timestamp = now + 200);
     client.get_vk(&circuit_id, &CircuitType::Vote);

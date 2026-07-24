@@ -121,8 +121,8 @@ pub enum DataKey {
     ProposalCurve(u64, u64),     // (dao_id, proposal_id) -> CurveId
     /// Test-only: overrides proof verification. Not used in production.
     VerifyOverride,
-    DaoCurrentCircuit(u64),    // dao_id -> current circuit_id string
-    DaoMigration(u64),         // dao_id -> MigrationInfo
+    DaoCurrentCircuit(u64), // dao_id -> current circuit_id string
+    DaoMigration(u64),      // dao_id -> MigrationInfo
 }
 
 #[contracttype]
@@ -1340,7 +1340,9 @@ impl Voting {
     }
 
     pub fn set_circuit_registry(env: Env, circuit_registry: Address) {
-        env.storage().instance().set(&CIRCUIT_REGISTRY, &circuit_registry);
+        env.storage()
+            .instance()
+            .set(&CIRCUIT_REGISTRY, &circuit_registry);
     }
 
     pub fn set_dao_current_circuit(
@@ -1360,16 +1362,19 @@ impl Voting {
     pub fn get_dao_current_circuit(env: Env, dao_id: u64) -> String {
         Self::bump_instance(&env);
         let key = DataKey::DaoCurrentCircuit(dao_id);
-        env.storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| {
-                let default_id = String::from_str(&env, "vote_v1");
-                default_id
-            })
+        env.storage().persistent().get(&key).unwrap_or_else(|| {
+            let default_id = String::from_str(&env, "vote_v1");
+            default_id
+        })
     }
 
-    pub fn set_migration(env: Env, dao_id: u64, old_circuit_id: String, new_circuit_id: String, deadline: u64) {
+    pub fn set_migration(
+        env: Env,
+        dao_id: u64,
+        old_circuit_id: String,
+        new_circuit_id: String,
+        deadline: u64,
+    ) {
         Self::bump_instance(&env);
         let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
         registry.require_auth();
@@ -1392,10 +1397,18 @@ impl Voting {
             .expect("migration not found")
     }
 
-    fn load_vk_from_registry(env: &Env, circuit_id: &String, circuit_type: &CircuitType) -> VerificationKey {
-        let circuit_registry: Address = env.storage().instance().get(&CIRCUIT_REGISTRY).unwrap_or_else(|| {
-            panic_with_error!(env, VotingError::VkNotSet);
-        });
+    fn load_vk_from_registry(
+        env: &Env,
+        circuit_id: &String,
+        circuit_type: &CircuitType,
+    ) -> VerificationKey {
+        let circuit_registry: Address = env
+            .storage()
+            .instance()
+            .get(&CIRCUIT_REGISTRY)
+            .unwrap_or_else(|| {
+                panic_with_error!(env, VotingError::VkNotSet);
+            });
         let result: CircuitVKResult = env.invoke_contract(
             &circuit_registry,
             &Symbol::new(env, "get_vk"),
@@ -1495,7 +1508,8 @@ impl Voting {
             }
         }
 
-        let vk: VerificationKey = Self::load_vk_from_registry(&env, &circuit_id, &CircuitType::Vote);
+        let vk: VerificationKey =
+            Self::load_vk_from_registry(&env, &circuit_id, &CircuitType::Vote);
 
         let current_vk_hash = Self::hash_vk(&env, &vk);
         if current_vk_hash != proposal.vk_hash {
@@ -1506,13 +1520,15 @@ impl Voting {
                         panic_with_error!(&env, VotingError::VkChanged);
                     }
                     if circuit_id == *old_circuit_id {
-                        let old_vk = Self::load_vk_from_registry(&env, old_circuit_id, &CircuitType::Vote);
+                        let old_vk =
+                            Self::load_vk_from_registry(&env, old_circuit_id, &CircuitType::Vote);
                         let old_hash = Self::hash_vk(&env, &old_vk);
                         if old_hash != proposal.vk_hash {
                             panic_with_error!(&env, VotingError::VkChanged);
                         }
                     } else if circuit_id == *new_circuit_id {
-                        let new_vk = Self::load_vk_from_registry(&env, new_circuit_id, &CircuitType::Vote);
+                        let new_vk =
+                            Self::load_vk_from_registry(&env, new_circuit_id, &CircuitType::Vote);
                         let new_hash = Self::hash_vk(&env, &new_vk);
                         if new_hash != proposal.vk_hash {
                             panic_with_error!(&env, VotingError::VkChanged);

@@ -646,12 +646,7 @@ impl DaoRegistry {
         proposal_id
     }
 
-    pub fn approve_circuit_upgrade(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-        approver: Address,
-    ) {
+    pub fn approve_circuit_upgrade(env: Env, dao_id: u64, proposal_id: u64, approver: Address) {
         Self::bump_instance(&env);
         approver.require_auth();
 

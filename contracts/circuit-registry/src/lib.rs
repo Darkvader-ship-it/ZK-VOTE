@@ -180,11 +180,7 @@ impl CircuitRegistry {
         circuit
     }
 
-    pub fn get_vk(
-        env: Env,
-        circuit_id: String,
-        circuit_type: CircuitType,
-    ) -> CircuitVKMap {
+    pub fn get_vk(env: Env, circuit_id: String, circuit_type: CircuitType) -> CircuitVKMap {
         Self::bump_instance(&env);
         let key = DataKey::Circuit(circuit_id.clone(), circuit_type.clone());
         let circuit: CircuitInfo = env
@@ -320,11 +316,7 @@ impl CircuitRegistry {
         now >= migration.migration_start && now < migration.deadline
     }
 
-    pub fn get_dao_current_circuit(
-        env: Env,
-        dao_id: u64,
-        circuit_type: CircuitType,
-    ) -> String {
+    pub fn get_dao_current_circuit(env: Env, dao_id: u64, circuit_type: CircuitType) -> String {
         Self::bump_instance(&env);
         let key = DataKey::DaoCurrentCircuit(dao_id, circuit_type);
         env.storage()
@@ -348,7 +340,9 @@ impl CircuitRegistry {
         }
 
         let current_key = DataKey::DaoCurrentCircuit(dao_id, circuit_type);
-        env.storage().persistent().set(&current_key, &circuit_id.clone());
+        env.storage()
+            .persistent()
+            .set(&current_key, &circuit_id.clone());
         Self::bump_persistent(&env, &current_key);
     }
 

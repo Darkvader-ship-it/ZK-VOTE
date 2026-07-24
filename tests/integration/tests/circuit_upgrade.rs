@@ -1,15 +1,13 @@
 #![no_std]
 extern crate std;
 
-use soroban_sdk::{
-    testutils::Address as _, Address, BytesN, Env, String, Vec, U256,
-};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec, U256};
 
+use circuit_registry::CircuitRegistryClient;
 use dao_registry::DaoRegistryClient;
 use membership_sbt::MembershipSbtClient;
 use membership_tree::MembershipTreeClient;
 use voting::{CircuitType, Proof, VerificationKey, VoteMode, VotingClient};
-use circuit_registry::CircuitRegistryClient;
 
 fn create_test_vk(env: &Env) -> VerificationKey {
     let g1_gen = {
@@ -41,8 +39,12 @@ fn create_test_vk(env: &Env) -> VerificationKey {
         ic: Vec::from_array(
             env,
             [
-                g1_gen.clone(), g1_gen.clone(), g1_gen.clone(),
-                g1_gen.clone(), g1_gen.clone(), g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
+                g1_gen.clone(),
             ],
         ),
     }
@@ -90,7 +92,14 @@ fn test_register_circuit_v2_and_get_vk() {
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
 
     let v2_id = String::from_str(&env, "vote_v2");
-    client.register_circuit(&v2_id, &circuit_registry::CircuitType::Vote, &vk, &wasm_hash, &0, &6);
+    client.register_circuit(
+        &v2_id,
+        &circuit_registry::CircuitType::Vote,
+        &vk,
+        &wasm_hash,
+        &0,
+        &6,
+    );
 
     let circuit = client.get_circuit(&v2_id, &circuit_registry::CircuitType::Vote);
     assert_eq!(circuit.circuit_id, v2_id);
@@ -131,8 +140,22 @@ fn test_migrate_dao_and_vote_in_overlap() {
     let v1_id = String::from_str(&env, "vote_v1");
     let v2_id = String::from_str(&env, "vote_v2");
 
-    circuit_client.register_circuit(&v1_id, &circuit_registry::CircuitType::Vote, &vk, &wasm_hash, &0, &5);
-    circuit_client.register_circuit(&v2_id, &circuit_registry::CircuitType::Vote, &vk, &wasm_hash, &0, &6);
+    circuit_client.register_circuit(
+        &v1_id,
+        &circuit_registry::CircuitType::Vote,
+        &vk,
+        &wasm_hash,
+        &0,
+        &5,
+    );
+    circuit_client.register_circuit(
+        &v2_id,
+        &circuit_registry::CircuitType::Vote,
+        &vk,
+        &wasm_hash,
+        &0,
+        &6,
+    );
 
     let dao_id = registry_client.create_dao(
         &String::from_str(&env, "Upgrade DAO"),
@@ -214,7 +237,14 @@ fn test_wrong_circuit_id_rejected() {
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
     let v1_id = String::from_str(&env, "vote_v1");
 
-    circuit_client.register_circuit(&v1_id, &circuit_registry::CircuitType::Vote, &vk, &wasm_hash, &0, &5);
+    circuit_client.register_circuit(
+        &v1_id,
+        &circuit_registry::CircuitType::Vote,
+        &vk,
+        &wasm_hash,
+        &0,
+        &5,
+    );
 
     let dao_id = registry_client.create_dao(
         &String::from_str(&env, "Test DAO"),
@@ -331,7 +361,14 @@ fn test_vote_with_circuit_id() {
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
 
     let vote_v1 = String::from_str(&env, "vote_v1");
-    circuit_client.register_circuit(&vote_v1, &circuit_registry::CircuitType::Vote, &vk, &wasm_hash, &0, &5);
+    circuit_client.register_circuit(
+        &vote_v1,
+        &circuit_registry::CircuitType::Vote,
+        &vk,
+        &wasm_hash,
+        &0,
+        &5,
+    );
 
     let dao_id = registry_client.create_dao(
         &String::from_str(&env, "Circuit DAO"),
