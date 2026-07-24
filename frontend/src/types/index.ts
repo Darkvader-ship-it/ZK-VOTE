@@ -216,6 +216,52 @@ export const CommentsError = {
 } as const;
 export type CommentsError = (typeof CommentsError)[keyof typeof CommentsError];
 
+export const CircuitRegistryError = {
+  NotGovernance: 1,
+  CircuitNotFound: 2,
+  CircuitAlreadyRegistered: 3,
+  InvalidCircuitType: 4,
+  MigrationNotFound: 5,
+  MigrationAlreadyExists: 6,
+  MigrationDeadlinePassed: 7,
+  CircuitExpired: 8,
+} as const;
+export type CircuitRegistryError =
+  (typeof CircuitRegistryError)[keyof typeof CircuitRegistryError];
+
+/**
+ * Circuit Registry types
+ */
+export interface CircuitInfo {
+  circuitId: string;
+  circuitType: "Vote" | "Comment";
+  registeredAt: number;
+  expiration: number;
+  numPublicSignals: number;
+}
+
+export interface DaoMigration {
+  fromCircuitId: string;
+  toCircuitId: string;
+  deadline: number;
+  inOverlapWindow: boolean;
+}
+
+export interface CircuitStatusResponse {
+  daoId: number;
+  circuitType: "Vote" | "Comment";
+  currentCircuit: string;
+  availableCircuits: CircuitInfo[];
+  migration?: DaoMigration;
+}
+
+export const CIRCUIT_VERSIONS = {
+  VOTE_V1: "vote_v1",
+  VOTE_V2: "vote_v2",
+  COMMENT_V1: "comment_v1",
+  COMMENT_V2: "comment_v2",
+} as const;
+
 /**
  * Groth16 verification error codes (shared between contracts)
  */
@@ -291,6 +337,19 @@ export const ERROR_MESSAGES: Record<string, Record<number, string>> = {
     [VotingError.RootPredatesRemoval]: "Root predates member removal",
     [VotingError.SignalNotInField]: "Public signal exceeds field modulus",
     [VotingError.InvalidNullifier]: "Invalid nullifier (cannot be zero)",
+  },
+  CircuitRegistry: {
+    [CircuitRegistryError.NotGovernance]:
+      "Only governance can perform this action",
+    [CircuitRegistryError.CircuitNotFound]: "Circuit not found in registry",
+    [CircuitRegistryError.CircuitAlreadyRegistered]:
+      "Circuit already registered",
+    [CircuitRegistryError.InvalidCircuitType]: "Invalid circuit type",
+    [CircuitRegistryError.MigrationNotFound]: "Migration not found",
+    [CircuitRegistryError.MigrationAlreadyExists]: "Migration already exists",
+    [CircuitRegistryError.MigrationDeadlinePassed]:
+      "Migration deadline has passed",
+    [CircuitRegistryError.CircuitExpired]: "Circuit has expired",
   },
   Comments: {
     [CommentsError.NotAdmin]: "Only DAO admin can perform this action",

@@ -44,6 +44,7 @@ pub use zkvote_groth16::{
 
 const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");
+const CIRCUIT_REGISTRY: Symbol = symbol_short!("circ_reg");
 const VERSION: u32 = 1;
 const VERSION_KEY: Symbol = symbol_short!("ver");
 
@@ -120,6 +121,30 @@ pub enum DataKey {
     ProposalCurve(u64, u64),     // (dao_id, proposal_id) -> CurveId
     /// Test-only: overrides proof verification. Not used in production.
     VerifyOverride,
+    DaoCurrentCircuit(u64), // dao_id -> current circuit_id string
+    DaoMigration(u64),      // dao_id -> MigrationInfo
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct MigrationInfo {
+    pub old_circuit_id: String,
+    pub new_circuit_id: String,
+    pub deadline: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub enum CircuitType {
+    Vote,
+    Comment,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct CircuitVKResult {
+    pub vk: VerificationKey,
+    pub num_public_signals: u32,
 }
 
 #[contracttype]
@@ -1312,6 +1337,249 @@ impl Voting {
         }
 
         zkvote_groth16::verify_groth16_bls381(env, vk, proof, pub_signals)
+    }
+
+    pub fn set_circuit_registry(env: Env, circuit_registry: Address) {
+        env.storage()
+            .instance()
+            .set(&CIRCUIT_REGISTRY, &circuit_registry);
+    }
+
+    pub fn set_dao_current_circuit(
+        env: Env,
+        dao_id: u64,
+        circuit_id: String,
+        _circuit_type: CircuitType,
+    ) {
+        Self::bump_instance(&env);
+        let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
+        registry.require_auth();
+        let key = DataKey::DaoCurrentCircuit(dao_id);
+        env.storage().persistent().set(&key, &circuit_id);
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn get_dao_current_circuit(env: Env, dao_id: u64) -> String {
+        Self::bump_instance(&env);
+        let key = DataKey::DaoCurrentCircuit(dao_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| String::from_str(&env, "vote_v1"))
+    }
+
+    pub fn set_migration(
+        env: Env,
+        dao_id: u64,
+        old_circuit_id: String,
+        new_circuit_id: String,
+        deadline: u64,
+    ) {
+        Self::bump_instance(&env);
+        let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
+        registry.require_auth();
+        let migration = MigrationInfo {
+            old_circuit_id,
+            new_circuit_id,
+            deadline,
+        };
+        let key = DataKey::DaoMigration(dao_id);
+        env.storage().persistent().set(&key, &migration);
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn get_migration(env: Env, dao_id: u64) -> MigrationInfo {
+        Self::bump_instance(&env);
+        let key = DataKey::DaoMigration(dao_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .expect("migration not found")
+    }
+
+    fn load_vk_from_registry(
+        env: &Env,
+        circuit_id: &String,
+        circuit_type: &CircuitType,
+    ) -> VerificationKey {
+        let circuit_registry: Address = env
+            .storage()
+            .instance()
+            .get(&CIRCUIT_REGISTRY)
+            .unwrap_or_else(|| {
+                panic_with_error!(env, VotingError::VkNotSet);
+            });
+        let result: CircuitVKResult = env.invoke_contract(
+            &circuit_registry,
+            &Symbol::new(env, "get_vk"),
+            soroban_sdk::vec![
+                env,
+                circuit_id.clone().into_val(env),
+                circuit_type.clone().into_val(env),
+            ],
+        );
+        result.vk
+    }
+
+    fn check_migration_window(env: &Env, dao_id: u64) -> Option<(String, String)> {
+        let migration_key = DataKey::DaoMigration(dao_id);
+        if !env.storage().persistent().has(&migration_key) {
+            return None;
+        }
+        let migration: MigrationInfo = env.storage().persistent().get(&migration_key).unwrap();
+        let now = env.ledger().timestamp();
+        if now < migration.deadline {
+            Some((migration.old_circuit_id, migration.new_circuit_id))
+        } else {
+            None
+        }
+    }
+
+    pub fn vote_with_circuit(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        vote_choice: bool,
+        nullifier: U256,
+        root: U256,
+        proof: Proof,
+        circuit_id: String,
+    ) {
+        Self::bump_instance(&env);
+        Self::assert_in_field(&env, &nullifier);
+        Self::assert_in_field(&env, &root);
+
+        if nullifier == U256::from_u32(&env, 0) {
+            panic_with_error!(&env, VotingError::InvalidNullifier);
+        }
+
+        let null_key = DataKey::Nullifier(dao_id, proposal_id, nullifier.clone());
+        if env.storage().persistent().has(&null_key) {
+            panic_with_error!(&env, VotingError::NullifierUsed);
+        }
+
+        let prop_key = DataKey::Proposal(dao_id, proposal_id);
+        let mut proposal: ProposalInfo = env
+            .storage()
+            .persistent()
+            .get(&prop_key)
+            .expect("proposal not found");
+
+        let now = env.ledger().timestamp();
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
+        if proposal.end_time != 0 && now > proposal.end_time {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
+
+        match proposal.vote_mode {
+            VoteMode::Fixed => {
+                if root != proposal.eligible_root {
+                    panic_with_error!(&env, VotingError::RootMismatch);
+                }
+            }
+            VoteMode::Trailing => {
+                let tree_contract: Address = Self::tree_contract(env.clone());
+                let root_valid: bool = env.invoke_contract(
+                    &tree_contract,
+                    &symbol_short!("root_ok"),
+                    soroban_sdk::vec![&env, dao_id.into_val(&env), root.clone().into_val(&env)],
+                );
+                if !root_valid {
+                    panic_with_error!(&env, VotingError::RootNotInHistory);
+                }
+                let root_index: u32 = env.invoke_contract(
+                    &tree_contract,
+                    &symbol_short!("root_idx"),
+                    soroban_sdk::vec![&env, dao_id.into_val(&env), root.clone().into_val(&env)],
+                );
+                if root_index < proposal.earliest_root_index {
+                    panic_with_error!(&env, VotingError::RootPredatesProposal);
+                }
+                let min_valid_root: u32 = env.invoke_contract(
+                    &tree_contract,
+                    &symbol_short!("min_root"),
+                    soroban_sdk::vec![&env, dao_id.into_val(&env)],
+                );
+                if root_index < min_valid_root {
+                    panic_with_error!(&env, VotingError::RootPredatesRemoval);
+                }
+            }
+        }
+
+        let vk: VerificationKey =
+            Self::load_vk_from_registry(&env, &circuit_id, &CircuitType::Vote);
+
+        let current_vk_hash = Self::hash_vk(&env, &vk);
+        if current_vk_hash != proposal.vk_hash {
+            let migration = Self::check_migration_window(&env, dao_id);
+            match migration {
+                Some((ref old_circuit_id, ref new_circuit_id)) => {
+                    if circuit_id != *old_circuit_id && circuit_id != *new_circuit_id {
+                        panic_with_error!(&env, VotingError::VkChanged);
+                    }
+                    if circuit_id == *old_circuit_id {
+                        let old_vk =
+                            Self::load_vk_from_registry(&env, old_circuit_id, &CircuitType::Vote);
+                        let old_hash = Self::hash_vk(&env, &old_vk);
+                        if old_hash != proposal.vk_hash {
+                            panic_with_error!(&env, VotingError::VkChanged);
+                        }
+                    } else if circuit_id == *new_circuit_id {
+                        let new_vk =
+                            Self::load_vk_from_registry(&env, new_circuit_id, &CircuitType::Vote);
+                        let new_hash = Self::hash_vk(&env, &new_vk);
+                        if new_hash != proposal.vk_hash {
+                            panic_with_error!(&env, VotingError::VkChanged);
+                        }
+                    }
+                }
+                None => {
+                    panic_with_error!(&env, VotingError::VkChanged);
+                }
+            }
+        }
+
+        let vote_signal = if vote_choice {
+            U256::from_u32(&env, 1)
+        } else {
+            U256::from_u32(&env, 0)
+        };
+        let dao_signal = U256::from_u128(&env, dao_id as u128);
+        let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+
+        let pub_signals = soroban_sdk::vec![
+            &env,
+            root.clone(),
+            nullifier.clone(),
+            dao_signal,
+            proposal_signal,
+            vote_signal,
+        ];
+
+        if !Self::verify_groth16(&env, &vk, &proof, &pub_signals) {
+            panic_with_error!(&env, VotingError::InvalidProof);
+        }
+
+        env.storage().persistent().set(&null_key, &true);
+        Self::bump_persistent(&env, &null_key);
+
+        if vote_choice {
+            proposal.yes_votes += 1;
+        } else {
+            proposal.no_votes += 1;
+        }
+        env.storage().persistent().set(&prop_key, &proposal);
+        Self::bump_persistent(&env, &prop_key);
+
+        VoteEvent {
+            dao_id,
+            proposal_id,
+            choice: vote_choice,
+            nullifier,
+        }
+        .publish(&env);
     }
 }
 

@@ -8,6 +8,7 @@ members = [
     "contracts/comments",
     "contracts/poc-bls12-381",
     "contracts/bridge/soroban",
+    "contracts/circuit-registry",
     "tests/integration",
 ]
 resolver = "2"
