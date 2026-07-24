@@ -36,7 +36,7 @@ function MigrationTimeline({
   migration: NonNullable<CircuitStatusResponse["migration"]>;
 }) {
   const deadlineDate = new Date(migration.deadline * 1000);
-  const now = Date.now();
+  const [now] = useState(() => Date.now());
   const remaining = Math.max(0, deadlineDate.getTime() - now);
   const daysRemaining = Math.ceil(remaining / (1000 * 60 * 60 * 24));
 
@@ -55,10 +55,7 @@ function MigrationTimeline({
         </p>
         <p>
           Deadline: {deadlineDate.toLocaleDateString()} (
-          {daysRemaining > 0
-            ? `${daysRemaining} days remaining`
-            : "Passed"}
-          )
+          {daysRemaining > 0 ? `${daysRemaining} days remaining` : "Passed"})
         </p>
         {migration.inOverlapWindow && (
           <p className="flex items-center gap-1 text-yellow-800 font-medium">
@@ -144,10 +141,7 @@ export default function CircuitUpgradePanel({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-600">Current Circuit</span>
-          <CircuitBadge
-            label={data.currentCircuit}
-            variant="current"
-          />
+          <CircuitBadge label={data.currentCircuit} variant="current" />
         </div>
 
         <div className="text-sm text-gray-500 flex items-center gap-1">
