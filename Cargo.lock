@@ -258,6 +258,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "circuit-registry"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "zkvote-groth16",
+]
+
+[[package]]
 name = "comments"
 version = "0.1.0"
 dependencies = [
@@ -1870,6 +1878,7 @@ dependencies = [
 name = "zkvote-integration-tests"
 version = "0.1.0"
 dependencies = [
+ "circuit-registry",
  "dao-registry",
  "hex",
  "membership-sbt",

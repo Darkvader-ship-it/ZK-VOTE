@@ -14,6 +14,8 @@ export interface VoteProofInput {
   commitment: string; // Identity commitment - private input, computed internally in circuit
   pathElements: string[];
   pathIndices: number[];
+  circuitVersion?: string; // "v1" or "v2" (defaults to "v1")
+  chainId?: string; // Required for v2 circuits
 }
 
 export interface CommentProofInput {
@@ -27,6 +29,8 @@ export interface CommentProofInput {
   commitment: string; // Identity commitment - used for proof generation (private circuit input)
   pathElements: string[];
   pathIndices: number[];
+  circuitVersion?: string; // "v1" or "v2" (defaults to "v1")
+  parentCommentId?: string; // Required for v2 circuits
 }
 
 // Legacy alias for backwards compatibility
@@ -50,26 +54,39 @@ export async function generateVoteProof(
   zkeyPath: string,
 ): Promise<GeneratedProof> {
   try {
-    // Format input for circuit - matches vote.circom signal names
-    // Public signals: [root, nullifier, daoId, proposalId, voteChoice]
-    // Note: commitment is COMPUTED INTERNALLY in the circuit from secret+salt
-    // This provides improved vote unlinkability - commitment is never exposed
-    const circuitInput = {
-      // Public signals (verified on-chain)
-      root: input.root,
-      nullifier: input.nullifier,
-      daoId: input.daoId,
-      proposalId: input.proposalId,
-      voteChoice: input.voteChoice,
-      // Private signals (hidden in ZK proof)
-      // commitment is computed internally: Poseidon(secret, salt)
-      secret: input.secret,
-      salt: input.salt,
-      pathElements: input.pathElements,
-      pathIndices: input.pathIndices,
-    };
+    const circuitVersion = input.circuitVersion || "v1";
 
-    // Generate proof using snarkjs
+    let circuitInput: Record<string, unknown>;
+
+    if (circuitVersion === "v2") {
+      // vote_v2.circom - adds chainId as 6th public signal
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        voteChoice: input.voteChoice,
+        chainId: input.chainId || "0",
+        secret: input.secret,
+        salt: input.salt,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    } else {
+      // vote_v1.circom - original 5 public signals
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        voteChoice: input.voteChoice,
+        secret: input.secret,
+        salt: input.salt,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    }
+
     const { proof, publicSignals } = await groth16.fullProve(
       circuitInput,
       wasmPath,
@@ -86,6 +103,22 @@ export async function generateVoteProof(
 }
 
 /**
+ * Generate a Groth16 proof for v2 circuit (with chainId)
+ * Convenience wrapper around generateVoteProof
+ */
+export async function generateVoteProofV2(
+  input: VoteProofInput,
+  wasmPath: string = "/circuits/vote_v2/vote_v2.wasm",
+  zkeyPath: string = "/circuits/vote_v2/vote_v2_final.zkey",
+): Promise<GeneratedProof> {
+  return generateVoteProof(
+    { ...input, circuitVersion: "v2" },
+    wasmPath,
+    zkeyPath,
+  );
+}
+
+/**
  * Generate a Groth16 proof for anonymous commenting
  * @param input Proof input parameters (uses commentNonce instead of voteChoice)
  * @param wasmPath Path to compiled comment circuit WASM
@@ -98,23 +131,41 @@ export async function generateCommentProof(
   zkeyPath: string = "/circuits/comment/comment_final.zkey",
 ): Promise<GeneratedProof> {
   try {
-    // Format input for circuit - matches comment.circom signal names
-    const circuitInput = {
-      // Public signals (verified on-chain)
-      root: input.root,
-      nullifier: input.nullifier,
-      daoId: input.daoId,
-      proposalId: input.proposalId,
-      commentNonce: input.commentNonce,
-      commitment: input.commitment,
-      // Private signals (hidden in ZK proof)
-      secret: input.secret,
-      salt: input.salt,
-      pathElements: input.pathElements,
-      pathIndices: input.pathIndices,
-    };
+    const circuitVersion = input.circuitVersion || "v1";
 
-    // Generate proof using snarkjs
+    let circuitInput: Record<string, unknown>;
+
+    if (circuitVersion === "v2") {
+      // comment_v2.circom - adds parentCommentId as 7th public signal
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        commentNonce: input.commentNonce,
+        commitment: input.commitment,
+        parentCommentId: input.parentCommentId || "0",
+        secret: input.secret,
+        salt: input.salt,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    } else {
+      // comment_v1.circom - original 6 public signals
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        commentNonce: input.commentNonce,
+        commitment: input.commitment,
+        secret: input.secret,
+        salt: input.salt,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    }
+
     const { proof, publicSignals } = await groth16.fullProve(
       circuitInput,
       wasmPath,
@@ -128,6 +179,21 @@ export async function generateCommentProof(
       `Comment proof generation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
     );
   }
+}
+
+/**
+ * Generate a Groth16 proof for v2 comment circuit (with parentCommentId)
+ */
+export async function generateCommentProofV2(
+  input: CommentProofInput,
+  wasmPath: string = "/circuits/comment_v2/comment_v2.wasm",
+  zkeyPath: string = "/circuits/comment_v2/comment_v2_final.zkey",
+): Promise<GeneratedProof> {
+  return generateCommentProof(
+    { ...input, circuitVersion: "v2" },
+    wasmPath,
+    zkeyPath,
+  );
 }
 
 /**
@@ -186,20 +252,42 @@ export function generateSecret(): string {
 /**
  * Calculate vote nullifier using Poseidon hash
  * nullifier = Poseidon(secret, daoId, proposalId)
+ * For v2: nullifier = Poseidon(secret, daoId, proposalId, chainId)
  */
 export async function calculateNullifier(
   secret: string,
   daoId: string,
   proposalId: string,
+  circuitVersion: string = "v1",
+  chainId?: string,
 ): Promise<string> {
   const { buildPoseidon } = await import("circomlibjs");
   const poseidon = await buildPoseidon();
 
-  const hash = poseidon.F.toString(
-    poseidon([BigInt(secret), BigInt(daoId), BigInt(proposalId)]),
-  );
+  let hash;
+  if (circuitVersion === "v2" && chainId !== undefined) {
+    hash = poseidon.F.toString(
+      poseidon([BigInt(secret), BigInt(daoId), BigInt(proposalId), BigInt(chainId)]),
+    );
+  } else {
+    hash = poseidon.F.toString(
+      poseidon([BigInt(secret), BigInt(daoId), BigInt(proposalId)]),
+    );
+  }
 
   return hash;
+}
+
+/**
+ * Calculate vote nullifier for v2 circuit (includes chainId)
+ */
+export async function calculateNullifierV2(
+  secret: string,
+  daoId: string,
+  proposalId: string,
+  chainId: string,
+): Promise<string> {
+  return calculateNullifier(secret, daoId, proposalId, "v2", chainId);
 }
 
 /**

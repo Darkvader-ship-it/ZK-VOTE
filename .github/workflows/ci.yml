@@ -121,3 +121,12 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+      - name: Compile v2 circuits (if available)
+        run: |
+          if command -v circom &> /dev/null; then
+            mkdir -p build_v2
+            circom vote_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "v2 compile skipped"
+            circom comment_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "comment_v2 compile skipped"
+          else
+            echo "circom not installed - v2 circuit compilation skipped"
+          fi

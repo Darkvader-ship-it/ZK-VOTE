@@ -18,3 +18,4 @@ dao_registry = { path = "../../contracts/dao-registry", package = "dao-registry"
 membership_sbt = { path = "../../contracts/membership-sbt", package = "membership-sbt", features = ["testutils"] }
 membership_tree = { path = "../../contracts/membership-tree", package = "membership-tree", features = ["testutils"] }
 voting = { path = "../../contracts/voting", package = "voting", features = ["testutils"] }
+circuit_registry = { path = "../../contracts/circuit-registry", package = "circuit-registry", features = ["testutils"] }

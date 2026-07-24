@@ -44,6 +44,18 @@ pub struct DaoInfo {
 
 pub use zkvote_groth16::VerificationKey;
 
+#[contracttype]
+#[derive(Clone)]
+pub struct CircuitUpgradeProposal {
+    pub dao_id: u64,
+    pub from_circuit_id: String,
+    pub to_circuit_id: String,
+    pub circuit_type: String, // "Vote" or "Comment"
+    pub proposed_at: u64,
+    pub deadline: u64,
+    pub approved: bool,
+}
+
 // Typed Events
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +64,24 @@ pub struct DaoCreateEvent {
     pub dao_id: u64,
     pub admin: Address,
     pub name: String,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CircuitUpgradeProposedEvent {
+    #[topic]
+    pub dao_id: u64,
+    pub from_circuit_id: String,
+    pub to_circuit_id: String,
+    pub deadline: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CircuitUpgradeApprovedEvent {
+    #[topic]
+    pub dao_id: u64,
+    pub proposal_id: u64,
 }
 
 #[soroban_sdk::contractevent]
@@ -547,6 +577,132 @@ impl DaoRegistry {
 
     fn dao_key(dao_id: u64) -> (Symbol, u64) {
         (symbol_short!("dao"), dao_id)
+    }
+
+    fn circuit_upgrade_key(dao_id: u64, proposal_id: u64) -> (Symbol, u64, u64) {
+        (symbol_short!("c_upgrade"), dao_id, proposal_id)
+    }
+
+    fn next_upgrade_proposal_id(env: &Env) -> u64 {
+        let key = symbol_short!("c_upg_cnt");
+        let count: u64 = env.storage().instance().get(&key).unwrap_or(0);
+        let new_id = count + 1;
+        env.storage().instance().set(&key, &new_id);
+        new_id
+    }
+
+    pub fn propose_circuit_upgrade(
+        env: Env,
+        dao_id: u64,
+        from_circuit_id: String,
+        to_circuit_id: String,
+        circuit_type: String,
+        deadline: u64,
+        proposer: Address,
+    ) -> u64 {
+        Self::bump_instance(&env);
+        proposer.require_auth();
+
+        let key = Self::dao_key(dao_id);
+        let dao: DaoInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+
+        if proposer != dao.admin {
+            panic_with_error!(&env, RegistryError::NotAdmin);
+        }
+
+        let now = env.ledger().timestamp();
+        if deadline <= now {
+            panic_with_error!(&env, RegistryError::DaoNotFound);
+        }
+
+        let proposal_id = Self::next_upgrade_proposal_id(&env);
+
+        let proposal = CircuitUpgradeProposal {
+            dao_id,
+            from_circuit_id: from_circuit_id.clone(),
+            to_circuit_id: to_circuit_id.clone(),
+            circuit_type: circuit_type.clone(),
+            proposed_at: now,
+            deadline,
+            approved: false,
+        };
+
+        let proposal_key = Self::circuit_upgrade_key(dao_id, proposal_id);
+        env.storage().persistent().set(&proposal_key, &proposal);
+        Self::bump_persistent(&env, &proposal_key);
+
+        CircuitUpgradeProposedEvent {
+            dao_id,
+            from_circuit_id,
+            to_circuit_id,
+            deadline,
+        }
+        .publish(&env);
+
+        proposal_id
+    }
+
+    pub fn approve_circuit_upgrade(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        approver: Address,
+    ) {
+        Self::bump_instance(&env);
+        approver.require_auth();
+
+        let proposal_key = Self::circuit_upgrade_key(dao_id, proposal_id);
+        let mut proposal: CircuitUpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&proposal_key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+
+        let dao_key = Self::dao_key(dao_id);
+        let dao: DaoInfo = env
+            .storage()
+            .persistent()
+            .get(&dao_key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+
+        if approver != dao.admin {
+            panic_with_error!(&env, RegistryError::NotAdmin);
+        }
+
+        let now = env.ledger().timestamp();
+        if now > proposal.deadline {
+            panic_with_error!(&env, RegistryError::DaoNotFound);
+        }
+
+        proposal.approved = true;
+        env.storage().persistent().set(&proposal_key, &proposal);
+        Self::bump_persistent(&env, &proposal_key);
+
+        CircuitUpgradeApprovedEvent {
+            dao_id,
+            proposal_id,
+        }
+        .publish(&env);
+    }
+
+    pub fn get_circuit_upgrade_proposal(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> CircuitUpgradeProposal {
+        Self::bump_instance(&env);
+        let proposal_key = Self::circuit_upgrade_key(dao_id, proposal_id);
+        let proposal: CircuitUpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&proposal_key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+        Self::bump_persistent(&env, &proposal_key);
+        proposal
     }
 }
 
