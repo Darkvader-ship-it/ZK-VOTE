@@ -416,3 +416,24 @@ fn test_tree_full_small_depth() {
     let commitment5 = U256::from_u32(&env, 500);
     tree_client.register_with_caller(&1u64, &commitment5, &member5);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn test_duplicate_commitment_different_address_fails() {
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    registry_client.set_admin(&1u64, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
+
+    let member_a = Address::generate(&env);
+    let member_b = Address::generate(&env);
+    sbt_client.set_member(&1u64, &member_a, &true);
+    sbt_client.set_member(&1u64, &member_b, &true);
+
+    let commitment = U256::from_u32(&env, 42);
+    tree_client.register_with_caller(&1u64, &commitment, &member_a);
+    tree_client.register_with_caller(&1u64, &commitment, &member_b);
+}

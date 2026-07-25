@@ -49,6 +49,7 @@ pub enum TreeError {
     RootNotFound = 13,
     AlreadyInitialized = 14,
     MemberNotRevoked = 15, // Member hasn't been revoked (for reinstatement)
+    CommitmentAlreadyUsed = 16,
 }
 
 #[contracttype]
@@ -68,6 +69,7 @@ pub enum DataKey {
     NodeHash(u64, u32, u32),       // (dao_id, level, node_index) -> hash value at that position
     MinValidRootIdx(u64),          // dao_id -> minimum valid root index (after member removals)
     PoseidonField(u64),            // dao_id -> Symbol("BN254") or Symbol("BLS12_381")
+    CommitmentUsed(u64, U256),     // (dao_id, commitment) -> true
 }
 
 // Typed Events
@@ -317,6 +319,17 @@ impl MembershipTree {
         .publish(&env);
     }
 
+    fn reserve_commitment(env: &Env, dao_id: u64, commitment: &U256) {
+        let used_key = DataKey::CommitmentUsed(dao_id, commitment.clone());
+        let legacy_key = DataKey::LeafIndex(dao_id, commitment.clone());
+        if env.storage().persistent().has(&used_key) || env.storage().persistent().has(&legacy_key)
+        {
+            panic_with_error!(env, TreeError::CommitmentAlreadyUsed);
+        }
+        env.storage().persistent().set(&used_key, &true);
+        Self::bump_persistent(env, &used_key);
+    }
+
     /// Register a commitment from registry during DAO initialization
     /// This function is called by the registry contract during create_and_init_dao
     /// to automatically register the creator's commitment.
@@ -337,11 +350,9 @@ impl MembershipTree {
             panic_with_error!(&env, TreeError::TreeNotInitialized);
         }
 
-        // Check commitment not already registered
+        Self::reserve_commitment(&env, dao_id, &commitment);
+
         let leaf_key = DataKey::LeafIndex(dao_id, commitment.clone());
-        if env.storage().persistent().has(&leaf_key) {
-            panic_with_error!(&env, TreeError::CommitmentExists);
-        }
 
         // Check member hasn't already registered
         let member_key = DataKey::MemberLeafIndex(dao_id, member.clone());
@@ -422,11 +433,9 @@ impl MembershipTree {
             panic_with_error!(&env, TreeError::TreeNotInitialized);
         }
 
-        // Check commitment not already registered
+        Self::reserve_commitment(&env, dao_id, &commitment);
+
         let leaf_key = DataKey::LeafIndex(dao_id, commitment.clone());
-        if env.storage().persistent().has(&leaf_key) {
-            panic_with_error!(&env, TreeError::CommitmentExists);
-        }
 
         // Check member hasn't already registered
         let member_key = DataKey::MemberLeafIndex(dao_id, caller.clone());
@@ -526,11 +535,9 @@ impl MembershipTree {
             panic_with_error!(&env, TreeError::TreeNotInitialized);
         }
 
-        // Check commitment not already registered
+        Self::reserve_commitment(&env, dao_id, &commitment);
+
         let leaf_key = DataKey::LeafIndex(dao_id, commitment.clone());
-        if env.storage().persistent().has(&leaf_key) {
-            panic_with_error!(&env, TreeError::CommitmentExists);
-        }
 
         // Check member hasn't already registered
         let member_key = DataKey::MemberLeafIndex(dao_id, member.clone());
