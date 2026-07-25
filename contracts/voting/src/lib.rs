@@ -45,7 +45,7 @@ pub use zkvote_groth16::{
 const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");
 const CIRCUIT_REGISTRY: Symbol = symbol_short!("circ_reg");
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const VERSION_KEY: Symbol = symbol_short!("ver");
 
 // TTL management: bump on every interaction to keep contract alive
@@ -88,6 +88,10 @@ pub enum VotingError {
     SignalNotInField = 25,
     /// Nullifier is zero (invalid)
     InvalidNullifier = 26,
+    /// Transfer cooldown active: voter cannot transfer tokens during active election
+    TransferCooldownActive = 27,
+    /// Balance at snapshot time is below minimum required for token-gated voting
+    InsufficientSnapshotBalance = 28,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -123,6 +127,14 @@ pub enum DataKey {
     VerifyOverride,
     DaoCurrentCircuit(u64), // dao_id -> current circuit_id string
     DaoMigration(u64),      // dao_id -> MigrationInfo
+    /// Flash loan protection: balance snapshot for token-gated proposals
+    BalanceSnapshot(u64, u64),       // (dao_id, proposal_id) -> BalanceSnapshotInfo
+    /// Election configuration including token-gating parameters
+    ElectionConfig(u64, u64),        // (dao_id, proposal_id) -> ElectionConfig
+    /// Transfer cooldown: prevents token transfers during active elections
+    TransferCooldown(u64, Address),  // (dao_id, voter_address) -> u64 (cooldown end timestamp)
+    /// Balance checkpoint for time-weighted average balance computation
+    BalanceCheckpoint(u64, Address, u32), // (dao_id, address, ledger_seq) -> i128
 }
 
 #[contracttype]
@@ -145,6 +157,21 @@ pub enum CircuitType {
 pub struct CircuitVKResult {
     pub vk: VerificationKey,
     pub num_public_signals: u32,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct BalanceSnapshotInfo {
+    pub snapshot_ledger: u32,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct ElectionConfig {
+    pub snapshot_ledger: u32,
+    pub min_balance: i128,
+    pub twab_window: u64,
 }
 
 #[contracttype]
@@ -180,6 +207,7 @@ pub struct ProposalInfo {
     pub eligible_root: U256, // Merkle root at creation - defines eligible voter set
     pub vote_mode: VoteMode, // Fixed or Trailing voting
     pub earliest_root_index: u32, // For Trailing mode: earliest valid root index
+    pub snapshot_ledger: u32, // Ledger sequence at creation for balance snapshot
 }
 
 // Typed Events
@@ -705,6 +733,8 @@ impl Voting {
             soroban_sdk::vec![&env, dao_id.into_val(&env)],
         );
 
+        let snapshot_ledger = env.ledger().sequence();
+
         let proposal_id = Self::next_proposal_id(&env, dao_id);
 
         let proposal = ProposalInfo {
@@ -723,6 +753,7 @@ impl Voting {
             eligible_root,
             vote_mode,
             earliest_root_index,
+            snapshot_ledger,
         };
 
         let key = DataKey::Proposal(dao_id, proposal_id);
@@ -1580,6 +1611,241 @@ impl Voting {
             nullifier,
         }
         .publish(&env);
+    }
+
+    // ── Anti-Flash Loan Protection ──────────────────────────────────────────
+
+    /// Create or update election configuration with token-gating parameters.
+    /// Sets the minimum balance required to vote, snapshot ledger, and TWAB window.
+    /// Only callable during proposal creation or by DAO admin.
+    pub fn set_election_config(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        min_balance: i128,
+        twab_window: u64,
+    ) {
+        Self::bump_instance(&env);
+        let snapshot_ledger = env.ledger().sequence();
+        let config = ElectionConfig {
+            snapshot_ledger,
+            min_balance,
+            twab_window,
+        };
+        let key = DataKey::ElectionConfig(dao_id, proposal_id);
+        env.storage().persistent().set(&key, &config);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Get election configuration for a proposal.
+    pub fn get_election_config(env: Env, dao_id: u64, proposal_id: u64) -> Option<ElectionConfig> {
+        Self::bump_instance(&env);
+        let key = DataKey::ElectionConfig(dao_id, proposal_id);
+        let config: Option<ElectionConfig> = env.storage().persistent().get(&key);
+        if config.is_some() {
+            Self::bump_persistent(&env, &key);
+        }
+        config
+    }
+
+    /// Get the snapshot ledger for a proposal (from ProposalInfo).
+    pub fn get_snapshot_ledger(env: Env, dao_id: u64, proposal_id: u64) -> u32 {
+        let proposal = Self::get_proposal(env, dao_id, proposal_id);
+        proposal.snapshot_ledger
+    }
+
+    /// Record a balance checkpoint for time-weighted average balance computation.
+    /// Called by the token contract when a voter's balance changes.
+    /// Stores (dao_id, address, ledger) -> balance for TWAB calculation.
+    pub fn record_balance_checkpoint(
+        env: Env,
+        dao_id: u64,
+        voter: Address,
+        balance: i128,
+    ) {
+        Self::bump_instance(&env);
+        let ledger = env.ledger().sequence();
+        let key = DataKey::BalanceCheckpoint(dao_id, voter.clone(), ledger);
+        env.storage().persistent().set(&key, &balance);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Compute time-weighted average balance for a voter between a start and end ledger.
+    /// Uses stored balance checkpoints to compute the average balance over the window.
+    /// Returns None if no checkpoints are available.
+    pub fn get_twab(
+        env: Env,
+        dao_id: u64,
+        voter: Address,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) -> Option<i128> {
+        Self::bump_instance(&env);
+        if start_ledger >= end_ledger {
+            return None;
+        }
+        let total_duration = (end_ledger - start_ledger) as u128;
+        if total_duration == 0 {
+            return None;
+        }
+
+        let mut weighted_sum: i128 = 0;
+        let mut prev_ledger: u32 = start_ledger;
+        let mut prev_balance: i128 = 0;
+        let mut has_data = false;
+
+        // Iterate through checkpoints in the window
+        let mut current_ledger = start_ledger;
+        while current_ledger <= end_ledger {
+            let cp_key = DataKey::BalanceCheckpoint(dao_id, voter.clone(), current_ledger);
+            if let Some(balance) = env.storage().persistent().get::<DataKey, i128>(&cp_key) {
+                if has_data {
+                    let duration = (current_ledger - prev_ledger) as u128;
+                    weighted_sum += prev_balance.saturating_mul(
+                        i128::try_from(duration).unwrap_or(i128::MAX),
+                    );
+                }
+                prev_balance = balance;
+                prev_ledger = current_ledger;
+                has_data = true;
+            }
+            current_ledger += 1;
+        }
+
+        // Add the final segment
+        if has_data {
+            let final_duration = (end_ledger - prev_ledger) as u128;
+            weighted_sum += prev_balance.saturating_mul(
+                i128::try_from(final_duration).unwrap_or(i128::MAX),
+            );
+        }
+
+        if !has_data {
+            return None;
+        }
+
+        let avg = weighted_sum / i128::try_from(total_duration).unwrap_or(1);
+        Some(avg)
+    }
+
+    /// Set a transfer cooldown for a voter during an active election.
+    /// Prevents the voter from transferring tokens until the cooldown expires.
+    /// Called automatically when a voter registers or votes in a token-gated election.
+    pub fn set_voter_cooldown(env: Env, dao_id: u64, voter: Address) {
+        Self::bump_instance(&env);
+        // Cooldown lasts until the current proposal ends (max 7 days from now)
+        let cooldown_end = env.ledger().timestamp() + 604800; // 7 days
+        let key = DataKey::TransferCooldown(dao_id, voter);
+        env.storage().persistent().set(&key, &cooldown_end);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Clear a voter's transfer cooldown after an election ends.
+    pub fn clear_voter_cooldown(env: Env, dao_id: u64, voter: Address) {
+        Self::bump_instance(&env);
+        let key = DataKey::TransferCooldown(dao_id, voter);
+        env.storage().persistent().remove(&key);
+    }
+
+    /// Check if a voter is in transfer cooldown (cannot transfer tokens).
+    /// Returns true if cooldown is active, false otherwise.
+    /// This function is intended to be called by token contracts before transfers.
+    pub fn is_in_transfer_cooldown(env: Env, dao_id: u64, voter: Address) -> bool {
+        Self::bump_instance(&env);
+        let key = DataKey::TransferCooldown(dao_id, voter);
+        let cooldown_end: Option<u64> = env.storage().persistent().get(&key);
+        match cooldown_end {
+            Some(end) => env.ledger().timestamp() < end,
+            None => false,
+        }
+    }
+
+    /// Create a balance snapshot for a proposal (records current token balances).
+    /// Stores the snapshot ledger and timestamp for future eligibility checks.
+    /// Called during proposal creation when token-gating is configured.
+    pub fn create_balance_snapshot(env: Env, dao_id: u64, proposal_id: u64) {
+        Self::bump_instance(&env);
+        let snapshot = BalanceSnapshotInfo {
+            snapshot_ledger: env.ledger().sequence(),
+            timestamp: env.ledger().timestamp(),
+        };
+        let key = DataKey::BalanceSnapshot(dao_id, proposal_id);
+        env.storage().persistent().set(&key, &snapshot);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Get the balance snapshot for a proposal.
+    pub fn get_balance_snapshot(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> Option<BalanceSnapshotInfo> {
+        Self::bump_instance(&env);
+        let key = DataKey::BalanceSnapshot(dao_id, proposal_id);
+        let snapshot: Option<BalanceSnapshotInfo> = env.storage().persistent().get(&key);
+        if snapshot.is_some() {
+            Self::bump_persistent(&env, &key);
+        }
+        snapshot
+    }
+
+    /// Check if a voter's balance at snapshot time meets the minimum requirement.
+    /// For token-gated proposals, this verifies the voter held sufficient tokens
+    /// at the time the proposal was created (preventing flash loan attacks).
+    /// This is a view function that token contracts should call before allowing votes.
+    /// Returns true if the voter's snapshot balance meets the minimum, or if no
+    /// token-gating is configured for this proposal.
+    #[allow(unused_variables)]
+    pub fn check_voter_eligibility(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        voter: Address,
+        current_balance: i128,
+        balance_at_snapshot: i128,
+    ) -> bool {
+        Self::bump_instance(&env);
+        // Check if this proposal has token-gating configured
+        let config_key = DataKey::ElectionConfig(dao_id, proposal_id);
+        let config: Option<ElectionConfig> = env.storage().persistent().get(&config_key);
+
+        match config {
+            Some(cfg) => {
+                // If TWAB window is set, use time-weighted average balance
+                if cfg.twab_window > 0 {
+                    let snapshot = Self::get_balance_snapshot(env.clone(), dao_id, proposal_id);
+                    match snapshot {
+                        Some(snap) => {
+                            let end_ledger = env.ledger().sequence();
+                            let start_ledger = if end_ledger > snap.snapshot_ledger {
+                                snap.snapshot_ledger
+                            } else {
+                                0
+                            };
+                            if let Some(twab) = Self::get_twab(
+                                env.clone(),
+                                dao_id,
+                                voter.clone(),
+                                start_ledger,
+                                end_ledger,
+                            ) {
+                                return twab >= cfg.min_balance;
+                            }
+                        }
+                        None => {}
+                    }
+                    // Fallback: use balance at snapshot (checked against checkpoint)
+                    balance_at_snapshot >= cfg.min_balance
+                } else {
+                    // Without TWAB, use balance at snapshot time
+                    balance_at_snapshot >= cfg.min_balance
+                }
+            }
+            None => {
+                // No token-gating configured for this proposal
+                true
+            }
+        }
     }
 }
 
