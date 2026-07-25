@@ -43,6 +43,9 @@ pub use zkvote_groth16::{
     VerificationKeyBls381,
 };
 
+// ZK quadratic voting with range proofs (issue #50)
+mod quadratic;
+
 const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");
 const CIRCUIT_REGISTRY: Symbol = symbol_short!("circ_reg");
@@ -114,6 +117,17 @@ pub enum VotingError {
     InvalidNoticePeriod = 47,
     InvalidRegistrationPeriod = 48,
     InvalidRegistrationGap = 49,
+    /// Regular `vote` called on a Quadratic proposal (use `cast_qv_vote`), or
+    /// `cast_qv_vote` called on a non-Quadratic proposal
+    NotQuadraticProposal = 50,
+    /// Quadratic-voting verification key not set for this DAO
+    QvVkNotSet = 51,
+    /// Quadratic ballot exceeds the fixed credit budget (sum of squares > MAX_QV_BUDGET)
+    QvBudgetExceeded = 52,
+    /// Quadratic tally verification key not set for this DAO
+    QvTallyVkNotSet = 53,
+    /// Tally proposal_ids / tallies vectors have mismatched or empty length
+    QvTallyLengthMismatch = 54,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -145,6 +159,17 @@ pub const MIN_REGISTRATION_PERIOD: u64 = 300; // 5 minutes minimum registration 
 pub const MIN_NOTICE_PERIOD: u64 = 60; // 1 minute minimum notice period before start
 pub const MIN_REGISTRATION_GAP: u64 = 60; // 1 minute minimum gap between registration_end and start
 pub const TIMESTAMP_TOLERANCE: u64 = 5; // ±5 seconds clock skew tolerance buffer
+
+// Quadratic-voting circuit constants (issue #50)
+/// QV circuit public signals: [root, daoId, proposalId, nullifier, totalCreditsSpent, allocationsHash]
+const QV_NUM_PUBLIC_SIGNALS: u32 = 6;
+/// IC vector length for the QV Groth16 VK = QV_NUM_PUBLIC_SIGNALS + 1
+const QV_CIRCUIT_IC_LEN: u32 = QV_NUM_PUBLIC_SIGNALS + 1;
+/// Fixed quadratic credit budget per member per snapshot. MUST match the
+/// MAX_BUDGET baked into the deployed quadratic_vote circuit (see
+/// circuits/quadratic_vote_main.circom). Enforced on-chain as defense in depth;
+/// the circuit already proves sum(voiceCredits_i^2) <= MAX_BUDGET.
+const MAX_QV_BUDGET: u64 = 100;
 
 #[contracttype]
 #[derive(Clone)]
@@ -182,6 +207,31 @@ pub enum DataKey {
     ProposalCooldown(u64, Address),
     DepositConfig(u64),
     ProposalDeposit(u64, u64),
+
+    // --- Quadratic voting with range proofs (issue #50) ---
+    QvVotingKey(u64),           // dao_id -> latest QV VerificationKey (BN254)
+    QvVkVersion(u64),           // dao_id -> current QV VK version
+    QvVkByVersion(u64, u32),    // (dao_id, qv_vk_version) -> QV VerificationKey
+    QvTallyKey(u64),            // dao_id -> QV tally VerificationKey
+    QvBallot(u64, u64, U256),   // (dao_id, round_id, nullifier) -> QvBallot
+    QvBallotCount(u64, u64),    // (dao_id, round_id) -> u64
+    QvCreditsTotal(u64, u64),   // (dao_id, round_id) -> u128 (sum of credits spent)
+    QvTally(u64, u64, u64),     // (dao_id, round_id, proposal_id) -> u64 credits
+    QvTallyFinalized(u64, u64), // (dao_id, round_id) -> bool
+}
+
+/// A single quadratic-voting ballot as stored on-chain.
+///
+/// The individual allocations stay private: only the Poseidon commitment to them
+/// (`allocations_hash`) and the revealed quadratic cost (`total_credits_spent`)
+/// are recorded. The ZK proof verified at `cast_qv_vote` guarantees that
+/// `total_credits_spent == sum(voiceCredits_i^2)` and that every allocation is in
+/// range, so overspending is impossible.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QvBallot {
+    pub allocations_hash: U256,
+    pub total_credits_spent: u64,
 }
 
 #[contracttype]
@@ -234,8 +284,9 @@ pub struct ElectionConfig {
 #[contracttype]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VoteMode {
-    Fixed,    // Only members at snapshot can vote
-    Trailing, // Members added after proposal creation can also vote
+    Fixed,     // Only members at snapshot can vote
+    Trailing,  // Members added after proposal creation can also vote
+    Quadratic, // ZK quadratic voting (issue #50). Use `cast_qv_vote`, not `vote`.
 }
 
 #[contracttype]
@@ -376,6 +427,27 @@ pub struct CandidateSeedFinalizedEvent {
     #[topic]
     pub proposal_id: u64,
     pub seed: BytesN<32>,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct QvVoteEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub nullifier: U256,
+    pub total_credits_spent: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct QvTallyEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub round_id: u64,
+    pub ballots: u64,
 }
 
 #[contract]
@@ -1213,6 +1285,10 @@ impl Voting {
                     panic_with_error!(&env, VotingError::RootPredatesRemoval);
                 }
             }
+            VoteMode::Quadratic => {
+                // Quadratic proposals must be voted on via `cast_qv_vote`.
+                panic_with_error!(&env, VotingError::NotQuadraticProposal);
+            }
         }
 
         // Verify proposal was created for BN254 curve (not BLS12-381)
@@ -1351,6 +1427,10 @@ impl Voting {
                 if root_index < min_valid_root {
                     panic_with_error!(&env, VotingError::RootPredatesRemoval);
                 }
+            }
+            VoteMode::Quadratic => {
+                // Quadratic proposals must be voted on via `cast_qv_vote`.
+                panic_with_error!(&env, VotingError::NotQuadraticProposal);
             }
         }
 
@@ -1869,6 +1949,10 @@ impl Voting {
                 if root_index < min_valid_root {
                     panic_with_error!(&env, VotingError::RootPredatesRemoval);
                 }
+            }
+            VoteMode::Quadratic => {
+                // Quadratic proposals must be voted on via `cast_qv_vote`.
+                panic_with_error!(&env, VotingError::NotQuadraticProposal);
             }
         }
 

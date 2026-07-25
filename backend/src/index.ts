@@ -46,6 +46,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  quadraticRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -99,6 +100,7 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(quadraticRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
