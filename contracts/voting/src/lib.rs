@@ -131,11 +131,11 @@ pub enum DataKey {
     DaoCurrentCircuit(u64), // dao_id -> current circuit_id string
     DaoMigration(u64),      // dao_id -> MigrationInfo
     /// Flash loan protection: balance snapshot for token-gated proposals
-    BalanceSnapshot(u64, u64),       // (dao_id, proposal_id) -> BalanceSnapshotInfo
+    BalanceSnapshot(u64, u64), // (dao_id, proposal_id) -> BalanceSnapshotInfo
     /// Election configuration including token-gating parameters
-    ElectionConfig(u64, u64),        // (dao_id, proposal_id) -> ElectionConfig
+    ElectionConfig(u64, u64), // (dao_id, proposal_id) -> ElectionConfig
     /// Transfer cooldown: prevents token transfers during active elections
-    TransferCooldown(u64, Address),  // (dao_id, voter_address) -> u64 (cooldown end timestamp)
+    TransferCooldown(u64, Address), // (dao_id, voter_address) -> u64 (cooldown end timestamp)
     /// Balance checkpoint for time-weighted average balance computation
     BalanceCheckpoint(u64, Address, u32), // (dao_id, address, ledger_seq) -> i128
     Guardian,
@@ -1780,12 +1780,7 @@ impl Voting {
     /// Record a balance checkpoint for time-weighted average balance computation.
     /// Called by the token contract when a voter's balance changes.
     /// Stores (dao_id, address, ledger) -> balance for TWAB calculation.
-    pub fn record_balance_checkpoint(
-        env: Env,
-        dao_id: u64,
-        voter: Address,
-        balance: i128,
-    ) {
+    pub fn record_balance_checkpoint(env: Env, dao_id: u64, voter: Address, balance: i128) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
         let ledger = env.ledger().sequence();
@@ -1825,9 +1820,8 @@ impl Voting {
             if let Some(balance) = env.storage().persistent().get::<DataKey, i128>(&cp_key) {
                 if has_data {
                     let duration = (current_ledger - prev_ledger) as u128;
-                    weighted_sum += prev_balance.saturating_mul(
-                        i128::try_from(duration).unwrap_or(i128::MAX),
-                    );
+                    weighted_sum +=
+                        prev_balance.saturating_mul(i128::try_from(duration).unwrap_or(i128::MAX));
                 }
                 prev_balance = balance;
                 prev_ledger = current_ledger;
@@ -1839,9 +1833,8 @@ impl Voting {
         // Add the final segment
         if has_data {
             let final_duration = (end_ledger - prev_ledger) as u128;
-            weighted_sum += prev_balance.saturating_mul(
-                i128::try_from(final_duration).unwrap_or(i128::MAX),
-            );
+            weighted_sum +=
+                prev_balance.saturating_mul(i128::try_from(final_duration).unwrap_or(i128::MAX));
         }
 
         if !has_data {
@@ -1941,25 +1934,22 @@ impl Voting {
                 // If TWAB window is set, use time-weighted average balance
                 if cfg.twab_window > 0 {
                     let snapshot = Self::get_balance_snapshot(env.clone(), dao_id, proposal_id);
-                    match snapshot {
-                        Some(snap) => {
-                            let end_ledger = env.ledger().sequence();
-                            let start_ledger = if end_ledger > snap.snapshot_ledger {
-                                snap.snapshot_ledger
-                            } else {
-                                0
-                            };
-                            if let Some(twab) = Self::get_twab(
-                                env.clone(),
-                                dao_id,
-                                voter.clone(),
-                                start_ledger,
-                                end_ledger,
-                            ) {
-                                return twab >= cfg.min_balance;
-                            }
+                    if let Some(snap) = snapshot {
+                        let end_ledger = env.ledger().sequence();
+                        let start_ledger = if end_ledger > snap.snapshot_ledger {
+                            snap.snapshot_ledger
+                        } else {
+                            0
+                        };
+                        if let Some(twab) = Self::get_twab(
+                            env.clone(),
+                            dao_id,
+                            voter.clone(),
+                            start_ledger,
+                            end_ledger,
+                        ) {
+                            return twab >= cfg.min_balance;
                         }
-                        None => {}
                     }
                     // Fallback: use balance at snapshot (checked against checkpoint)
                     balance_at_snapshot >= cfg.min_balance

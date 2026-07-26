@@ -503,10 +503,7 @@ impl MembershipSbt {
     pub fn is_in_active_election(env: Env, dao_id: u64, member: Address) -> bool {
         Self::bump_instance(&env);
         let key = DataKey::InActiveElection(dao_id, member);
-        env.storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(false)
+        env.storage().persistent().get(&key).unwrap_or(false)
     }
 
     /// Contract version for upgrade tracking.
