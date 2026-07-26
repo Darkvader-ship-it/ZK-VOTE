@@ -177,6 +177,31 @@ fn setup_env_with_registry() -> (Env, Address, Address, Address, Address, Addres
     (env, voting_id, tree_id, sbt_id, registry_id, member)
 }
 
+fn setup_randomness_env() -> (Env, Address, Address, u64, Address, Address) {
+    let (env, voting_id, tree_id, sbt_id, registry_id, first) = setup_env_with_registry();
+    let second = Address::generate(&env);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let voting = VotingClient::new(&env, &voting_id);
+
+    registry.set_admin(&1, &first);
+    sbt.set_member(&1, &first, &true);
+    sbt.set_member(&1, &second, &true);
+    tree.set_root(&1, &U256::from_u32(&env, 12345));
+    voting.set_vk(&1, &create_dummy_vk(&env), &first);
+    let proposal_id = voting.create_proposal(
+        &1,
+        &String::from_str(&env, "Randomized candidates"),
+        &String::from_str(&env, ""),
+        &(env.ledger().timestamp() + 10_000),
+        &first,
+        &VoteMode::Fixed,
+    );
+
+    (env, voting_id, registry_id, proposal_id, first, second)
+}
+
 fn create_dummy_vk(env: &Env) -> VerificationKey {
     let g1 = bn254_g1_generator(env);
     let g2 = bn254_g2_generator(env);
@@ -2736,6 +2761,97 @@ fn test_vote_rejects_zero_nullifier() {
 
     // This should panic with InvalidNullifier
     voting_client.vote(&dao_id, &proposal_id, &true, &zero_nullifier, &root, &proof);
+}
+
+#[test]
+fn test_commit_reveal_finalizes_candidate_seed() {
+    let (env, voting_id, _, proposal_id, first, second) = setup_randomness_env();
+    let voting = VotingClient::new(&env, &voting_id);
+    let first_value = BytesN::from_array(&env, &[1; 32]);
+    let second_value = BytesN::from_array(&env, &[2; 32]);
+
+    voting.set_election_config(&1, &proposal_id, &0, &0);
+    voting.commit_randomness(
+        &1,
+        &proposal_id,
+        &voting.randomness_commitment(&1, &proposal_id, &first, &first_value),
+        &first,
+    );
+    voting.commit_randomness(
+        &1,
+        &proposal_id,
+        &voting.randomness_commitment(&1, &proposal_id, &second, &second_value),
+        &second,
+    );
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += RANDOMNESS_COMMIT_WINDOW;
+    });
+    voting.reveal_randomness(&1, &proposal_id, &first_value, &first);
+    voting.reveal_randomness(&1, &proposal_id, &second_value, &second);
+
+    let seed = voting.finalize_candidate_seed(&1, &proposal_id);
+    assert_eq!(
+        voting.get_candidate_seed(&1, &proposal_id),
+        Some(seed.clone())
+    );
+    assert_eq!(
+        voting
+            .get_election_config(&1, &proposal_id)
+            .unwrap()
+            .candidate_seed,
+        Some(seed)
+    );
+    assert_ne!(
+        voting.candidate_order_key(&1, &proposal_id, &BytesN::from_array(&env, &[3; 32])),
+        voting.candidate_order_key(&1, &proposal_id, &BytesN::from_array(&env, &[4; 32]))
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #35)")]
+fn test_rejects_randomness_reveal_mismatch() {
+    let (env, voting_id, _, proposal_id, first, _) = setup_randomness_env();
+    let voting = VotingClient::new(&env, &voting_id);
+    let committed = BytesN::from_array(&env, &[1; 32]);
+
+    voting.commit_randomness(
+        &1,
+        &proposal_id,
+        &voting.randomness_commitment(&1, &proposal_id, &first, &committed),
+        &first,
+    );
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += RANDOMNESS_COMMIT_WINDOW;
+    });
+    voting.reveal_randomness(
+        &1,
+        &proposal_id,
+        &BytesN::from_array(&env, &[2; 32]),
+        &first,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #37)")]
+fn test_finalization_requires_every_committed_reveal() {
+    let (env, voting_id, _, proposal_id, first, second) = setup_randomness_env();
+    let voting = VotingClient::new(&env, &voting_id);
+    let first_value = BytesN::from_array(&env, &[1; 32]);
+    let second_value = BytesN::from_array(&env, &[2; 32]);
+
+    for (participant, value) in [(&first, &first_value), (&second, &second_value)] {
+        voting.commit_randomness(
+            &1,
+            &proposal_id,
+            &voting.randomness_commitment(&1, &proposal_id, participant, value),
+            participant,
+        );
+    }
+    env.ledger().with_mut(|ledger| {
+        ledger.timestamp += RANDOMNESS_COMMIT_WINDOW;
+    });
+    voting.reveal_randomness(&1, &proposal_id, &first_value, &first);
+    voting.finalize_candidate_seed(&1, &proposal_id);
 }
 
 // === UNTESTED EDGE CASES ===
