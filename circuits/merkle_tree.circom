@@ -21,7 +21,10 @@ template MerkleTreeInclusionProof(levels) {
     currentHash[0] <== leaf;
 
     for (var i = 0; i < levels; i++) {
-        // Ensure pathIndices is binary (0 or 1)
+        // CRITICAL CONSTRAINT: Ensure pathIndices is binary (0 or 1)
+        // Without this, prover could use fractional values to manipulate the proof
+        // Algebraic constraint: v(v-1)=0 only holds for v=0 or v=1
+        // SECURITY: This is essential for Merkle proof soundness
         pathIndices[i] * (pathIndices[i] - 1) === 0;
 
         // Select left and right based on path index
@@ -33,10 +36,12 @@ template MerkleTreeInclusionProof(levels) {
         selectors[i].s <== pathIndices[i];
 
         // Hash the pair using Poseidon
+        // CONSTRAINT: Poseidon hash is deterministic and fully constrains output
         hashers[i] = Poseidon(2);
         hashers[i].inputs[0] <== selectors[i].out[0]; // left
         hashers[i].inputs[1] <== selectors[i].out[1]; // right
 
+        // Propagate hash to next level using constrained assignment (<==)
         currentHash[i + 1] <== hashers[i].out;
     }
 
@@ -44,6 +49,17 @@ template MerkleTreeInclusionProof(levels) {
 }
 
 // Selector: swaps inputs based on selection bit
+// CONSTRAINT ANALYSIS:
+// - When s=0: out[0] = in[0], out[1] = in[1] (no swap)
+// - When s=1: out[0] = in[1], out[1] = in[0] (swap)
+// 
+// Mathematical derivation:
+//   out[0] = (in[1] - in[0]) * s + in[0]
+//          = in[0] + s*(in[1] - in[0])
+//          = in[0]*(1-s) + in[1]*s
+//
+// SECURITY: Relies on s being binary (0 or 1), which is enforced by caller
+// All operations use constrained assignment (<==) for proper constraint
 template Selector() {
     signal input in[2];
     signal input s;
@@ -51,6 +67,7 @@ template Selector() {
 
     // If s == 0: out[0] = in[0], out[1] = in[1]
     // If s == 1: out[0] = in[1], out[1] = in[0]
+    // CONSTRAINED: Using <== ensures these are constrained assignments
     out[0] <== (in[1] - in[0]) * s + in[0];
     out[1] <== (in[0] - in[1]) * s + in[1];
 }
