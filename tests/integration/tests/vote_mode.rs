@@ -8,14 +8,15 @@
 
 use soroban_sdk::Symbol;
 use soroban_sdk::{
-    testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec as SdkVec, U256,
+    testutils::{Address as _, Ledger as _},
+    Address, Bytes, BytesN, Env, String, Vec as SdkVec, U256,
 };
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
 use membership_sbt::MembershipSbtClient;
 use membership_tree::MembershipTreeClient;
-use voting::{Proof, VerificationKey, VoteMode, VotingClient};
+use voting::{Proof, VerificationKey, VoteMode, VotingClient, ELECTION_CREATION_COOLDOWN};
 
 fn setup_contracts(env: &Env) -> (Address, Address, Address, Address, Address) {
     // Deploy contracts
@@ -161,6 +162,8 @@ fn test_trailing_mode_churn_across_parallel_proposals() {
         &member1,
         &VoteMode::Trailing,
     );
+    env.ledger()
+        .with_mut(|li| li.timestamp += ELECTION_CREATION_COOLDOWN);
     let proposal_b = voting_client.create_proposal(
         &dao_id,
         &String::from_str(&env, "B"),

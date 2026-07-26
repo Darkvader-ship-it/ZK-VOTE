@@ -54,6 +54,7 @@ Each proposal can have an `ElectionConfig` that defines:
 | `snapshot_ledger` | `u32` | Ledger sequence at configuration creation |
 | `min_balance` | `i128` | Minimum token balance required to vote |
 | `twab_window` | `u64` | Time window for TWAB computation (0 = disable TWAB) |
+| `candidate_seed` | `Option<BytesN<32>>` | Finalized election randomness used for candidate ordering |
 
 Configured via `set_election_config()` and retrieved via `get_election_config()`.
 
@@ -89,6 +90,33 @@ During an active election, registered voters enter a transfer cooldown that prev
 - `is_in_transfer_cooldown()` is called by token contracts before allowing transfers
 - `leave()` in SBT contract checks cooldown before allowing departure
 - Cooldown is cleared when the election ends via `clear_voter_cooldown()`
+
+## Election Randomness
+
+Stellar has no native VRF oracle, so elections use a multi-party commit-reveal
+protocol to produce a verifiable seed:
+
+1. During the first hour after proposal creation, between two and 32 DAO members
+   commit `SHA-256(dao_id || proposal_id || participant_xdr || secret)`.
+2. During the next hour, each committer authenticates and reveals their
+   32-byte secret. The contract rejects missing, repeated, or mismatched
+   reveals.
+3. Anyone may finalize after the commit window. The contract hashes the
+   election identifiers and every reveal from the fixed on-chain committer
+   list, then stores the result in `ElectionConfig.candidate_seed`.
+4. Candidate ordering is derived by sorting candidates by
+   `SHA-256(candidate_seed || candidate_id)`. Anyone can recompute and verify
+   these order keys.
+
+The election admin cannot provide or filter the reveal list at finalization.
+Every recorded committer must reveal, so an admin cannot choose a favorable
+subset after seeing the values. Domain separation prevents a commitment from
+being reused for another election or participant.
+
+This favors integrity over liveness: a committer who withholds a reveal can
+prevent finalization. Clients should monitor both windows and treat an
+unfinalized seed as a failed randomness round rather than falling back to
+admin-selected or transaction PRNG data.
 
 ## Integration Guide
 

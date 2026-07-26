@@ -9,6 +9,7 @@ members = [
     "contracts/poc-bls12-381",
     "contracts/bridge/soroban",
     "contracts/circuit-registry",
+    "contracts/token",
     "tests/integration",
 ]
 resolver = "2"

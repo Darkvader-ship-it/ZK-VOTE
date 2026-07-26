@@ -28,12 +28,13 @@
 
 #![no_std]
 #![allow(clippy::too_many_arguments)]
+use soroban_sdk::xdr::ToXdr;
 #[allow(unused_imports)]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype,
     crypto::bn254::{Bn254G1Affine, Bn254G2Affine, Fr},
-    panic_with_error, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
-    U256,
+    panic_with_error, symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
+    Vec, U256,
 };
 
 // Re-export shared Groth16 types and utilities
@@ -94,6 +95,19 @@ pub enum VotingError {
     InsufficientSnapshotBalance = 28,
     ContractPaused = 29,
     NotGuardian = 30,
+    RandomnessCommitClosed = 31,
+    RandomnessRevealClosed = 32,
+    RandomnessAlreadyCommitted = 33,
+    RandomnessCommitmentMissing = 34,
+    RandomnessRevealMismatch = 35,
+    CandidateSeedFinalized = 36,
+    InsufficientRandomness = 37,
+    RandomnessAlreadyRevealed = 38,
+    RandomnessParticipantLimit = 39,
+    TooManyActiveProposals = 40,
+    ProposalCooldownActive = 41,
+    InvalidProposalDeposit = 42,
+    ProposalHasVotes = 43,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -111,6 +125,12 @@ const NUM_PUBLIC_SIGNALS: u32 = 5;
 // IC (inner commitment) vector length for Groth16 VK = num_public_inputs + 1
 const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 pub const MAX_PAUSE_DURATION: u64 = 72 * 60 * 60;
+pub const RANDOMNESS_COMMIT_WINDOW: u64 = 3_600;
+pub const RANDOMNESS_REVEAL_WINDOW: u64 = 3_600;
+const MIN_RANDOMNESS_PARTICIPANTS: u32 = 2;
+const MAX_RANDOMNESS_PARTICIPANTS: u32 = 32;
+pub const MAX_CONCURRENT_ELECTIONS: u64 = 20;
+pub const ELECTION_CREATION_COOLDOWN: u64 = 600;
 
 #[contracttype]
 #[derive(Clone)]
@@ -141,6 +161,13 @@ pub enum DataKey {
     Guardian,
     Paused,
     PausedAt,
+    RandomnessCommit(u64, u64, Address),
+    RandomnessReveal(u64, u64, Address),
+    RandomnessCommitters(u64, u64),
+    ActiveProposalCount(u64),
+    ProposalCooldown(u64, Address),
+    DepositConfig(u64),
+    ProposalDeposit(u64, u64),
 }
 
 #[contracttype]
@@ -174,10 +201,18 @@ pub struct BalanceSnapshotInfo {
 
 #[contracttype]
 #[derive(Clone)]
+pub struct ProposalDeposit {
+    pub token: Address,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone)]
 pub struct ElectionConfig {
     pub snapshot_ledger: u32,
     pub min_balance: i128,
     pub twab_window: u64,
+    pub candidate_seed: Option<BytesN<32>>,
 }
 
 #[contracttype]
@@ -258,6 +293,16 @@ pub struct ProposalArchivedEvent {
 
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
+pub struct ProposalDeletedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub deleted_by: Address,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VoteEvent {
     #[topic]
     pub dao_id: u64,
@@ -283,8 +328,38 @@ pub struct ContractPausedEvent {
 
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
+pub struct RandomnessCommittedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub participant: Address,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractUnpausedEvent {
     pub guardian: Address,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RandomnessRevealedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub participant: Address,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CandidateSeedFinalizedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub seed: BytesN<32>,
 }
 
 #[contract]
@@ -583,6 +658,68 @@ impl Voting {
         }
     }
 
+    pub fn set_election_deposit(
+        env: Env,
+        dao_id: u64,
+        token: Address,
+        amount: i128,
+        admin: Address,
+    ) {
+        Self::bump_instance(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
+        if amount <= 0 {
+            panic_with_error!(&env, VotingError::InvalidProposalDeposit);
+        }
+        let key = DataKey::DepositConfig(dao_id);
+        env.storage()
+            .persistent()
+            .set(&key, &ProposalDeposit { token, amount });
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn active_proposal_count(env: Env, dao_id: u64) -> u64 {
+        Self::bump_instance(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::ActiveProposalCount(dao_id))
+            .unwrap_or(0)
+    }
+
+    fn enforce_creation_limits(env: &Env, dao_id: u64, creator: &Address, now: u64) {
+        let active_key = DataKey::ActiveProposalCount(dao_id);
+        let active: u64 = env.storage().instance().get(&active_key).unwrap_or(0);
+        if active >= MAX_CONCURRENT_ELECTIONS {
+            panic_with_error!(env, VotingError::TooManyActiveProposals);
+        }
+
+        let cooldown_key = DataKey::ProposalCooldown(dao_id, creator.clone());
+        let cooldown_end: u64 = env.storage().persistent().get(&cooldown_key).unwrap_or(0);
+        if now < cooldown_end {
+            panic_with_error!(env, VotingError::ProposalCooldownActive);
+        }
+    }
+
+    fn decrement_active_count(env: &Env, dao_id: u64) {
+        let key = DataKey::ActiveProposalCount(dao_id);
+        let active: u64 = env.storage().instance().get(&key).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&key, &active.saturating_sub(1));
+    }
+
+    fn refund_deposit(env: &Env, dao_id: u64, proposal_id: u64, creator: &Address) {
+        let key = DataKey::ProposalDeposit(dao_id, proposal_id);
+        if let Some(deposit) = env.storage().persistent().get::<_, ProposalDeposit>(&key) {
+            token::Client::new(env, &deposit.token).transfer(
+                &env.current_contract_address(),
+                creator,
+                &deposit.amount,
+            );
+            env.storage().persistent().remove(&key);
+        }
+    }
+
     fn validate_vk(env: &Env, vk: &VerificationKey) {
         if vk.ic.len() != VOTE_CIRCUIT_IC_LEN {
             panic_with_error!(env, VotingError::VkIcLengthMismatch);
@@ -801,6 +938,7 @@ impl Voting {
         if end_time != 0 && end_time <= now {
             panic_with_error!(&env, VotingError::EndTimeInvalid);
         }
+        Self::enforce_creation_limits(&env, dao_id, &creator, now);
 
         // Resolve VK version to use (curve-aware)
         let curve_id = Self::get_curve_id(&env, dao_id);
@@ -850,6 +988,23 @@ impl Voting {
         let snapshot_ledger = env.ledger().sequence();
 
         let proposal_id = Self::next_proposal_id(&env, dao_id);
+        let deposit_key = DataKey::DepositConfig(dao_id);
+        if let Some(deposit) = env
+            .storage()
+            .persistent()
+            .get::<_, ProposalDeposit>(&deposit_key)
+        {
+            token::Client::new(&env, &deposit.token).transfer(
+                &creator,
+                env.current_contract_address(),
+                &deposit.amount,
+            );
+            let proposal_deposit_key = DataKey::ProposalDeposit(dao_id, proposal_id);
+            env.storage()
+                .persistent()
+                .set(&proposal_deposit_key, &deposit);
+            Self::bump_persistent(&env, &proposal_deposit_key);
+        }
 
         let proposal = ProposalInfo {
             id: proposal_id,
@@ -878,6 +1033,15 @@ impl Voting {
         let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
         env.storage().persistent().set(&curve_key, &curve_id);
         Self::bump_persistent(&env, &curve_key);
+
+        let active_key = DataKey::ActiveProposalCount(dao_id);
+        let active: u64 = env.storage().instance().get(&active_key).unwrap_or(0);
+        env.storage().instance().set(&active_key, &(active + 1));
+        let cooldown_key = DataKey::ProposalCooldown(dao_id, creator.clone());
+        env.storage()
+            .persistent()
+            .set(&cooldown_key, &(now + ELECTION_CREATION_COOLDOWN));
+        Self::bump_persistent(&env, &cooldown_key);
 
         ProposalEvent {
             dao_id,
@@ -1335,6 +1499,8 @@ impl Voting {
             proposal.state = ProposalState::Closed;
             env.storage().persistent().set(&key, &proposal);
             Self::bump_persistent(&env, &key);
+            Self::decrement_active_count(&env, dao_id);
+            Self::refund_deposit(&env, dao_id, proposal_id, &proposal.created_by);
             ProposalClosedEvent {
                 dao_id,
                 proposal_id,
@@ -1342,6 +1508,46 @@ impl Voting {
             }
             .publish(&env);
         }
+    }
+
+    /// Cancel and delete an unvoted active election, refunding its creation deposit.
+    pub fn delete_election(env: Env, dao_id: u64, proposal_id: u64, admin: Address) {
+        Self::bump_instance(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
+
+        let proposal_key = DataKey::Proposal(dao_id, proposal_id);
+        let proposal: ProposalInfo = env
+            .storage()
+            .persistent()
+            .get(&proposal_key)
+            .expect("proposal not found");
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(&env, VotingError::InvalidState);
+        }
+        if proposal.yes_votes != 0 || proposal.no_votes != 0 {
+            panic_with_error!(&env, VotingError::ProposalHasVotes);
+        }
+
+        Self::decrement_active_count(&env, dao_id);
+        Self::refund_deposit(&env, dao_id, proposal_id, &proposal.created_by);
+        env.storage().persistent().remove(&proposal_key);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::ProposalCurve(dao_id, proposal_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::BalanceSnapshot(dao_id, proposal_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::ElectionConfig(dao_id, proposal_id));
+
+        ProposalDeletedEvent {
+            dao_id,
+            proposal_id,
+            deleted_by: admin,
+        }
+        .publish(&env);
     }
 
     /// Archive a proposal (idempotent). Prevents further votes and signals off-chain cleanup.
@@ -1750,12 +1956,18 @@ impl Voting {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
         let snapshot_ledger = env.ledger().sequence();
+        let key = DataKey::ElectionConfig(dao_id, proposal_id);
+        let candidate_seed = env
+            .storage()
+            .persistent()
+            .get::<_, ElectionConfig>(&key)
+            .and_then(|config| config.candidate_seed);
         let config = ElectionConfig {
             snapshot_ledger,
             min_balance,
             twab_window,
+            candidate_seed,
         };
-        let key = DataKey::ElectionConfig(dao_id, proposal_id);
         env.storage().persistent().set(&key, &config);
         Self::bump_persistent(&env, &key);
     }
@@ -1963,6 +2175,209 @@ impl Voting {
                 true
             }
         }
+    }
+
+    fn randomness_deadlines(env: &Env, dao_id: u64, proposal_id: u64) -> (u64, u64) {
+        let proposal = Self::get_proposal(env.clone(), dao_id, proposal_id);
+        let commit_end = proposal.created_at.saturating_add(RANDOMNESS_COMMIT_WINDOW);
+        (
+            commit_end,
+            commit_end.saturating_add(RANDOMNESS_REVEAL_WINDOW),
+        )
+    }
+
+    fn require_dao_member(env: &Env, dao_id: u64, participant: &Address) {
+        let tree = Self::tree_contract(env.clone());
+        let sbt: Address =
+            env.invoke_contract(&tree, &symbol_short!("sbt_contr"), soroban_sdk::vec![env]);
+        let is_member: bool = env.invoke_contract(
+            &sbt,
+            &symbol_short!("has"),
+            soroban_sdk::vec![env, dao_id.into_val(env), participant.clone().into_val(env)],
+        );
+        if !is_member {
+            panic_with_error!(env, VotingError::NotDaoMember);
+        }
+    }
+
+    pub fn randomness_commitment(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        participant: Address,
+        value: BytesN<32>,
+    ) -> BytesN<32> {
+        let mut input = Bytes::new(&env);
+        input.append(&Bytes::from_array(&env, &dao_id.to_be_bytes()));
+        input.append(&Bytes::from_array(&env, &proposal_id.to_be_bytes()));
+        input.append(&participant.to_xdr(&env));
+        input.append(&Bytes::from_array(&env, &value.to_array()));
+        env.crypto().sha256(&input).into()
+    }
+
+    pub fn commit_randomness(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        commitment: BytesN<32>,
+        participant: Address,
+    ) {
+        Self::bump_instance(&env);
+        participant.require_auth();
+        Self::require_dao_member(&env, dao_id, &participant);
+        let (commit_end, _) = Self::randomness_deadlines(&env, dao_id, proposal_id);
+        if env.ledger().timestamp() >= commit_end {
+            panic_with_error!(&env, VotingError::RandomnessCommitClosed);
+        }
+
+        let key = DataKey::RandomnessCommit(dao_id, proposal_id, participant.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, VotingError::RandomnessAlreadyCommitted);
+        }
+        let committers_key = DataKey::RandomnessCommitters(dao_id, proposal_id);
+        let mut committers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&committers_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if committers.len() >= MAX_RANDOMNESS_PARTICIPANTS {
+            panic_with_error!(&env, VotingError::RandomnessParticipantLimit);
+        }
+
+        env.storage().persistent().set(&key, &commitment);
+        Self::bump_persistent(&env, &key);
+        committers.push_back(participant.clone());
+        env.storage().persistent().set(&committers_key, &committers);
+        Self::bump_persistent(&env, &committers_key);
+
+        RandomnessCommittedEvent {
+            dao_id,
+            proposal_id,
+            participant,
+        }
+        .publish(&env);
+    }
+
+    pub fn reveal_randomness(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        value: BytesN<32>,
+        participant: Address,
+    ) {
+        Self::bump_instance(&env);
+        participant.require_auth();
+        let (commit_end, reveal_end) = Self::randomness_deadlines(&env, dao_id, proposal_id);
+        let now = env.ledger().timestamp();
+        if now < commit_end || now >= reveal_end {
+            panic_with_error!(&env, VotingError::RandomnessRevealClosed);
+        }
+
+        let commit_key = DataKey::RandomnessCommit(dao_id, proposal_id, participant.clone());
+        let commitment: BytesN<32> = env
+            .storage()
+            .persistent()
+            .get(&commit_key)
+            .unwrap_or_else(|| panic_with_error!(&env, VotingError::RandomnessCommitmentMissing));
+        if commitment
+            != Self::randomness_commitment(
+                env.clone(),
+                dao_id,
+                proposal_id,
+                participant.clone(),
+                value.clone(),
+            )
+        {
+            panic_with_error!(&env, VotingError::RandomnessRevealMismatch);
+        }
+
+        let reveal_key = DataKey::RandomnessReveal(dao_id, proposal_id, participant.clone());
+        if env.storage().persistent().has(&reveal_key) {
+            panic_with_error!(&env, VotingError::RandomnessAlreadyRevealed);
+        }
+        env.storage().persistent().set(&reveal_key, &value);
+        Self::bump_persistent(&env, &reveal_key);
+
+        RandomnessRevealedEvent {
+            dao_id,
+            proposal_id,
+            participant,
+        }
+        .publish(&env);
+    }
+
+    pub fn finalize_candidate_seed(env: Env, dao_id: u64, proposal_id: u64) -> BytesN<32> {
+        Self::bump_instance(&env);
+        let (commit_end, _) = Self::randomness_deadlines(&env, dao_id, proposal_id);
+        if env.ledger().timestamp() < commit_end {
+            panic_with_error!(&env, VotingError::RandomnessCommitClosed);
+        }
+
+        let config_key = DataKey::ElectionConfig(dao_id, proposal_id);
+        let mut config: ElectionConfig =
+            env.storage()
+                .persistent()
+                .get(&config_key)
+                .unwrap_or(ElectionConfig {
+                    snapshot_ledger: env.ledger().sequence(),
+                    min_balance: 0,
+                    twab_window: 0,
+                    candidate_seed: None,
+                });
+        if config.candidate_seed.is_some() {
+            panic_with_error!(&env, VotingError::CandidateSeedFinalized);
+        }
+        let committers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RandomnessCommitters(dao_id, proposal_id))
+            .unwrap_or_else(|| Vec::new(&env));
+        if committers.len() < MIN_RANDOMNESS_PARTICIPANTS {
+            panic_with_error!(&env, VotingError::InsufficientRandomness);
+        }
+
+        let mut input = Bytes::new(&env);
+        input.append(&Bytes::from_array(&env, &dao_id.to_be_bytes()));
+        input.append(&Bytes::from_array(&env, &proposal_id.to_be_bytes()));
+        for participant in committers.iter() {
+            let reveal: BytesN<32> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::RandomnessReveal(dao_id, proposal_id, participant))
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::InsufficientRandomness));
+            input.append(&Bytes::from_array(&env, &reveal.to_array()));
+        }
+
+        let seed: BytesN<32> = env.crypto().sha256(&input).into();
+        config.candidate_seed = Some(seed.clone());
+        env.storage().persistent().set(&config_key, &config);
+        Self::bump_persistent(&env, &config_key);
+
+        CandidateSeedFinalizedEvent {
+            dao_id,
+            proposal_id,
+            seed: seed.clone(),
+        }
+        .publish(&env);
+        seed
+    }
+
+    pub fn get_candidate_seed(env: Env, dao_id: u64, proposal_id: u64) -> Option<BytesN<32>> {
+        Self::get_election_config(env, dao_id, proposal_id).and_then(|config| config.candidate_seed)
+    }
+
+    pub fn candidate_order_key(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        candidate: BytesN<32>,
+    ) -> BytesN<32> {
+        let seed = Self::get_candidate_seed(env.clone(), dao_id, proposal_id)
+            .unwrap_or_else(|| panic_with_error!(&env, VotingError::RandomnessCommitmentMissing));
+        let mut input = Bytes::new(&env);
+        input.append(&Bytes::from_array(&env, &seed.to_array()));
+        input.append(&Bytes::from_array(&env, &candidate.to_array()));
+        env.crypto().sha256(&input).into()
     }
 }
 
