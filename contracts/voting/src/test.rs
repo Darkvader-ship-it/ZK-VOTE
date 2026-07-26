@@ -2890,7 +2890,7 @@ fn test_guardian_can_pause_and_unpause() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #32)")]
+#[should_panic(expected = "Error(Contract, #41)")]
 fn test_proposal_creation_cooldown_enforced() {
     let (env, voting_id, _, _, _, creator) = setup_proposal_env();
     let client = VotingClient::new(&env, &voting_id);
@@ -2951,7 +2951,7 @@ fn test_non_guardian_cannot_pause() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #31)")]
+#[should_panic(expected = "Error(Contract, #40)")]
 fn test_concurrent_proposal_limit_enforced() {
     let (env, voting_id, _, sbt_id, _, _) = setup_proposal_env();
     let client = VotingClient::new(&env, &voting_id);
