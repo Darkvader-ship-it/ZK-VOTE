@@ -92,6 +92,8 @@ pub enum VotingError {
     TransferCooldownActive = 27,
     /// Balance at snapshot time is below minimum required for token-gated voting
     InsufficientSnapshotBalance = 28,
+    ContractPaused = 29,
+    NotGuardian = 30,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -108,6 +110,7 @@ const MAX_CID_LEN: u32 = 64; // Max IPFS CID length (CIDv1 is ~59 chars)
 const NUM_PUBLIC_SIGNALS: u32 = 5;
 // IC (inner commitment) vector length for Groth16 VK = num_public_inputs + 1
 const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
+pub const MAX_PAUSE_DURATION: u64 = 72 * 60 * 60;
 
 #[contracttype]
 #[derive(Clone)]
@@ -135,6 +138,9 @@ pub enum DataKey {
     TransferCooldown(u64, Address), // (dao_id, voter_address) -> u64 (cooldown end timestamp)
     /// Balance checkpoint for time-weighted average balance computation
     BalanceCheckpoint(u64, Address, u32), // (dao_id, address, ledger_seq) -> i128
+    Guardian,
+    Paused,
+    PausedAt,
 }
 
 #[contracttype]
@@ -268,6 +274,19 @@ pub struct ContractUpgraded {
     pub to: u32,
 }
 
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractPausedEvent {
+    pub guardian: Address,
+    pub paused_at: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractUnpausedEvent {
+    pub guardian: Address,
+}
+
 #[contract]
 pub struct Voting;
 
@@ -286,7 +305,7 @@ impl Voting {
     }
 
     /// Constructor: Initialize contract with MembershipTree address
-    pub fn __constructor(env: Env, tree_contract: Address, registry: Address) {
+    pub fn __constructor(env: Env, tree_contract: Address, registry: Address, guardian: Address) {
         // Prevent accidental re-initialization
         if env.storage().instance().has(&VERSION_KEY) {
             panic_with_error!(&env, VotingError::AlreadyInitialized);
@@ -303,6 +322,96 @@ impl Voting {
         env.storage().instance().set(&TREE_CONTRACT, &tree_contract);
         // Cache registry address to reduce cross-contract call chain from 3 to 1
         env.storage().instance().set(&REGISTRY, &registry);
+        env.storage().instance().set(&DataKey::Guardian, &guardian);
+    }
+
+    fn require_guardian(env: &Env, guardian: &Address) {
+        let configured: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardian)
+            .unwrap_or_else(|| panic_with_error!(env, VotingError::NotGuardian));
+        if &configured != guardian {
+            panic_with_error!(env, VotingError::NotGuardian);
+        }
+    }
+
+    fn require_not_paused(env: &Env) {
+        if !env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let paused_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PausedAt)
+            .unwrap_or(0);
+        if env.ledger().timestamp() >= paused_at.saturating_add(MAX_PAUSE_DURATION) {
+            env.storage().instance().set(&DataKey::Paused, &false);
+            let guardian: Address = env.storage().instance().get(&DataKey::Guardian).unwrap();
+            ContractUnpausedEvent { guardian }.publish(env);
+            return;
+        }
+        panic_with_error!(env, VotingError::ContractPaused);
+    }
+
+    pub fn set_guardian(env: Env, current_guardian: Address, new_guardian: Address) {
+        Self::bump_instance(&env);
+        current_guardian.require_auth();
+        Self::require_guardian(&env, &current_guardian);
+        env.storage()
+            .instance()
+            .set(&DataKey::Guardian, &new_guardian);
+    }
+
+    pub fn guardian(env: Env) -> Address {
+        Self::bump_instance(&env);
+        env.storage().instance().get(&DataKey::Guardian).unwrap()
+    }
+
+    pub fn pause(env: Env, guardian: Address) {
+        Self::bump_instance(&env);
+        guardian.require_auth();
+        Self::require_guardian(&env, &guardian);
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, VotingError::ContractPaused);
+        }
+        let paused_at = env.ledger().timestamp();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage().instance().set(&DataKey::PausedAt, &paused_at);
+        ContractPausedEvent {
+            guardian,
+            paused_at,
+        }
+        .publish(&env);
+    }
+
+    pub fn unpause(env: Env, guardian: Address) {
+        Self::bump_instance(&env);
+        guardian.require_auth();
+        Self::require_guardian(&env, &guardian);
+        env.storage().instance().set(&DataKey::Paused, &false);
+        ContractUnpausedEvent { guardian }.publish(&env);
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        Self::bump_instance(&env);
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        let paused_at: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PausedAt)
+            .unwrap_or(0);
+        paused && env.ledger().timestamp() < paused_at.saturating_add(MAX_PAUSE_DURATION)
     }
 
     /// Validate that a U256 value is within the BN254 scalar field (< r)
@@ -331,6 +440,7 @@ impl Voting {
     /// Set verification key for a DAO (admin only)
     pub fn set_vk(env: Env, dao_id: u64, vk: VerificationKey, admin: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         admin.require_auth();
         Self::assert_admin(&env, dao_id, &admin);
         // Validate VK size to prevent DoS attacks
@@ -413,6 +523,7 @@ impl Voting {
     /// Set BLS12-381 verification key for a DAO (admin only)
     pub fn set_vk_bls381(env: Env, dao_id: u64, vk: VerificationKeyBls381, admin: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         admin.require_auth();
         Self::assert_admin(&env, dao_id, &admin);
         Self::validate_vk_bls381(&env, &vk);
@@ -511,6 +622,7 @@ impl Voting {
         let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
         registry.require_auth();
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         Self::validate_vk(&env, &vk);
 
         // Bump VK version
@@ -531,6 +643,7 @@ impl Voting {
         let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
         registry.require_auth();
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         Self::validate_vk_bls381(&env, &vk);
 
         // Store curve ID
@@ -619,6 +732,7 @@ impl Voting {
         vk_version: Option<u32>,
     ) -> u64 {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         creator.require_auth();
 
         // Validate title length to prevent DoS
@@ -830,6 +944,7 @@ impl Voting {
         proof: Proof,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         // SECURITY: Validate public signals are within BN254 scalar field FIRST
         // This prevents modular reduction attacks where values >= r verify identically
         // to their reduced equivalents but are stored as different keys.
@@ -998,6 +1113,7 @@ impl Voting {
         proof: ProofBls381,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         Self::assert_in_field_bls381(&env, &nullifier);
         Self::assert_in_field_bls381(&env, &root);
 
@@ -1202,6 +1318,7 @@ impl Voting {
     /// Close a proposal explicitly (idempotent). End time still enforced in vote.
     pub fn close_proposal(env: Env, dao_id: u64, proposal_id: u64, admin: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         admin.require_auth();
         Self::assert_admin(&env, dao_id, &admin);
         let key = DataKey::Proposal(dao_id, proposal_id);
@@ -1230,6 +1347,7 @@ impl Voting {
     /// Archive a proposal (idempotent). Prevents further votes and signals off-chain cleanup.
     pub fn archive_proposal(env: Env, dao_id: u64, proposal_id: u64, admin: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         admin.require_auth();
         Self::assert_admin(&env, dao_id, &admin);
         let key = DataKey::Proposal(dao_id, proposal_id);
@@ -1371,6 +1489,7 @@ impl Voting {
     }
 
     pub fn set_circuit_registry(env: Env, circuit_registry: Address) {
+        Self::require_not_paused(&env);
         env.storage()
             .instance()
             .set(&CIRCUIT_REGISTRY, &circuit_registry);
@@ -1383,6 +1502,7 @@ impl Voting {
         _circuit_type: CircuitType,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
         registry.require_auth();
         let key = DataKey::DaoCurrentCircuit(dao_id);
@@ -1407,6 +1527,7 @@ impl Voting {
         deadline: u64,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         let registry: Address = env.storage().instance().get(&REGISTRY).unwrap();
         registry.require_auth();
         let migration = MigrationInfo {
@@ -1477,6 +1598,7 @@ impl Voting {
         circuit_id: String,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         Self::assert_in_field(&env, &nullifier);
         Self::assert_in_field(&env, &root);
 
@@ -1626,6 +1748,7 @@ impl Voting {
         twab_window: u64,
     ) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         let snapshot_ledger = env.ledger().sequence();
         let config = ElectionConfig {
             snapshot_ledger,
@@ -1659,6 +1782,7 @@ impl Voting {
     /// Stores (dao_id, address, ledger) -> balance for TWAB calculation.
     pub fn record_balance_checkpoint(env: Env, dao_id: u64, voter: Address, balance: i128) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         let ledger = env.ledger().sequence();
         let key = DataKey::BalanceCheckpoint(dao_id, voter.clone(), ledger);
         env.storage().persistent().set(&key, &balance);
@@ -1726,6 +1850,7 @@ impl Voting {
     /// Called automatically when a voter registers or votes in a token-gated election.
     pub fn set_voter_cooldown(env: Env, dao_id: u64, voter: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         // Cooldown lasts until the current proposal ends (max 7 days from now)
         let cooldown_end = env.ledger().timestamp() + 604800; // 7 days
         let key = DataKey::TransferCooldown(dao_id, voter);
@@ -1736,6 +1861,7 @@ impl Voting {
     /// Clear a voter's transfer cooldown after an election ends.
     pub fn clear_voter_cooldown(env: Env, dao_id: u64, voter: Address) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         let key = DataKey::TransferCooldown(dao_id, voter);
         env.storage().persistent().remove(&key);
     }
@@ -1758,6 +1884,7 @@ impl Voting {
     /// Called during proposal creation when token-gating is configured.
     pub fn create_balance_snapshot(env: Env, dao_id: u64, proposal_id: u64) {
         Self::bump_instance(&env);
+        Self::require_not_paused(&env);
         let snapshot = BalanceSnapshotInfo {
             snapshot_ledger: env.ledger().sequence(),
             timestamp: env.ledger().timestamp(),
@@ -1807,25 +1934,22 @@ impl Voting {
                 // If TWAB window is set, use time-weighted average balance
                 if cfg.twab_window > 0 {
                     let snapshot = Self::get_balance_snapshot(env.clone(), dao_id, proposal_id);
-                    match snapshot {
-                        Some(snap) => {
-                            let end_ledger = env.ledger().sequence();
-                            let start_ledger = if end_ledger > snap.snapshot_ledger {
-                                snap.snapshot_ledger
-                            } else {
-                                0
-                            };
-                            if let Some(twab) = Self::get_twab(
-                                env.clone(),
-                                dao_id,
-                                voter.clone(),
-                                start_ledger,
-                                end_ledger,
-                            ) {
-                                return twab >= cfg.min_balance;
-                            }
+                    if let Some(snap) = snapshot {
+                        let end_ledger = env.ledger().sequence();
+                        let start_ledger = if end_ledger > snap.snapshot_ledger {
+                            snap.snapshot_ledger
+                        } else {
+                            0
+                        };
+                        if let Some(twab) = Self::get_twab(
+                            env.clone(),
+                            dao_id,
+                            voter.clone(),
+                            start_ledger,
+                            end_ledger,
+                        ) {
+                            return twab >= cfg.min_balance;
                         }
-                        None => {}
                     }
                     // Fallback: use balance at snapshot (checked against checkpoint)
                     balance_at_snapshot >= cfg.min_balance

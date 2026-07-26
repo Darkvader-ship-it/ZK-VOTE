@@ -55,7 +55,11 @@ fn setup(
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let registry = DaoRegistryClient::new(env, &registry_id);
     let sbt = MembershipSbtClient::new(env, &sbt_id);
@@ -128,7 +132,11 @@ fn budget_set_vk_within_limit() {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let registry = DaoRegistryClient::new(&env, &registry_id);
     let tree = MembershipTreeClient::new(&env, &tree_id);
