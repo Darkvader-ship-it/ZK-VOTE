@@ -126,6 +126,20 @@ try {
 }
 ```
 
+## Token Errors
+
+| Code | Name | Description | Common Cause |
+|------|------|-------------|--------------|
+| 1 | `AlreadyInitialized` | Contract already initialized | Constructor called twice |
+| 2 | `InsufficientBalance` | Not enough tokens to transfer/burn | Check sender balance |
+| 3 | `InsufficientAllowance` | Spender has insufficient allowance | Check allowance or increase it |
+| 4 | `Unauthorized` | Caller not authorized for action | Use correct signer |
+| 5 | `InvalidAmount` | Amount cannot be negative | Pass non-negative amount |
+| 6 | `Overflow` | Arithmetic overflow in add/sub | Allowance near i128::MAX |
+| 7 | `AllowanceRaceRejected` | `approve` rejected non-zero to different non-zero | Use `increase_allowance` / `decrease_allowance` |
+| 8 | `NotAdmin` | Caller is not the token admin | Use admin account |
+| 9 | `NegativeAllowance` | Negative amount passed to increase/decrease | Pass non-negative amount |
+
 ### Backend (Node.js)
 
 ```typescript
