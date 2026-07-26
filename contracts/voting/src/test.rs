@@ -3339,4 +3339,3 @@ fn test_voting_after_end_time_outside_tolerance_fails() {
         &proof,
     );
 }
-
