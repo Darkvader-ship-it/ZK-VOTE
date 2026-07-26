@@ -1,0 +1,27 @@
+{
+  "name": "zkvote-ceremony",
+  "version": "1.0.0",
+  "description": "Multi-Party Computation ceremony for ZK-VOTE trusted setup",
+  "main": "coordinator.js",
+  "scripts": {
+    "coordinator": "node coordinator.js",
+    "contribute:download": "node contribute.js download",
+    "contribute:generate": "node contribute.js generate",
+    "contribute:upload": "node contribute.js upload",
+    "verify:ceremony": "node verify-ceremony.js",
+    "verify:extract": "node verify-ceremony.js extract",
+    "beacon": "node random-beacon.js",
+    "test:ceremony": "node test-ceremony.js"
+  },
+  "keywords": ["zk", "groth16", "trusted-setup", "mpc"],
+  "author": "ZK-VOTE Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "snarkjs": "^0.7.0",
+    "express": "^4.18.2",
+    "bitcoin-core": "^4.0.0",
+    "chalk": "^5.3.0",
+    "axios": "^1.6.0",
+    "commander": "^11.1.0"
+  }
+}
