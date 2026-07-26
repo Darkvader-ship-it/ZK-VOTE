@@ -33,8 +33,8 @@ use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype,
     crypto::bn254::{Bn254G1Affine, Bn254G2Affine, Fr},
-    panic_with_error, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
-    U256,
+    panic_with_error, symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
+    Vec, U256,
 };
 
 // Re-export shared Groth16 types and utilities
@@ -104,6 +104,10 @@ pub enum VotingError {
     InsufficientRandomness = 37,
     RandomnessAlreadyRevealed = 38,
     RandomnessParticipantLimit = 39,
+    TooManyActiveProposals = 40,
+    ProposalCooldownActive = 41,
+    InvalidProposalDeposit = 42,
+    ProposalHasVotes = 43,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -125,6 +129,8 @@ pub const RANDOMNESS_COMMIT_WINDOW: u64 = 3_600;
 pub const RANDOMNESS_REVEAL_WINDOW: u64 = 3_600;
 const MIN_RANDOMNESS_PARTICIPANTS: u32 = 2;
 const MAX_RANDOMNESS_PARTICIPANTS: u32 = 32;
+pub const MAX_CONCURRENT_ELECTIONS: u64 = 20;
+pub const ELECTION_CREATION_COOLDOWN: u64 = 600;
 
 #[contracttype]
 #[derive(Clone)]
@@ -158,6 +164,10 @@ pub enum DataKey {
     RandomnessCommit(u64, u64, Address),
     RandomnessReveal(u64, u64, Address),
     RandomnessCommitters(u64, u64),
+    ActiveProposalCount(u64),
+    ProposalCooldown(u64, Address),
+    DepositConfig(u64),
+    ProposalDeposit(u64, u64),
 }
 
 #[contracttype]
@@ -187,6 +197,13 @@ pub struct CircuitVKResult {
 pub struct BalanceSnapshotInfo {
     pub snapshot_ledger: u32,
     pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct ProposalDeposit {
+    pub token: Address,
+    pub amount: i128,
 }
 
 #[contracttype]
@@ -272,6 +289,16 @@ pub struct ProposalArchivedEvent {
     #[topic]
     pub proposal_id: u64,
     pub archived_by: Address,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProposalDeletedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub deleted_by: Address,
 }
 
 #[soroban_sdk::contractevent]
@@ -631,6 +658,68 @@ impl Voting {
         }
     }
 
+    pub fn set_election_deposit(
+        env: Env,
+        dao_id: u64,
+        token: Address,
+        amount: i128,
+        admin: Address,
+    ) {
+        Self::bump_instance(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
+        if amount <= 0 {
+            panic_with_error!(&env, VotingError::InvalidProposalDeposit);
+        }
+        let key = DataKey::DepositConfig(dao_id);
+        env.storage()
+            .persistent()
+            .set(&key, &ProposalDeposit { token, amount });
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn active_proposal_count(env: Env, dao_id: u64) -> u64 {
+        Self::bump_instance(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::ActiveProposalCount(dao_id))
+            .unwrap_or(0)
+    }
+
+    fn enforce_creation_limits(env: &Env, dao_id: u64, creator: &Address, now: u64) {
+        let active_key = DataKey::ActiveProposalCount(dao_id);
+        let active: u64 = env.storage().instance().get(&active_key).unwrap_or(0);
+        if active >= MAX_CONCURRENT_ELECTIONS {
+            panic_with_error!(env, VotingError::TooManyActiveProposals);
+        }
+
+        let cooldown_key = DataKey::ProposalCooldown(dao_id, creator.clone());
+        let cooldown_end: u64 = env.storage().persistent().get(&cooldown_key).unwrap_or(0);
+        if now < cooldown_end {
+            panic_with_error!(env, VotingError::ProposalCooldownActive);
+        }
+    }
+
+    fn decrement_active_count(env: &Env, dao_id: u64) {
+        let key = DataKey::ActiveProposalCount(dao_id);
+        let active: u64 = env.storage().instance().get(&key).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&key, &active.saturating_sub(1));
+    }
+
+    fn refund_deposit(env: &Env, dao_id: u64, proposal_id: u64, creator: &Address) {
+        let key = DataKey::ProposalDeposit(dao_id, proposal_id);
+        if let Some(deposit) = env.storage().persistent().get::<_, ProposalDeposit>(&key) {
+            token::Client::new(env, &deposit.token).transfer(
+                &env.current_contract_address(),
+                creator,
+                &deposit.amount,
+            );
+            env.storage().persistent().remove(&key);
+        }
+    }
+
     fn validate_vk(env: &Env, vk: &VerificationKey) {
         if vk.ic.len() != VOTE_CIRCUIT_IC_LEN {
             panic_with_error!(env, VotingError::VkIcLengthMismatch);
@@ -849,6 +938,7 @@ impl Voting {
         if end_time != 0 && end_time <= now {
             panic_with_error!(&env, VotingError::EndTimeInvalid);
         }
+        Self::enforce_creation_limits(&env, dao_id, &creator, now);
 
         // Resolve VK version to use (curve-aware)
         let curve_id = Self::get_curve_id(&env, dao_id);
@@ -898,6 +988,23 @@ impl Voting {
         let snapshot_ledger = env.ledger().sequence();
 
         let proposal_id = Self::next_proposal_id(&env, dao_id);
+        let deposit_key = DataKey::DepositConfig(dao_id);
+        if let Some(deposit) = env
+            .storage()
+            .persistent()
+            .get::<_, ProposalDeposit>(&deposit_key)
+        {
+            token::Client::new(&env, &deposit.token).transfer(
+                &creator,
+                env.current_contract_address(),
+                &deposit.amount,
+            );
+            let proposal_deposit_key = DataKey::ProposalDeposit(dao_id, proposal_id);
+            env.storage()
+                .persistent()
+                .set(&proposal_deposit_key, &deposit);
+            Self::bump_persistent(&env, &proposal_deposit_key);
+        }
 
         let proposal = ProposalInfo {
             id: proposal_id,
@@ -926,6 +1033,15 @@ impl Voting {
         let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
         env.storage().persistent().set(&curve_key, &curve_id);
         Self::bump_persistent(&env, &curve_key);
+
+        let active_key = DataKey::ActiveProposalCount(dao_id);
+        let active: u64 = env.storage().instance().get(&active_key).unwrap_or(0);
+        env.storage().instance().set(&active_key, &(active + 1));
+        let cooldown_key = DataKey::ProposalCooldown(dao_id, creator.clone());
+        env.storage()
+            .persistent()
+            .set(&cooldown_key, &(now + ELECTION_CREATION_COOLDOWN));
+        Self::bump_persistent(&env, &cooldown_key);
 
         ProposalEvent {
             dao_id,
@@ -1383,6 +1499,8 @@ impl Voting {
             proposal.state = ProposalState::Closed;
             env.storage().persistent().set(&key, &proposal);
             Self::bump_persistent(&env, &key);
+            Self::decrement_active_count(&env, dao_id);
+            Self::refund_deposit(&env, dao_id, proposal_id, &proposal.created_by);
             ProposalClosedEvent {
                 dao_id,
                 proposal_id,
@@ -1390,6 +1508,46 @@ impl Voting {
             }
             .publish(&env);
         }
+    }
+
+    /// Cancel and delete an unvoted active election, refunding its creation deposit.
+    pub fn delete_election(env: Env, dao_id: u64, proposal_id: u64, admin: Address) {
+        Self::bump_instance(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
+
+        let proposal_key = DataKey::Proposal(dao_id, proposal_id);
+        let proposal: ProposalInfo = env
+            .storage()
+            .persistent()
+            .get(&proposal_key)
+            .expect("proposal not found");
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(&env, VotingError::InvalidState);
+        }
+        if proposal.yes_votes != 0 || proposal.no_votes != 0 {
+            panic_with_error!(&env, VotingError::ProposalHasVotes);
+        }
+
+        Self::decrement_active_count(&env, dao_id);
+        Self::refund_deposit(&env, dao_id, proposal_id, &proposal.created_by);
+        env.storage().persistent().remove(&proposal_key);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::ProposalCurve(dao_id, proposal_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::BalanceSnapshot(dao_id, proposal_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::ElectionConfig(dao_id, proposal_id));
+
+        ProposalDeletedEvent {
+            dao_id,
+            proposal_id,
+            deleted_by: admin,
+        }
+        .publish(&env);
     }
 
     /// Archive a proposal (idempotent). Prevents further votes and signals off-chain cleanup.
