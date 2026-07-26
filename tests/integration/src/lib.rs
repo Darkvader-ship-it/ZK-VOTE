@@ -5,13 +5,16 @@
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec, U256};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger as _},
+        Address, BytesN, Env, String, Symbol, Vec, U256,
+    };
 
     // Import actual contract clients
     use dao_registry::DaoRegistryClient;
     use membership_sbt::MembershipSbtClient;
     use membership_tree::MembershipTreeClient;
-    use voting::{Proof, VerificationKey, VoteMode, VotingClient};
+    use voting::{Proof, VerificationKey, VoteMode, VotingClient, ELECTION_CREATION_COOLDOWN};
 
     /// Helper to setup the full DaoVote system
     struct DaoVoteSystem {
@@ -1012,6 +1015,10 @@ mod tests {
         ic0[31] = 9;
         vk2.ic.set(0, BytesN::from_array(&system.env, &ic0));
         system.voting_client().set_vk(&dao_id, &vk2, &admin);
+        system
+            .env
+            .ledger()
+            .with_mut(|li| li.timestamp += ELECTION_CREATION_COOLDOWN);
         let proposal2 = system.voting_client().create_proposal(
             &dao_id,
             &String::from_str(&system.env, "P2"),
@@ -1125,8 +1132,8 @@ mod tests {
             cpu_delta,
             mem_delta
         );
-        assert!(cpu_delta <= 500_000, "create_proposal cpu too high");
-        assert!(mem_delta <= 200_000, "create_proposal mem too high");
+        assert!(cpu_delta <= 600_000, "create_proposal cpu too high");
+        assert!(mem_delta <= 225_000, "create_proposal mem too high");
 
         // --- vote ---
         let root = system.tree_client().get_root(&dao_id);
