@@ -78,8 +78,8 @@ pub fn is_g1_point_canonical_bn254(env: &Env, point: &BytesN<64>) -> bool {
     // Extract y-coordinate (bytes 32-63)
     let point_bytes = point.to_bytes();
     let mut y_bytes_array = [0u8; 32];
-    for i in 0..32 {
-        y_bytes_array[i] = point_bytes.get((32 + i) as u32).unwrap_or(0);
+    for (i, item) in y_bytes_array.iter_mut().enumerate() {
+        *item = point_bytes.get((32 + i) as u32).unwrap_or(0);
     }
 
     // Compare y with (p-1)/2
@@ -138,9 +138,7 @@ pub fn canonicalize_g1_point_bn254(env: &Env, point: &BytesN<64>) -> BytesN<64> 
 
     // Concatenate x || y_neg
     let mut result = [0u8; 64];
-    for i in 0..32 {
-        result[i] = x_bytes[i];
-    }
+    result[..32].copy_from_slice(&x_bytes);
     for i in 0..32 {
         result[32 + i] = y_neg_bytes.get(i as u32).unwrap_or(0);
     }
@@ -231,8 +229,8 @@ pub fn is_g1_point_canonical_bls381(_env: &Env, point: &BytesN<96>) -> bool {
     // Extract y-coordinate (bytes 48-95)
     let point_bytes = point.to_bytes();
     let mut y_bytes = [0u8; 48];
-    for i in 0..48 {
-        y_bytes[i] = point_bytes.get((48 + i) as u32).unwrap_or(0);
+    for (i, item) in y_bytes.iter_mut().enumerate() {
+        *item = point_bytes.get((48 + i) as u32).unwrap_or(0);
     }
 
     // BLS12-381 uses 48-byte field elements
