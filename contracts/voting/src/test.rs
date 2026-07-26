@@ -161,7 +161,8 @@ fn setup_env_with_registry() -> (Env, Address, Address, Address, Address, Addres
     let sbt_id = env.register(mock_sbt::MockSbt, ());
     let tree_id = env.register(mock_tree::MockTree, ());
     // Pass both tree_id and registry_id to constructor (registry cached to reduce cross-contract calls)
-    let voting_id = env.register(Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(Voting, (tree_id.clone(), registry_id.clone(), guardian));
 
     // Link tree to sbt
     let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
@@ -285,11 +286,16 @@ fn test_constructor() {
 
     let registry_id = env.register(mock_registry::MockRegistry, ());
     let tree_id = env.register(mock_tree::MockTree, ());
-    let voting_id = env.register(Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(
+        Voting,
+        (tree_id.clone(), registry_id.clone(), guardian.clone()),
+    );
     let client = VotingClient::new(&env, &voting_id);
 
     assert_eq!(client.tree_contract(), tree_id);
     assert_eq!(client.registry(), registry_id);
+    assert_eq!(client.guardian(), guardian);
 }
 
 #[test]
@@ -2738,3 +2744,51 @@ fn test_vote_rejects_zero_nullifier() {
 // - TTL expiration and data recovery
 // - Cross-contract partial failure rollback in create_and_init_dao
 // - Concurrent DAO creation in same ledger
+
+#[test]
+fn test_guardian_can_pause_and_unpause() {
+    let (env, voting_id, _, _, _, _) = setup_env_with_registry();
+    let client = VotingClient::new(&env, &voting_id);
+    let guardian = client.guardian();
+
+    client.pause(&guardian);
+    assert!(client.is_paused());
+    client.unpause(&guardian);
+    assert!(!client.is_paused());
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #29)")]
+fn test_pause_blocks_writes_but_allows_reads() {
+    let (env, voting_id, _, _, registry_id, admin) = setup_env_with_registry();
+    let client = VotingClient::new(&env, &voting_id);
+    mock_registry::MockRegistryClient::new(&env, &registry_id).set_admin(&1, &admin);
+    let guardian = client.guardian();
+
+    client.pause(&guardian);
+    assert!(client.is_paused());
+    assert_eq!(client.proposal_count(&1), 0);
+    client.set_vk(&1, &create_dummy_vk(&env), &admin);
+}
+
+#[test]
+fn test_pause_expires_after_max_duration() {
+    let (env, voting_id, _, _, registry_id, admin) = setup_env_with_registry();
+    let client = VotingClient::new(&env, &voting_id);
+    mock_registry::MockRegistryClient::new(&env, &registry_id).set_admin(&1, &admin);
+    let guardian = client.guardian();
+
+    client.pause(&guardian);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + MAX_PAUSE_DURATION);
+
+    assert!(!client.is_paused());
+    client.set_vk(&1, &create_dummy_vk(&env), &admin);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #30)")]
+fn test_non_guardian_cannot_pause() {
+    let (env, voting_id, _, _, _, _) = setup_env_with_registry();
+    VotingClient::new(&env, &voting_id).pause(&Address::generate(&env));
+}

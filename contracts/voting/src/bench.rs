@@ -21,7 +21,8 @@ fn stress_many_proposals_and_members() {
     let registry_id = env.register(dao_registry::DaoRegistry, ());
     let sbt_id = env.register(membership_sbt::MembershipSbt, (registry_id.clone(),));
     let tree_id = env.register(membership_tree::MembershipTree, (sbt_id.clone(),));
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone(), guardian));
 
     let registry = DaoRegistryClient::new(&env, &registry_id);
     let sbt = MembershipSbtClient::new(&env, &sbt_id);
