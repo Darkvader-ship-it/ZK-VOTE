@@ -10,9 +10,11 @@ pub fn read_allowance(env: &Env, from: Address, spender: Address) -> (i128, u32)
     if let Some(allowance) = env.storage().persistent().get::<_, (i128, u32)>(&key) {
         let (amount, expiration_ledger) = allowance;
         if env.ledger().sequence() <= expiration_ledger {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+            env.storage().persistent().extend_ttl(
+                &key,
+                INSTANCE_TTL_THRESHOLD,
+                INSTANCE_TTL_EXTEND,
+            );
             (amount, expiration_ledger)
         } else {
             (0, 0)

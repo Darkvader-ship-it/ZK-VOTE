@@ -206,7 +206,8 @@ impl Token {
     }
 
     fn spend_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
-        let (current_allowance, expiration_ledger) = read_allowance(env, from.clone(), spender.clone());
+        let (current_allowance, expiration_ledger) =
+            read_allowance(env, from.clone(), spender.clone());
         if current_allowance < amount {
             panic_with_error!(env, TokenError::InsufficientAllowance);
         }
@@ -256,15 +257,19 @@ impl Token {
 
         let current = read_allowance_amount(&env, from.clone(), spender.clone());
 
-        let is_race_rejected = current != 0
-            && amount != 0
-            && current != amount;
+        let is_race_rejected = current != 0 && amount != 0 && current != amount;
 
         if is_race_rejected {
             panic_with_error!(&env, TokenError::AllowanceRaceRejected);
         }
 
-        write_allowance(&env, from.clone(), spender.clone(), amount, expiration_ledger);
+        write_allowance(
+            &env,
+            from.clone(),
+            spender.clone(),
+            amount,
+            expiration_ledger,
+        );
 
         ApproveEvent {
             from,
@@ -368,13 +373,7 @@ impl Token {
         TransferEvent { from, to, amount }.publish(&env);
     }
 
-    pub fn transfer_from(
-        env: Env,
-        spender: Address,
-        from: Address,
-        to: Address,
-        amount: i128,
-    ) {
+    pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
         spender.require_auth();
         Self::bump_instance(&env);
 

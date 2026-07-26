@@ -312,7 +312,8 @@ fn test_expired_allowance_treated_as_zero() {
     client.approve(&alice, &bob, &100i128, &expiration);
     assert_eq!(client.allowance(&alice, &bob), 100);
 
-    env.ledger().with_mut(|l| l.sequence_number = expiration + 1);
+    env.ledger()
+        .with_mut(|l| l.sequence_number = expiration + 1);
 
     assert_eq!(client.allowance(&alice, &bob), 0);
 }
@@ -346,7 +347,8 @@ fn test_increase_allowance_sets_new_expiration() {
 
     client.increase_allowance(&alice, &bob, &25i128, &expiration2);
 
-    env.ledger().with_mut(|l| l.sequence_number = expiration1 + 1);
+    env.ledger()
+        .with_mut(|l| l.sequence_number = expiration1 + 1);
 
     assert_eq!(client.allowance(&alice, &bob), 75);
 }
