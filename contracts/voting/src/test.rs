@@ -426,8 +426,7 @@ fn test_multiple_proposals() {
         &member,
         &VoteMode::Fixed,
     );
-    env.ledger()
-        .set_timestamp(now + ELECTION_CREATION_COOLDOWN);
+    env.ledger().set_timestamp(now + ELECTION_CREATION_COOLDOWN);
     let now2 = env.ledger().timestamp();
     let p2 = voting_client.create_proposal(
         &1u64,
@@ -1645,9 +1644,8 @@ fn test_randomized_mixed_actions_preserve_invariants() {
 
     // Create a couple of proposals
     for idx in 0..3 {
-        env.ledger().set_timestamp(
-            env.ledger().timestamp() + ELECTION_CREATION_COOLDOWN * idx,
-        );
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + ELECTION_CREATION_COOLDOWN * idx);
         let pid = voting_client.create_proposal(
             &1u64,
             &String::from_str(&env, "P"),
@@ -1727,8 +1725,7 @@ fn test_nullifier_reusable_across_proposals() {
         &member,
         &VoteMode::Fixed,
     );
-    env.ledger()
-        .set_timestamp(now + ELECTION_CREATION_COOLDOWN);
+    env.ledger().set_timestamp(now + ELECTION_CREATION_COOLDOWN);
     let now2 = env.ledger().timestamp();
     let proposal2 = voting_client.create_proposal(
         &1u64,
