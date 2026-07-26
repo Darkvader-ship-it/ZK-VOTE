@@ -108,6 +108,12 @@ pub enum VotingError {
     ProposalCooldownActive = 41,
     InvalidProposalDeposit = 42,
     ProposalHasVotes = 43,
+    VotingNotStarted = 44,
+    ElectionDurationTooShort = 45,
+    ElectionDurationTooLong = 46,
+    InvalidNoticePeriod = 47,
+    InvalidRegistrationPeriod = 48,
+    InvalidRegistrationGap = 49,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -131,6 +137,14 @@ const MIN_RANDOMNESS_PARTICIPANTS: u32 = 2;
 const MAX_RANDOMNESS_PARTICIPANTS: u32 = 32;
 pub const MAX_CONCURRENT_ELECTIONS: u64 = 20;
 pub const ELECTION_CREATION_COOLDOWN: u64 = 600;
+
+// Temporal guard constants for election boundaries
+pub const MIN_ELECTION_DURATION: u64 = 300; // 5 minutes minimum election duration
+pub const MAX_ELECTION_DURATION: u64 = 90 * 86_400; // 90 days maximum election duration
+pub const MIN_REGISTRATION_PERIOD: u64 = 300; // 5 minutes minimum registration period
+pub const MIN_NOTICE_PERIOD: u64 = 60; // 1 minute minimum notice period before start
+pub const MIN_REGISTRATION_GAP: u64 = 60; // 1 minute minimum gap between registration_end and start
+pub const TIMESTAMP_TOLERANCE: u64 = 5; // ±5 seconds clock skew tolerance buffer
 
 #[contracttype]
 #[derive(Clone)]
@@ -213,6 +227,8 @@ pub struct ElectionConfig {
     pub min_balance: i128,
     pub twab_window: u64,
     pub candidate_seed: Option<BytesN<32>>,
+    pub start_time: u64,
+    pub registration_end: u64,
 }
 
 #[contracttype]
@@ -934,9 +950,18 @@ impl Voting {
 
         let now = env.ledger().timestamp();
 
-        // Validate end_time: 0 = no deadline, otherwise must be in the future
-        if end_time != 0 && end_time <= now {
-            panic_with_error!(&env, VotingError::EndTimeInvalid);
+        // Validate end_time: 0 = no deadline, otherwise must be in the future and within duration bounds
+        if end_time != 0 {
+            if end_time <= now + TIMESTAMP_TOLERANCE {
+                panic_with_error!(&env, VotingError::EndTimeInvalid);
+            }
+            let duration = end_time - now;
+            if duration < MIN_ELECTION_DURATION {
+                panic_with_error!(&env, VotingError::ElectionDurationTooShort);
+            }
+            if duration > MAX_ELECTION_DURATION {
+                panic_with_error!(&env, VotingError::ElectionDurationTooLong);
+            }
         }
         Self::enforce_creation_limits(&env, dao_id, &creator, now);
 
@@ -1134,15 +1159,7 @@ impl Voting {
             .get(&prop_key)
             .expect("proposal not found");
 
-        // Check voting period and state (voting starts at creation, ends at end_time)
-        // If end_time is 0, there's no deadline (voting never closes)
-        let now = env.ledger().timestamp();
-        if proposal.state != ProposalState::Active {
-            panic_with_error!(&env, VotingError::VotingClosed);
-        }
-        if proposal.end_time != 0 && now > proposal.end_time {
-            panic_with_error!(&env, VotingError::VotingClosed);
-        }
+        Self::check_voting_window(&env, dao_id, proposal_id, &proposal);
 
         // Revocation is now enforced by zeroing leaves in the Merkle tree.
         // A revoked member's commitment is zeroed, so their proof won't verify
@@ -1297,13 +1314,7 @@ impl Voting {
             .get(&prop_key)
             .expect("proposal not found");
 
-        let now = env.ledger().timestamp();
-        if proposal.state != ProposalState::Active {
-            panic_with_error!(&env, VotingError::VotingClosed);
-        }
-        if proposal.end_time != 0 && now > proposal.end_time {
-            panic_with_error!(&env, VotingError::VotingClosed);
-        }
+        Self::check_voting_window(&env, dao_id, proposal_id, &proposal);
 
         match proposal.vote_mode {
             VoteMode::Fixed => {
@@ -1824,13 +1835,7 @@ impl Voting {
             .get(&prop_key)
             .expect("proposal not found");
 
-        let now = env.ledger().timestamp();
-        if proposal.state != ProposalState::Active {
-            panic_with_error!(&env, VotingError::VotingClosed);
-        }
-        if proposal.end_time != 0 && now > proposal.end_time {
-            panic_with_error!(&env, VotingError::VotingClosed);
-        }
+        Self::check_voting_window(&env, dao_id, proposal_id, &proposal);
 
         match proposal.vote_mode {
             VoteMode::Fixed => {
@@ -1943,8 +1948,8 @@ impl Voting {
 
     // ── Anti-Flash Loan Protection ──────────────────────────────────────────
 
-    /// Create or update election configuration with token-gating parameters.
-    /// Sets the minimum balance required to vote, snapshot ledger, and TWAB window.
+    /// Create or update election configuration with token-gating parameters and time bounds.
+    /// Sets minimum balance, TWAB window, start_time, and registration_end.
     /// Only callable during proposal creation or by DAO admin.
     pub fn set_election_config(
         env: Env,
@@ -1952,9 +1957,43 @@ impl Voting {
         proposal_id: u64,
         min_balance: i128,
         twab_window: u64,
+        start_time: u64,
+        registration_end: u64,
     ) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
+
+        let now = env.ledger().timestamp();
+        let prop_key = DataKey::Proposal(dao_id, proposal_id);
+        if let Some(proposal) = env.storage().persistent().get::<_, ProposalInfo>(&prop_key) {
+            let eff_start = if start_time > 0 { start_time } else { proposal.created_at };
+
+            if start_time > 0 && start_time + TIMESTAMP_TOLERANCE < now + MIN_NOTICE_PERIOD {
+                panic_with_error!(&env, VotingError::InvalidNoticePeriod);
+            }
+
+            if registration_end > 0 && registration_end + TIMESTAMP_TOLERANCE < proposal.created_at + MIN_REGISTRATION_PERIOD {
+                panic_with_error!(&env, VotingError::InvalidRegistrationPeriod);
+            }
+
+            if registration_end > 0 && eff_start + TIMESTAMP_TOLERANCE < registration_end + MIN_REGISTRATION_GAP {
+                panic_with_error!(&env, VotingError::InvalidRegistrationGap);
+            }
+
+            if proposal.end_time != 0 {
+                if proposal.end_time < eff_start {
+                    panic_with_error!(&env, VotingError::EndTimeInvalid);
+                }
+                let duration = proposal.end_time - eff_start;
+                if duration < MIN_ELECTION_DURATION {
+                    panic_with_error!(&env, VotingError::ElectionDurationTooShort);
+                }
+                if duration > MAX_ELECTION_DURATION {
+                    panic_with_error!(&env, VotingError::ElectionDurationTooLong);
+                }
+            }
+        }
+
         let snapshot_ledger = env.ledger().sequence();
         let key = DataKey::ElectionConfig(dao_id, proposal_id);
         let candidate_seed = env
@@ -1967,9 +2006,33 @@ impl Voting {
             min_balance,
             twab_window,
             candidate_seed,
+            start_time,
+            registration_end,
         };
         env.storage().persistent().set(&key, &config);
         Self::bump_persistent(&env, &key);
+    }
+
+    fn check_voting_window(env: &Env, dao_id: u64, proposal_id: u64, proposal: &ProposalInfo) {
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(env, VotingError::VotingClosed);
+        }
+
+        let now = env.ledger().timestamp();
+        let config = Self::get_election_config(env.clone(), dao_id, proposal_id);
+        let start_time = config
+            .as_ref()
+            .map(|c| c.start_time)
+            .filter(|&t| t > 0)
+            .unwrap_or(proposal.created_at);
+
+        if now + TIMESTAMP_TOLERANCE < start_time {
+            panic_with_error!(env, VotingError::VotingNotStarted);
+        }
+
+        if proposal.end_time != 0 && now > proposal.end_time + TIMESTAMP_TOLERANCE {
+            panic_with_error!(env, VotingError::VotingClosed);
+        }
     }
 
     /// Get election configuration for a proposal.
@@ -2323,6 +2386,8 @@ impl Voting {
                     min_balance: 0,
                     twab_window: 0,
                     candidate_seed: None,
+                    start_time: 0,
+                    registration_end: 0,
                 });
         if config.candidate_seed.is_some() {
             panic_with_error!(&env, VotingError::CandidateSeedFinalized);

@@ -1447,9 +1447,9 @@ fn test_vote_after_expiry_fails() {
 
     let proposal = voting_client.get_proposal(&1u64, &proposal_id);
 
-    // Set ledger to after end time
+    // Set ledger to after end time (outside timestamp tolerance buffer)
     env.ledger().with_mut(|li| {
-        li.timestamp = proposal.end_time + 1;
+        li.timestamp = proposal.end_time + TIMESTAMP_TOLERANCE + 1;
     });
 
     let nullifier = U256::from_u32(&env, 99999);
@@ -2786,7 +2786,7 @@ fn test_commit_reveal_finalizes_candidate_seed() {
     let first_value = BytesN::from_array(&env, &[1; 32]);
     let second_value = BytesN::from_array(&env, &[2; 32]);
 
-    voting.set_election_config(&1, &proposal_id, &0, &0);
+    voting.set_election_config(&1, &proposal_id, &0, &0, &0, &0);
     voting.commit_randomness(
         &1,
         &proposal_id,
@@ -3014,3 +3014,301 @@ fn test_close_and_delete_refund_deposits_and_release_slots() {
     assert_eq!(token.balance(&creator), 200);
     assert_eq!(client.active_proposal_count(&1), 0);
 }
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_flash_election_duration_too_short_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let now = env.ledger().timestamp();
+    // Duration 100s < MIN_ELECTION_DURATION (300s)
+    voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Flash"),
+        &String::from_str(&env, ""),
+        &(now + 100),
+        &member,
+        &VoteMode::Fixed,
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_election_duration_too_long_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let now = env.ledger().timestamp();
+    // Duration > MAX_ELECTION_DURATION (90 days)
+    voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Too Long"),
+        &String::from_str(&env, ""),
+        &(now + MAX_ELECTION_DURATION + 100),
+        &member,
+        &VoteMode::Fixed,
+    );
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_election_config_invalid_notice_period_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // start_time = now + 10s < MIN_NOTICE_PERIOD (60s)
+    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &(now + 10), &0);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_election_config_invalid_registration_period_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // registration_end = now + 10s < MIN_REGISTRATION_PERIOD (300s)
+    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &0, &(now + 10));
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_voting_before_start_time_outside_tolerance_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // Schedule start_time for now + 500
+    let start_time = now + 500;
+    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &start_time, &0);
+
+    // Fast-forward to 6 seconds before start_time (start_time - 6 = 1494) -> outside 5s tolerance
+    env.ledger().with_mut(|li| {
+        li.timestamp = start_time - 6;
+    });
+
+    let proposal = voting_client.get_proposal(&1u64, &proposal_id);
+    let nullifier = U256::from_u32(&env, 99999);
+    let proof = create_dummy_proof(&env);
+    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+}
+
+#[test]
+fn test_voting_before_start_time_within_tolerance_succeeds() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    let start_time = now + 500;
+    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &start_time, &0);
+
+    // Fast-forward to 4 seconds before start_time (start_time - 4 = 1496) -> within 5s tolerance
+    env.ledger().with_mut(|li| {
+        li.timestamp = start_time - 4;
+    });
+
+    let proposal = voting_client.get_proposal(&1u64, &proposal_id);
+    let nullifier = U256::from_u32(&env, 99999);
+    let proof = create_dummy_proof(&env);
+    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+
+    let (yes, no) = voting_client.get_results(&1u64, &proposal_id);
+    assert_eq!(yes, 1);
+    assert_eq!(no, 0);
+}
+
+#[test]
+fn test_voting_after_end_time_within_tolerance_succeeds() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    let now = env.ledger().timestamp();
+    let end_time = now + 3600;
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, ""),
+        &end_time,
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // Fast-forward to 4 seconds after end_time (end_time + 4 = 4604) -> within 5s tolerance
+    env.ledger().with_mut(|li| {
+        li.timestamp = end_time + 4;
+    });
+
+    let proposal = voting_client.get_proposal(&1u64, &proposal_id);
+    let nullifier = U256::from_u32(&env, 99999);
+    let proof = create_dummy_proof(&env);
+    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+
+    let (yes, no) = voting_client.get_results(&1u64, &proposal_id);
+    assert_eq!(yes, 1);
+    assert_eq!(no, 0);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_voting_after_end_time_outside_tolerance_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    let now = env.ledger().timestamp();
+    let end_time = now + 3600;
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Test"),
+        &String::from_str(&env, ""),
+        &end_time,
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // Fast-forward to 6 seconds after end_time (end_time + 6 = 4606) -> outside 5s tolerance
+    env.ledger().with_mut(|li| {
+        li.timestamp = end_time + 6;
+    });
+
+    let proposal = voting_client.get_proposal(&1u64, &proposal_id);
+    let nullifier = U256::from_u32(&env, 99999);
+    let proof = create_dummy_proof(&env);
+    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+}
+
