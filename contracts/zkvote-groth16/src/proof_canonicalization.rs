@@ -50,6 +50,7 @@ const BN254_P_MINUS_1_DIV_2_BE: [u8; 32] = [
 
 /// BLS12-381 base field modulus (p) for BLS curve
 /// p = 4002409555221667393417789825735904156556882819939007885332058136124031650490837864442687629129015664037894272559787
+#[allow(dead_code)]
 const BLS12_381_P_MODULUS_BE: [u8; 48] = [
     0x1a, 0x01, 0x11, 0xea, 0x39, 0x7f, 0xe6, 0x9a, 0x4b, 0x1b, 0xa7, 0xb6, 0x43, 0x4b, 0xac, 0xd7,
     0x64, 0x77, 0x4b, 0x84, 0xf3, 0x85, 0x12, 0xbf, 0x67, 0x30, 0xd2, 0xa0, 0xf6, 0xb0, 0xf6, 0x24,
@@ -75,11 +76,15 @@ const BLS12_381_P_MINUS_1_DIV_2_BE: [u8; 48] = [
 /// `true` if y-coordinate is in lower half of field (canonical)
 pub fn is_g1_point_canonical_bn254(env: &Env, point: &BytesN<64>) -> bool {
     // Extract y-coordinate (bytes 32-63)
-    let y_bytes = point.slice(32..64);
+    let point_bytes = point.to_bytes();
+    let mut y_bytes_array = [0u8; 32];
+    for i in 0..32 {
+        y_bytes_array[i] = point_bytes.get((32 + i) as u32).unwrap_or(0);
+    }
 
     // Compare y with (p-1)/2
     let p_half = U256::from_be_bytes(env, &Bytes::from_array(env, &BN254_P_MINUS_1_DIV_2_BE));
-    let y = U256::from_be_bytes(env, &y_bytes.to_bytes());
+    let y = U256::from_be_bytes(env, &Bytes::from_array(env, &y_bytes_array));
 
     // Canonical if y <= (p-1)/2
     y <= p_half
@@ -114,22 +119,33 @@ pub fn canonicalize_g1_point_bn254(env: &Env, point: &BytesN<64>) -> BytesN<64> 
     }
 
     // Negate y-coordinate: y' = p - y
-    let x_bytes = point.slice(0..32);
-    let y_bytes = point.slice(32..64);
+    let point_bytes = point.to_bytes();
+    let mut x_bytes = [0u8; 32];
+    let mut y_bytes = [0u8; 32];
+
+    for i in 0..32 {
+        x_bytes[i] = point_bytes.get(i as u32).unwrap_or(0);
+        y_bytes[i] = point_bytes.get((32 + i) as u32).unwrap_or(0);
+    }
 
     let p = U256::from_be_bytes(env, &Bytes::from_array(env, &BN254_P_MODULUS_BE));
-    let y = U256::from_be_bytes(env, &y_bytes.to_bytes());
+    let y = U256::from_be_bytes(env, &Bytes::from_array(env, &y_bytes));
 
     // y' = p - y (negate in field)
-    let y_neg = p - y;
+    // Use sub_mod to avoid direct subtraction
+    let y_neg = p.sub(&y);
     let y_neg_bytes = y_neg.to_be_bytes();
 
     // Concatenate x || y_neg
-    let mut result_bytes = Bytes::new(env);
-    result_bytes.extend_from_array(&x_bytes.to_array());
-    result_bytes.extend_from_slice(&y_neg_bytes);
+    let mut result = [0u8; 64];
+    for i in 0..32 {
+        result[i] = x_bytes[i];
+    }
+    for i in 0..32 {
+        result[32 + i] = y_neg_bytes.get(i as u32).unwrap_or(0);
+    }
 
-    BytesN::from_bytes(env, &result_bytes)
+    BytesN::from_array(env, &result)
 }
 
 /// Canonicalize a BN254 Groth16 proof
@@ -175,42 +191,58 @@ fn negate_g2_point_bn254(env: &Env, point: &BytesN<128>) -> BytesN<128> {
     let p = U256::from_be_bytes(env, &Bytes::from_array(env, &BN254_P_MODULUS_BE));
 
     // Extract components: x = (x_c1, x_c0), y = (y_c1, y_c0)
-    let x_c1 = point.slice(0..32);
-    let x_c0 = point.slice(32..64);
-    let y_c1_bytes = point.slice(64..96);
-    let y_c0_bytes = point.slice(96..128);
+    let point_bytes = point.to_bytes();
+    let mut x_c1 = [0u8; 32];
+    let mut x_c0 = [0u8; 32];
+    let mut y_c1_bytes = [0u8; 32];
+    let mut y_c0_bytes = [0u8; 32];
+
+    for i in 0..32 {
+        x_c1[i] = point_bytes.get(i as u32).unwrap_or(0);
+        x_c0[i] = point_bytes.get((32 + i) as u32).unwrap_or(0);
+        y_c1_bytes[i] = point_bytes.get((64 + i) as u32).unwrap_or(0);
+        y_c0_bytes[i] = point_bytes.get((96 + i) as u32).unwrap_or(0);
+    }
 
     // Negate y components: y' = -y = (p - y_c1, p - y_c0)
-    let y_c1 = U256::from_be_bytes(env, &y_c1_bytes.to_bytes());
-    let y_c0 = U256::from_be_bytes(env, &y_c0_bytes.to_bytes());
+    let y_c1 = U256::from_be_bytes(env, &Bytes::from_array(env, &y_c1_bytes));
+    let y_c0 = U256::from_be_bytes(env, &Bytes::from_array(env, &y_c0_bytes));
 
-    let y_c1_neg = p.clone() - y_c1;
-    let y_c0_neg = p - y_c0;
+    let y_c1_neg = p.sub(&y_c1);
+    let y_c0_neg = p.sub(&y_c0);
 
     // Reconstruct: x_c1 || x_c0 || y_c1_neg || y_c0_neg
-    let mut result = Bytes::new(env);
-    result.extend_from_array(&x_c1.to_array());
-    result.extend_from_array(&x_c0.to_array());
-    result.extend_from_slice(&y_c1_neg.to_be_bytes());
-    result.extend_from_slice(&y_c0_neg.to_be_bytes());
+    let y_c1_neg_bytes = y_c1_neg.to_be_bytes();
+    let y_c0_neg_bytes = y_c0_neg.to_be_bytes();
 
-    BytesN::from_bytes(env, &result)
+    let mut result = [0u8; 128];
+    for i in 0..32 {
+        result[i] = x_c1[i];
+        result[32 + i] = x_c0[i];
+        result[64 + i] = y_c1_neg_bytes.get(i as u32).unwrap_or(0);
+        result[96 + i] = y_c0_neg_bytes.get(i as u32).unwrap_or(0);
+    }
+
+    BytesN::from_array(env, &result)
 }
 
 /// Check if a BLS12-381 G1 point's y-coordinate is in canonical form
-pub fn is_g1_point_canonical_bls381(env: &Env, point: &BytesN<96>) -> bool {
+pub fn is_g1_point_canonical_bls381(_env: &Env, point: &BytesN<96>) -> bool {
     // Extract y-coordinate (bytes 48-95)
-    let y_bytes = point.slice(48..96);
+    let point_bytes = point.to_bytes();
+    let mut y_bytes = [0u8; 48];
+    for i in 0..48 {
+        y_bytes[i] = point_bytes.get((48 + i) as u32).unwrap_or(0);
+    }
 
     // BLS12-381 uses 48-byte field elements
-    let p_half_bytes = Bytes::from_array(env, &BLS12_381_P_MINUS_1_DIV_2_BE);
-    let y_bytes_full = y_bytes.to_bytes();
+    let p_half_bytes = &BLS12_381_P_MINUS_1_DIV_2_BE;
 
     // Compare y with (p-1)/2 byte-by-byte (simplified comparison)
     // In production, use proper field arithmetic library
     for i in 0..48 {
-        let y_byte = y_bytes_full.get(i).unwrap_or(0);
-        let half_byte = p_half_bytes.get(i).unwrap_or(0);
+        let y_byte = y_bytes[i];
+        let half_byte = p_half_bytes[i];
 
         if y_byte < half_byte {
             return true;
