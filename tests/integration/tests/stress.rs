@@ -76,7 +76,7 @@ fn setup_dao_with_options(
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let guardian = Address::generate(&env);
+    let guardian = Address::generate(env);
     let voting_id = env.register(
         voting::Voting,
         (tree_id.clone(), registry_id.clone(), guardian),
