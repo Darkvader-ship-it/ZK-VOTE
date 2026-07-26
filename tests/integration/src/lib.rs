@@ -35,7 +35,8 @@ mod tests {
                 (sbt.clone(), registry.clone()),
             );
             // Pass both tree and registry to voting constructor (registry cached to reduce cross-contract calls)
-            let voting = env.register(voting::Voting, (tree.clone(), registry.clone()));
+            let guardian = Address::generate(&env);
+            let voting = env.register(voting::Voting, (tree.clone(), registry.clone(), guardian));
 
             Self {
                 env,
