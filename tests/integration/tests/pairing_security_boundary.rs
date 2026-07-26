@@ -131,7 +131,11 @@ fn test_pairing_security_boundary() {
 
     let voting_address = env.register(
         voting::Voting,
-        (tree_address.clone(), registry_address.clone()),
+        (
+            tree_address.clone(),
+            registry_address.clone(),
+            admin.clone(),
+        ),
     );
     let voting_client = VotingClient::new(&env, &voting_address);
 
