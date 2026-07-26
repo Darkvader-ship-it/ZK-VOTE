@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Env, String};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, token, Env, String};
 
 // Mock tree contract
 mod mock_tree {
@@ -200,6 +200,16 @@ fn setup_randomness_env() -> (Env, Address, Address, u64, Address, Address) {
     );
 
     (env, voting_id, registry_id, proposal_id, first, second)
+}
+
+fn setup_proposal_env() -> (Env, Address, Address, Address, Address, Address) {
+    let setup = setup_env_with_registry();
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = &setup;
+    mock_registry::MockRegistryClient::new(env, registry_id).set_admin(&1, member);
+    mock_sbt::MockSbtClient::new(env, sbt_id).set_member(&1, member, &true);
+    mock_tree::MockTreeClient::new(env, tree_id).set_root(&1, &U256::from_u32(env, 12345));
+    VotingClient::new(env, voting_id).set_vk(&1, &create_dummy_vk(env), member);
+    setup
 }
 
 fn create_dummy_vk(env: &Env) -> VerificationKey {
@@ -416,11 +426,13 @@ fn test_multiple_proposals() {
         &member,
         &VoteMode::Fixed,
     );
+    env.ledger().set_timestamp(now + ELECTION_CREATION_COOLDOWN);
+    let now2 = env.ledger().timestamp();
     let p2 = voting_client.create_proposal(
         &1u64,
         &String::from_str(&env, "Proposal 2"),
         &String::from_str(&env, ""),
-        &(now + 7200),
+        &(now2 + 7200),
         &member,
         &VoteMode::Fixed,
     );
@@ -1631,7 +1643,9 @@ fn test_randomized_mixed_actions_preserve_invariants() {
     let mut nullifiers = soroban_sdk::vec![&env];
 
     // Create a couple of proposals
-    for _idx in 0..3 {
+    for idx in 0..3 {
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + ELECTION_CREATION_COOLDOWN * idx);
         let pid = voting_client.create_proposal(
             &1u64,
             &String::from_str(&env, "P"),
@@ -1711,11 +1725,13 @@ fn test_nullifier_reusable_across_proposals() {
         &member,
         &VoteMode::Fixed,
     );
+    env.ledger().set_timestamp(now + ELECTION_CREATION_COOLDOWN);
+    let now2 = env.ledger().timestamp();
     let proposal2 = voting_client.create_proposal(
         &1u64,
         &String::from_str(&env, "Proposal 2"),
         &String::from_str(&env, ""),
-        &(now + 7200),
+        &(now2 + 7200),
         &member,
         &VoteMode::Fixed,
     );
@@ -2874,6 +2890,31 @@ fn test_guardian_can_pause_and_unpause() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #41)")]
+fn test_proposal_creation_cooldown_enforced() {
+    let (env, voting_id, _, _, _, creator) = setup_proposal_env();
+    let client = VotingClient::new(&env, &voting_id);
+    let end_time = env.ledger().timestamp() + 3600;
+
+    client.create_proposal(
+        &1,
+        &String::from_str(&env, "First"),
+        &String::from_str(&env, ""),
+        &end_time,
+        &creator,
+        &VoteMode::Fixed,
+    );
+    client.create_proposal(
+        &1,
+        &String::from_str(&env, "Second"),
+        &String::from_str(&env, ""),
+        &end_time,
+        &creator,
+        &VoteMode::Fixed,
+    );
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #29)")]
 fn test_pause_blocks_writes_but_allows_reads() {
     let (env, voting_id, _, _, registry_id, admin) = setup_env_with_registry();
@@ -2907,4 +2948,69 @@ fn test_pause_expires_after_max_duration() {
 fn test_non_guardian_cannot_pause() {
     let (env, voting_id, _, _, _, _) = setup_env_with_registry();
     VotingClient::new(&env, &voting_id).pause(&Address::generate(&env));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #40)")]
+fn test_concurrent_proposal_limit_enforced() {
+    let (env, voting_id, _, sbt_id, _, _) = setup_proposal_env();
+    let client = VotingClient::new(&env, &voting_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let end_time = env.ledger().timestamp() + 3600;
+
+    for _ in 0..=MAX_CONCURRENT_ELECTIONS {
+        let creator = Address::generate(&env);
+        sbt.set_member(&1, &creator, &true);
+        client.create_proposal(
+            &1,
+            &String::from_str(&env, "Proposal"),
+            &String::from_str(&env, ""),
+            &end_time,
+            &creator,
+            &VoteMode::Fixed,
+        );
+    }
+}
+
+#[test]
+fn test_close_and_delete_refund_deposits_and_release_slots() {
+    let (env, voting_id, _, _, _, creator) = setup_proposal_env();
+    let client = VotingClient::new(&env, &voting_id);
+    let token_admin = Address::generate(&env);
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token = token::Client::new(&env, &token_id);
+    token::StellarAssetClient::new(&env, &token_id).mint(&creator, &200);
+    client.set_election_deposit(&1, &token_id, &100, &creator);
+
+    let first = client.create_proposal(
+        &1,
+        &String::from_str(&env, "First"),
+        &String::from_str(&env, ""),
+        &(env.ledger().timestamp() + 3600),
+        &creator,
+        &VoteMode::Fixed,
+    );
+    assert_eq!(token.balance(&creator), 100);
+    assert_eq!(client.active_proposal_count(&1), 1);
+
+    client.close_proposal(&1, &first, &creator);
+    assert_eq!(token.balance(&creator), 200);
+    assert_eq!(client.active_proposal_count(&1), 0);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + ELECTION_CREATION_COOLDOWN);
+    let second = client.create_proposal(
+        &1,
+        &String::from_str(&env, "Second"),
+        &String::from_str(&env, ""),
+        &(env.ledger().timestamp() + 3600),
+        &creator,
+        &VoteMode::Fixed,
+    );
+    client.delete_election(&1, &second, &creator);
+
+    assert_eq!(token.balance(&creator), 200);
+    assert_eq!(client.active_proposal_count(&1), 0);
 }
