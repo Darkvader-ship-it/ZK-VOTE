@@ -3181,7 +3181,14 @@ fn test_voting_before_start_time_outside_tolerance_fails() {
     let proposal = voting_client.get_proposal(&1u64, &proposal_id);
     let nullifier = U256::from_u32(&env, 99999);
     let proof = create_dummy_proof(&env);
-    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+    voting_client.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &nullifier,
+        &proposal.eligible_root,
+        &proof,
+    );
 }
 
 #[test]
@@ -3222,7 +3229,14 @@ fn test_voting_before_start_time_within_tolerance_succeeds() {
     let proposal = voting_client.get_proposal(&1u64, &proposal_id);
     let nullifier = U256::from_u32(&env, 99999);
     let proof = create_dummy_proof(&env);
-    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+    voting_client.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &nullifier,
+        &proposal.eligible_root,
+        &proof,
+    );
 
     let (yes, no) = voting_client.get_results(&1u64, &proposal_id);
     assert_eq!(yes, 1);
@@ -3265,7 +3279,14 @@ fn test_voting_after_end_time_within_tolerance_succeeds() {
     let proposal = voting_client.get_proposal(&1u64, &proposal_id);
     let nullifier = U256::from_u32(&env, 99999);
     let proof = create_dummy_proof(&env);
-    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+    voting_client.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &nullifier,
+        &proposal.eligible_root,
+        &proof,
+    );
 
     let (yes, no) = voting_client.get_results(&1u64, &proposal_id);
     assert_eq!(yes, 1);
@@ -3309,6 +3330,13 @@ fn test_voting_after_end_time_outside_tolerance_fails() {
     let proposal = voting_client.get_proposal(&1u64, &proposal_id);
     let nullifier = U256::from_u32(&env, 99999);
     let proof = create_dummy_proof(&env);
-    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &proposal.eligible_root, &proof);
+    voting_client.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &nullifier,
+        &proposal.eligible_root,
+        &proof,
+    );
 }
 

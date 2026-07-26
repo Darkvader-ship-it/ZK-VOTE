@@ -1966,17 +1966,26 @@ impl Voting {
         let now = env.ledger().timestamp();
         let prop_key = DataKey::Proposal(dao_id, proposal_id);
         if let Some(proposal) = env.storage().persistent().get::<_, ProposalInfo>(&prop_key) {
-            let eff_start = if start_time > 0 { start_time } else { proposal.created_at };
+            let eff_start = if start_time > 0 {
+                start_time
+            } else {
+                proposal.created_at
+            };
 
             if start_time > 0 && start_time + TIMESTAMP_TOLERANCE < now + MIN_NOTICE_PERIOD {
                 panic_with_error!(&env, VotingError::InvalidNoticePeriod);
             }
 
-            if registration_end > 0 && registration_end + TIMESTAMP_TOLERANCE < proposal.created_at + MIN_REGISTRATION_PERIOD {
+            if registration_end > 0
+                && registration_end + TIMESTAMP_TOLERANCE
+                    < proposal.created_at + MIN_REGISTRATION_PERIOD
+            {
                 panic_with_error!(&env, VotingError::InvalidRegistrationPeriod);
             }
 
-            if registration_end > 0 && eff_start + TIMESTAMP_TOLERANCE < registration_end + MIN_REGISTRATION_GAP {
+            if registration_end > 0
+                && eff_start + TIMESTAMP_TOLERANCE < registration_end + MIN_REGISTRATION_GAP
+            {
                 panic_with_error!(&env, VotingError::InvalidRegistrationGap);
             }
 
