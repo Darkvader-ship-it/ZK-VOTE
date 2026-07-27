@@ -1517,7 +1517,10 @@ impl Voting {
             .get(&key)
             .expect("proposal not found");
 
-        if !proposal.state.is_valid_transition(ProposalState::Closed) {
+        // Allow idempotent close (already Closed = no-op); reject invalid transitions (e.g. Archived → Closed).
+        if proposal.state != ProposalState::Closed
+            && !proposal.state.is_valid_transition(ProposalState::Closed)
+        {
             panic_with_error!(&env, VotingError::InvalidState);
         }
         if proposal.state != ProposalState::Closed {
@@ -1588,7 +1591,10 @@ impl Voting {
             .get(&key)
             .expect("proposal not found");
 
-        if !proposal.state.is_valid_transition(ProposalState::Archived) {
+        // Allow idempotent archive (already Archived = no-op); reject invalid transitions (e.g. Active → Archived).
+        if proposal.state != ProposalState::Archived
+            && !proposal.state.is_valid_transition(ProposalState::Archived)
+        {
             panic_with_error!(&env, VotingError::InvalidState);
         }
         if proposal.state != ProposalState::Archived {
