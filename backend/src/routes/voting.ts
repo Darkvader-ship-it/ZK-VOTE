@@ -355,4 +355,82 @@ router.get("/root/:daoId", queryLimiter, (async (
   }
 }) as AsyncHandler);
 
+/**
+ * GET /nullifier/:daoId/:proposalId/:nullifier
+ *
+ * Check whether a nullifier has been used for a specific election.
+ * Election identity is `(daoId, proposalId)` — callers must pass both so
+ * queries never hit a flat global nullifier namespace (issue #64).
+ */
+router.get(
+  "/nullifier/:daoId/:proposalId/:nullifier",
+  queryLimiter,
+  (async (req: Request, res: Response) => {
+    const { daoId, proposalId, nullifier } = req.params;
+
+    try {
+      const contract = new StellarSdk.Contract(config.votingContractId!);
+      let scNullifier: StellarSdk.xdr.ScVal;
+      try {
+        scNullifier = u256ToScVal(nullifier);
+      } catch (err) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+
+      const args = [
+        StellarSdk.nativeToScVal(parseInt(daoId, 10), { type: "u64" }),
+        StellarSdk.nativeToScVal(parseInt(proposalId, 10), { type: "u64" }),
+        scNullifier,
+      ];
+
+      const operation = contract.call("is_nullifier_used", ...args);
+
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
+      const tx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+
+      const simResult = await (
+        server as StellarSdk.rpc.Server
+      ).simulateTransaction(tx);
+
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+        return res.status(404).json({ error: "Voting contract not found" });
+      }
+
+      const resultScVal = simResult.result?.retval;
+      if (!resultScVal) {
+        return res.status(500).json({ error: "No result returned" });
+      }
+
+      const used = resultScVal.b();
+
+      res.json({
+        daoId: parseInt(daoId, 10),
+        proposalId: parseInt(proposalId, 10),
+        electionId: {
+          daoId: parseInt(daoId, 10),
+          proposalId: parseInt(proposalId, 10),
+        },
+        nullifier,
+        used,
+      });
+    } catch (err) {
+      log("error", "nullifier_check_error", {
+        daoId,
+        proposalId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to check nullifier status" });
+    }
+  }) as AsyncHandler,
+);
+
 export default router;
+

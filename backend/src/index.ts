@@ -128,6 +128,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         "/config",
         "/vote",
         "/proposal/:dao/:prop",
+        "/nullifier/:daoId/:proposalId/:nullifier",
         "/root/:dao",
         "/events/:daoId",
         "/events/notify",
