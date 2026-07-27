@@ -495,6 +495,14 @@ export function initDb(dbPath?: string): DatabaseType {
 
     CREATE INDEX IF NOT EXISTS idx_ttl_cost_cycle ON ttl_cost_log(cycle_id);
 
+    CREATE TABLE IF NOT EXISTS transaction_log (
+      nullifier_hash TEXT PRIMARY KEY,
+      tx_hash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Keep the old events table temporarily during migration,
     -- then drop it once migration completes.
     CREATE TABLE IF NOT EXISTS events (
@@ -1088,6 +1096,117 @@ export function deleteUnverifiedEvent(txHash: string): void {
       .run(txHash);
     if (result.changes > 0) return;
   }
+}
+
+// ============================================
+// TRANSACTION LOG & REPLAY PROTECTION
+// ============================================
+
+export interface TransactionLogRow {
+  nullifier_hash: string;
+  tx_hash: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Get transaction log by nullifier hash.
+ */
+export function getTransactionLog(nullifierHash: string): TransactionLogRow | null {
+  const database = initDb();
+  const row = database
+    .prepare("SELECT * FROM transaction_log WHERE nullifier_hash = ?")
+    .get(nullifierHash) as TransactionLogRow | undefined;
+  return row ?? null;
+}
+
+/**
+ * Record new transaction submission in transaction log.
+ */
+export function recordTransactionLog(
+  nullifierHash: string,
+  txHash: string,
+  status: string = "PENDING",
+): void {
+  const database = initDb();
+  database
+    .prepare(
+      `INSERT INTO transaction_log (nullifier_hash, tx_hash, status, created_at, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(nullifier_hash) DO UPDATE SET
+         tx_hash = excluded.tx_hash,
+         status = excluded.status,
+         updated_at = CURRENT_TIMESTAMP`,
+    )
+    .run(nullifierHash, txHash, status);
+}
+
+/**
+ * Update transaction status in transaction log.
+ */
+export function updateTransactionLogStatus(
+  nullifierHash: string,
+  status: string,
+  txHash?: string,
+): void {
+  const database = initDb();
+  if (txHash) {
+    database
+      .prepare(
+        `UPDATE transaction_log SET status = ?, tx_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE nullifier_hash = ?`,
+      )
+      .run(status, txHash, nullifierHash);
+  } else {
+    database
+      .prepare(
+        `UPDATE transaction_log SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE nullifier_hash = ?`,
+      )
+      .run(status, nullifierHash);
+  }
+}
+
+/**
+ * Cleanup old transaction log entries.
+ */
+export function cleanupTransactionLog(maxAgeMs = 86400000): number {
+  const database = initDb();
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const result = database
+    .prepare("DELETE FROM transaction_log WHERE updated_at < ?")
+    .run(cutoff);
+  return result.changes;
+}
+
+/**
+ * Count pending (unverified) events for a specific DAO.
+ */
+export function getPendingEventsCountForDao(daoId: number): number {
+  const database = initDb();
+  const tableName = partitionTableName(daoId);
+  ensurePartitionTable(daoId);
+  const row = database
+    .prepare(`SELECT COUNT(*) as count FROM ${tableName} WHERE verified = 0`)
+    .get() as { count: number };
+  return row.count;
+}
+
+/**
+ * Cleanup expired unverified pending events across partitions older than ttlMs.
+ */
+export function cleanupExpiredPendingEvents(ttlMs = 15 * 60 * 1000): number {
+  const database = initDb();
+  const daoIds = getAllPartitionDaoIds(database);
+  const cutoff = new Date(Date.now() - ttlMs).toISOString();
+  let deletedCount = 0;
+  for (const daoId of daoIds) {
+    const tableName = partitionTableName(daoId);
+    const result = database
+      .prepare(`DELETE FROM ${tableName} WHERE verified = 0 AND timestamp < ?`)
+      .run(cutoff);
+    deletedCount += result.changes;
+  }
+  return deletedCount;
 }
 
 // ============================================

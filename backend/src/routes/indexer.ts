@@ -15,6 +15,7 @@ import {
   notifyEvent,
 } from "../services/indexer.js";
 import { getArchiveIndex, readArchivedEvents } from "../services/archival.js";
+import { getPendingEventsCountForDao } from "../services/db.js";
 import { authGuard, queryLimiter } from "../middleware/index.js";
 import type { AsyncHandler } from "../types/index.js";
 
@@ -147,6 +148,15 @@ router.post("/events/notify", authGuard, queryLimiter, (async (
 
   if (!/^[0-9a-fA-F]{64}$/.test(txHash)) {
     return res.status(400).json({ error: "Invalid txHash format" });
+  }
+
+  // Prevent accumulation by limiting pending unverified events per DAO
+  const pendingCount = getPendingEventsCountForDao(Number(daoId));
+  if (pendingCount >= 50) {
+    log("warn", "pending_events_limit_exceeded", { daoId, pendingCount });
+    return res
+      .status(429)
+      .json({ error: "Pending event limit exceeded for this DAO" });
   }
 
   try {

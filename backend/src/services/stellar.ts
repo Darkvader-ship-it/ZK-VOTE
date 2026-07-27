@@ -82,8 +82,107 @@ export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ============================================
-// SOROBAN RPC CLIENT
+// SOROBAN RPC CONNECTION POOL & CLIENT
 // ============================================
+
+export interface RpcEndpointStatus {
+  url: string;
+  healthy: boolean;
+  latencyMs: number;
+  errorCount: number;
+  lastChecked: string;
+}
+
+export class RpcPoolManager {
+  private endpoints: Array<{
+    url: string;
+    server: StellarSdk.rpc.Server;
+    healthy: boolean;
+    latencyMs: number;
+    errorCount: number;
+    lastChecked: number;
+  }> = [];
+  private currentIndex = 0;
+
+  constructor(urls: string[]) {
+    const uniqueUrls = Array.from(new Set(urls.length > 0 ? urls : [config.rpcUrl]));
+    this.endpoints = uniqueUrls.map((url) => ({
+      url,
+      server: new StellarSdk.rpc.Server(url, { allowHttp: true }),
+      healthy: true,
+      latencyMs: 0,
+      errorCount: 0,
+      lastChecked: Date.now(),
+    }));
+  }
+
+  public getActiveServer(): StellarSdk.rpc.Server {
+    if (this.endpoints.length === 0) {
+      return new StellarSdk.rpc.Server(config.rpcUrl, { allowHttp: true });
+    }
+    for (let i = 0; i < this.endpoints.length; i++) {
+      const idx = (this.currentIndex + i) % this.endpoints.length;
+      if (this.endpoints[idx].healthy) {
+        this.currentIndex = (idx + 1) % this.endpoints.length;
+        return this.endpoints[idx].server;
+      }
+    }
+    const fallback = this.endpoints[this.currentIndex % this.endpoints.length].server;
+    this.currentIndex = (this.currentIndex + 1) % this.endpoints.length;
+    return fallback;
+  }
+
+  public async checkHealth(): Promise<RpcEndpointStatus[]> {
+    const results: RpcEndpointStatus[] = [];
+    for (const ep of this.endpoints) {
+      const start = Date.now();
+      try {
+        const res = await ep.server.getHealth();
+        ep.latencyMs = Date.now() - start;
+        ep.healthy = res.status === "healthy" || res.status === "online";
+        if (ep.healthy) ep.errorCount = 0;
+        else ep.errorCount++;
+      } catch {
+        ep.healthy = false;
+        ep.latencyMs = Date.now() - start;
+        ep.errorCount++;
+      }
+      ep.lastChecked = Date.now();
+      results.push({
+        url: ep.url,
+        healthy: ep.healthy,
+        latencyMs: ep.latencyMs,
+        errorCount: ep.errorCount,
+        lastChecked: new Date(ep.lastChecked).toISOString(),
+      });
+    }
+    return results;
+  }
+
+  public getMetrics(): {
+    totalEndpoints: number;
+    healthyEndpoints: number;
+    activeUrl: string;
+    endpoints: RpcEndpointStatus[];
+  } {
+    const healthyCount = this.endpoints.filter((e) => e.healthy).length;
+    const activeEp = this.endpoints[this.currentIndex % this.endpoints.length] || this.endpoints[0];
+    return {
+      totalEndpoints: this.endpoints.length,
+      healthyEndpoints: healthyCount,
+      activeUrl: activeEp ? activeEp.url : config.rpcUrl,
+      endpoints: this.endpoints.map((e) => ({
+        url: e.url,
+        healthy: e.healthy,
+        latencyMs: e.latencyMs,
+        errorCount: e.errorCount,
+        lastChecked: new Date(e.lastChecked).toISOString(),
+      })),
+    };
+  }
+}
+
+export const rpcPoolManager = new RpcPoolManager(config.rpcUrls || [config.rpcUrl]);
 
 export const server: SorobanServer = config.testMode
   ? {
@@ -98,7 +197,16 @@ export const server: SorobanServer = config.testMode
       getTransaction: async () => ({ status: "NOT_FOUND" }),
       getAccount: async () => ({ accountId: "GTEST", sequence: "0" }),
     }
-  : new StellarSdk.rpc.Server(config.rpcUrl, { allowHttp: true });
+  : (new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          const activeServer = rpcPoolManager.getActiveServer() as any;
+          const value = activeServer[prop];
+          return typeof value === "function" ? value.bind(activeServer) : value;
+        },
+      },
+    ) as SorobanServer);
 
 // ============================================
 // HELPER FUNCTIONS

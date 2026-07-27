@@ -53,6 +53,10 @@ interface ParsedEvent {
 /** Indexer status response */
 export interface IndexerStatus extends DbStatus {
   isRunning: boolean;
+  indexerLag: number;
+  hasGap: boolean;
+  catchUpMode: boolean;
+  checkpoint: string | null;
 }
 
 /** DAO data for synthetic events */
@@ -81,6 +85,9 @@ export type { Event, EventQueryOptions };
 
 let isPolling = false;
 let rpcServer: StellarSdk.rpc.Server | null = null;
+let indexerLag = 0;
+let hasGap = false;
+let catchUpMode = false;
 
 // ============================================
 // LOGGER
@@ -171,15 +178,28 @@ async function pollEvents(
     const currentLedger = latestLedger.sequence;
 
     if (startLedger >= currentLedger) {
+      indexerLag = 0;
+      catchUpMode = false;
       return startLedger;
+    }
+
+    indexerLag = currentLedger - startLedger;
+
+    // Detect gap or large lag (> 100 ledgers)
+    let targetEndLedger = currentLedger;
+    if (indexerLag > 100) {
+      catchUpMode = true;
+      hasGap = true;
+      targetEndLedger = startLedger + 100;
+    } else {
+      catchUpMode = false;
     }
 
     for (const contractId of contracts) {
       try {
-        // The SDK now requires endLedger
         const events = await server.getEvents({
           startLedger: startLedger + 1,
-          endLedger: currentLedger,
+          endLedger: targetEndLedger,
           filters: [
             {
               type: "contract",
@@ -211,7 +231,7 @@ async function pollEvents(
             log("info", "events_indexed", {
               contract: contractId.slice(0, 8) + "...",
               count: addedCount,
-              latestLedger: currentLedger,
+              latestLedger: targetEndLedger,
             });
           }
         }
@@ -226,7 +246,8 @@ async function pollEvents(
       }
     }
 
-    return currentLedger;
+    db.setMetadata("indexerCheckpoint", new Date().toISOString());
+    return targetEndLedger;
   } catch (err) {
     log("error", "poll_events_failed", { error: (err as Error).message });
     return startLedger;
@@ -282,6 +303,8 @@ async function verifyEventOnChain(event: Event): Promise<boolean> {
  * Background job to verify pending events
  */
 async function verifyPendingEvents(): Promise<void> {
+  // Cleanup expired unverified pending events older than 15 mins
+  db.cleanupExpiredPendingEvents(15 * 60 * 1000);
   const unverified = db.getUnverifiedEvents(10);
   for (const event of unverified) {
     await verifyEventOnChain(event);
@@ -398,6 +421,10 @@ export function getIndexerStatus(): IndexerStatus {
   const status = db.getDbStatus();
   return {
     isRunning: isPolling,
+    indexerLag,
+    hasGap,
+    catchUpMode,
+    checkpoint: db.getMetadata<string>("indexerCheckpoint") ?? null,
     ...status,
   };
 }

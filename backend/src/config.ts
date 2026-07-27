@@ -36,6 +36,9 @@ export const config = {
 
   // Soroban RPC
   rpcUrl: process.env.SOROBAN_RPC_URL || "http://localhost:8000/soroban/rpc",
+  rpcUrls: process.env.SOROBAN_RPC_URLS
+    ? process.env.SOROBAN_RPC_URLS.split(",").map((s) => s.trim()).filter(Boolean)
+    : [process.env.SOROBAN_RPC_URL || "http://localhost:8000/soroban/rpc"],
   networkPassphrase:
     process.env.NETWORK_PASSPHRASE || "Standalone Network ; February 2017",
   rpcTimeoutMs: Number(process.env.RPC_TIMEOUT_MS || 30_000),
