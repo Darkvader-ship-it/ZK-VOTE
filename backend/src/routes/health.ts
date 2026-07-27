@@ -12,6 +12,8 @@ import { log } from "../services/logger.js";
 import { getDbDiagnostics, getDbStatus } from "../services/db.js";
 import { getBackupStatus } from "../services/backup.js";
 
+import { rpcPoolManager } from "../services/stellar.js";
+
 const router = Router();
 
 // Dependencies injected during setup
@@ -61,7 +63,10 @@ router.get("/health", async (req: Request, res: Response) => {
   const rpc = config.healthcheckPing ? await rpcHealth() : { ok: true };
   const base: Record<string, unknown> = {
     status: "ok",
-    rpc,
+    rpc: {
+      ...rpc,
+      pool: rpcPoolManager.getMetrics(),
+    },
   };
 
   // Only expose details if auth token provided

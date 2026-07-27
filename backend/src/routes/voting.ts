@@ -28,6 +28,11 @@ import {
 } from "../middleware/index.js";
 import { voteSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
+import {
+  getTransactionLog,
+  recordTransactionLog,
+  updateTransactionLogStatus,
+} from "../services/db.js";
 
 const router = Router();
 
@@ -44,6 +49,20 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
 
   try {
     log("info", "vote_request", { daoId, proposalId });
+
+    // Replay protection: check local transaction log
+    if (nullifier) {
+      const existingTx = getTransactionLog(nullifier);
+      if (existingTx && (existingTx.status === "SUCCESS" || existingTx.status === "PENDING")) {
+        log("info", "vote_replay_prevented", { nullifier, txHash: existingTx.tx_hash, status: existingTx.status });
+        return res.json({
+          success: true,
+          txHash: existingTx.tx_hash,
+          status: existingTx.status === "SUCCESS" ? "SUCCESS" : "PENDING",
+          replayed: true,
+        });
+      }
+    }
 
     // Convert inputs to Soroban types
     let scNullifier: StellarSdk.xdr.ScVal;
@@ -145,12 +164,17 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
       );
 
       if (sr.status === "ERROR") {
+        if (nullifier) updateTransactionLogStatus(nullifier, "FAILED");
         log("error", "submit_failed", {
           daoId,
           proposalId,
           error: sr.errorResult,
         });
         throw new Error("SUBMIT_FAILED");
+      }
+
+      if (nullifier && sr.hash) {
+        recordTransactionLog(nullifier, sr.hash, "PENDING");
       }
 
       // Wait for confirmation
@@ -164,6 +188,9 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
     });
 
     if (result.status === "SUCCESS") {
+      if (nullifier && sendResult.hash) {
+        updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
+      }
       log("info", "vote_success", {
         txHash: sendResult.hash,
         daoId,
@@ -175,6 +202,9 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
         status: result.status,
       });
     } else {
+      if (nullifier && sendResult.hash) {
+        updateTransactionLogStatus(nullifier, "FAILED", sendResult.hash);
+      }
       log("error", "vote_failed", {
         txHash: sendResult.hash,
         status: result.status,
@@ -186,6 +216,9 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
       });
     }
   } catch (err) {
+    if (nullifier) {
+      updateTransactionLogStatus(nullifier, "FAILED");
+    }
     log("error", "vote_exception", {
       message: (err as Error).message,
       stack: (err as Error).stack,
