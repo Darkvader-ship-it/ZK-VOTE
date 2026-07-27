@@ -16,7 +16,6 @@ const isTestMode = process.env.RELAYER_TEST_MODE === "true";
 // production prevents a post-foothold env flip from silently breaking every
 // guardrail at the next restart.
 if (process.env.NODE_ENV === "production" && isTestMode) {
-  // eslint-disable-next-line no-console
   console.error(
     "[fatal] RELAYER_TEST_MODE=true is forbidden when NODE_ENV=production",
   );

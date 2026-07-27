@@ -315,6 +315,13 @@ export async function startIndexer(
   const jsonPath = path.join(__dirname, "..", "..", "data", "events.json");
   db.migrateFromJson(jsonPath);
 
+  // Migrate from monolithic events table to per-DAO partitions
+  // Idempotent — safe to run on every startup until migration is complete
+  const migrated = db.migrateToPartitions();
+  if (migrated > 0) {
+    log("info", "partition_migration_complete", { migrated });
+  }
+
   let lastLedger = db.getMetadata<number>("lastLedger") ?? 0;
 
   log("info", "indexer_started", {

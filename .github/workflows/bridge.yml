@@ -154,11 +154,12 @@ jobs:
           done
           echo "Anvil RPC is up"
 
-          # wait for Soroban RPC
+          # wait for Soroban RPC (must respond without "data stores not initialized")
           for i in {1..60}; do
             resp=$(curl -sS -X POST http://localhost:8000/soroban/rpc \
               -H 'content-type: application/json' \
               --data '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger","params":[]}' || true)
+            echo "$resp" | grep -q '"data stores are not initialized"' && sleep 5 && continue
             echo "$resp" | grep -q '"jsonrpc"' && break
             [ "$i" -eq 60 ] && echo "Soroban RPC not ready" && exit 1
             sleep 2

@@ -62,7 +62,7 @@ router.get("/indexer/status", queryLimiter, (req: Request, res: Response) => {
   try {
     const status = getIndexerStatus();
     res.json(status);
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to get indexer status" });
   }
 });
@@ -74,7 +74,7 @@ router.get("/indexer/daos", queryLimiter, (req: Request, res: Response) => {
   try {
     const daos = getIndexedDaos();
     res.json({ daos });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to get indexed DAOs" });
   }
 });
@@ -92,7 +92,7 @@ router.post("/events", authGuard, (req: Request, res: Response) => {
   try {
     addManualEvent(daoId, type, data || {});
     res.json({ success: true });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: "Failed to add event" });
   }
 });
