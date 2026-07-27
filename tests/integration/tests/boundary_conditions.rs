@@ -68,7 +68,8 @@ fn create_mock_vk(env: &Env) -> VerificationKey {
             g1.clone(),
             g1.clone(),
             g1.clone(),
-            g1.clone(), // 6 elements for 5 public signals + 1
+            g1.clone(),
+            g1.clone(), // 7 elements for 6 public signals + 1
         ],
     }
 }

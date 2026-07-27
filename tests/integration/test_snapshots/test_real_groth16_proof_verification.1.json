@@ -187,6 +187,9 @@
                           },
                           {
                             "bytes": "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"
+                          },
+                          {
+                            "bytes": "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"
                           }
                         ]
                       }
@@ -1559,6 +1562,36 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "CommitmentUsed"
+                  },
+                  {
+                    "u64": "1"
+                  },
+                  {
+                    "u256": "18396963762341379990255976702361231185864766675613138359859213921414061959577"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bool": true
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 535680
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "key": {
+                "vec": [
+                  {
                     "symbol": "FilledSubtrees"
                   },
                   {
@@ -2761,6 +2794,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "snapshot_ledger"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "state"
                     },
                     "val": {
@@ -2784,7 +2825,7 @@
                       "symbol": "vk_hash"
                     },
                     "val": {
-                      "bytes": "2e04cc13511e68af11d297a2532685bf55fea70abb3a774261dd4e7184b2f1be"
+                      "bytes": "1924120f9d2624f57f5c78d742afae8cdfd7167a9d32a7f6e88f1e03049e3336"
                     }
                   },
                   {
@@ -2935,6 +2976,9 @@
                         },
                         {
                           "bytes": "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"
+                        },
+                        {
+                          "bytes": "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"
                         }
                       ]
                     }
@@ -3049,6 +3093,9 @@
                         },
                         {
                           "bytes": "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"
+                        },
+                        {
+                          "bytes": "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"
                         }
                       ]
                     }
@@ -3097,7 +3144,19 @@
                         "symbol": "ver"
                       },
                       "val": {
-                        "u32": 1
+                        "u32": 2
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "Guardian"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                       }
                     },
                     {

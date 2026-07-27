@@ -33,8 +33,8 @@ use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype,
     crypto::bn254::{Bn254G1Affine, Bn254G2Affine, Fr},
-    panic_with_error, symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
-    Vec, U256,
+    panic_with_error, symbol_short, Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
+    U256,
 };
 
 // Re-export shared Groth16 types and utilities
@@ -104,16 +104,8 @@ pub enum VotingError {
     InsufficientRandomness = 37,
     RandomnessAlreadyRevealed = 38,
     RandomnessParticipantLimit = 39,
-    TooManyActiveProposals = 40,
-    ProposalCooldownActive = 41,
-    InvalidProposalDeposit = 42,
-    ProposalHasVotes = 43,
-    VotingNotStarted = 44,
-    ElectionDurationTooShort = 45,
-    ElectionDurationTooLong = 46,
-    InvalidNoticePeriod = 47,
-    InvalidRegistrationPeriod = 48,
-    InvalidRegistrationGap = 49,
+    /// Candidate index >= numCandidates configured for this election
+    InvalidCandidateIndex = 40,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -126,8 +118,8 @@ const MAX_TITLE_LEN: u32 = 100; // Max proposal title length (100 bytes)
 const MAX_CID_LEN: u32 = 64; // Max IPFS CID length (CIDv1 is ~59 chars)
 
 // Circuit constants
-/// Vote circuit public signals: nullifier, root, dao_id, proposal_id, vote_choice
-const NUM_PUBLIC_SIGNALS: u32 = 5;
+/// Vote circuit public signals: root, nullifier, dao_id, proposal_id, vote_choice, num_candidates
+const NUM_PUBLIC_SIGNALS: u32 = 6;
 // IC (inner commitment) vector length for Groth16 VK = num_public_inputs + 1
 const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 pub const MAX_PAUSE_DURATION: u64 = 72 * 60 * 60;
@@ -135,16 +127,6 @@ pub const RANDOMNESS_COMMIT_WINDOW: u64 = 3_600;
 pub const RANDOMNESS_REVEAL_WINDOW: u64 = 3_600;
 const MIN_RANDOMNESS_PARTICIPANTS: u32 = 2;
 const MAX_RANDOMNESS_PARTICIPANTS: u32 = 32;
-pub const MAX_CONCURRENT_ELECTIONS: u64 = 20;
-pub const ELECTION_CREATION_COOLDOWN: u64 = 600;
-
-// Temporal guard constants for election boundaries
-pub const MIN_ELECTION_DURATION: u64 = 300; // 5 minutes minimum election duration
-pub const MAX_ELECTION_DURATION: u64 = 90 * 86_400; // 90 days maximum election duration
-pub const MIN_REGISTRATION_PERIOD: u64 = 300; // 5 minutes minimum registration period
-pub const MIN_NOTICE_PERIOD: u64 = 60; // 1 minute minimum notice period before start
-pub const MIN_REGISTRATION_GAP: u64 = 60; // 1 minute minimum gap between registration_end and start
-pub const TIMESTAMP_TOLERANCE: u64 = 5; // ±5 seconds clock skew tolerance buffer
 
 #[contracttype]
 #[derive(Clone)]
@@ -178,10 +160,6 @@ pub enum DataKey {
     RandomnessCommit(u64, u64, Address),
     RandomnessReveal(u64, u64, Address),
     RandomnessCommitters(u64, u64),
-    ActiveProposalCount(u64),
-    ProposalCooldown(u64, Address),
-    DepositConfig(u64),
-    ProposalDeposit(u64, u64),
 }
 
 #[contracttype]
@@ -215,20 +193,14 @@ pub struct BalanceSnapshotInfo {
 
 #[contracttype]
 #[derive(Clone)]
-pub struct ProposalDeposit {
-    pub token: Address,
-    pub amount: i128,
-}
-
-#[contracttype]
-#[derive(Clone)]
 pub struct ElectionConfig {
     pub snapshot_ledger: u32,
     pub min_balance: i128,
     pub twab_window: u64,
     pub candidate_seed: Option<BytesN<32>>,
-    pub start_time: u64,
-    pub registration_end: u64,
+    /// Number of valid candidates. The circuit constrains voteChoice < num_candidates.
+    /// Must be set at election creation and cannot be changed after votes are cast.
+    pub num_candidates: u32,
 }
 
 #[contracttype]
@@ -319,16 +291,6 @@ pub struct ProposalArchivedEvent {
     #[topic]
     pub proposal_id: u64,
     pub archived_by: Address,
-}
-
-#[soroban_sdk::contractevent]
-#[derive(Clone, Debug, PartialEq)]
-pub struct ProposalDeletedEvent {
-    #[topic]
-    pub dao_id: u64,
-    #[topic]
-    pub proposal_id: u64,
-    pub deleted_by: Address,
 }
 
 #[soroban_sdk::contractevent]
@@ -688,68 +650,6 @@ impl Voting {
         }
     }
 
-    pub fn set_election_deposit(
-        env: Env,
-        dao_id: u64,
-        token: Address,
-        amount: i128,
-        admin: Address,
-    ) {
-        Self::bump_instance(&env);
-        admin.require_auth();
-        Self::assert_admin(&env, dao_id, &admin);
-        if amount <= 0 {
-            panic_with_error!(&env, VotingError::InvalidProposalDeposit);
-        }
-        let key = DataKey::DepositConfig(dao_id);
-        env.storage()
-            .persistent()
-            .set(&key, &ProposalDeposit { token, amount });
-        Self::bump_persistent(&env, &key);
-    }
-
-    pub fn active_proposal_count(env: Env, dao_id: u64) -> u64 {
-        Self::bump_instance(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::ActiveProposalCount(dao_id))
-            .unwrap_or(0)
-    }
-
-    fn enforce_creation_limits(env: &Env, dao_id: u64, creator: &Address, now: u64) {
-        let active_key = DataKey::ActiveProposalCount(dao_id);
-        let active: u64 = env.storage().instance().get(&active_key).unwrap_or(0);
-        if active >= MAX_CONCURRENT_ELECTIONS {
-            panic_with_error!(env, VotingError::TooManyActiveProposals);
-        }
-
-        let cooldown_key = DataKey::ProposalCooldown(dao_id, creator.clone());
-        let cooldown_end: u64 = env.storage().persistent().get(&cooldown_key).unwrap_or(0);
-        if now < cooldown_end {
-            panic_with_error!(env, VotingError::ProposalCooldownActive);
-        }
-    }
-
-    fn decrement_active_count(env: &Env, dao_id: u64) {
-        let key = DataKey::ActiveProposalCount(dao_id);
-        let active: u64 = env.storage().instance().get(&key).unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&key, &active.saturating_sub(1));
-    }
-
-    fn refund_deposit(env: &Env, dao_id: u64, proposal_id: u64, creator: &Address) {
-        let key = DataKey::ProposalDeposit(dao_id, proposal_id);
-        if let Some(deposit) = env.storage().persistent().get::<_, ProposalDeposit>(&key) {
-            token::Client::new(env, &deposit.token).transfer(
-                &env.current_contract_address(),
-                creator,
-                &deposit.amount,
-            );
-            env.storage().persistent().remove(&key);
-        }
-    }
-
     fn validate_vk(env: &Env, vk: &VerificationKey) {
         if vk.ic.len() != VOTE_CIRCUIT_IC_LEN {
             panic_with_error!(env, VotingError::VkIcLengthMismatch);
@@ -964,20 +864,10 @@ impl Voting {
 
         let now = env.ledger().timestamp();
 
-        // Validate end_time: 0 = no deadline, otherwise must be in the future and within duration bounds
-        if end_time != 0 {
-            if end_time <= now + TIMESTAMP_TOLERANCE {
-                panic_with_error!(&env, VotingError::EndTimeInvalid);
-            }
-            let duration = end_time - now;
-            if duration < MIN_ELECTION_DURATION {
-                panic_with_error!(&env, VotingError::ElectionDurationTooShort);
-            }
-            if duration > MAX_ELECTION_DURATION {
-                panic_with_error!(&env, VotingError::ElectionDurationTooLong);
-            }
+        // Validate end_time: 0 = no deadline, otherwise must be in the future
+        if end_time != 0 && end_time <= now {
+            panic_with_error!(&env, VotingError::EndTimeInvalid);
         }
-        Self::enforce_creation_limits(&env, dao_id, &creator, now);
 
         // Resolve VK version to use (curve-aware)
         let curve_id = Self::get_curve_id(&env, dao_id);
@@ -1027,23 +917,6 @@ impl Voting {
         let snapshot_ledger = env.ledger().sequence();
 
         let proposal_id = Self::next_proposal_id(&env, dao_id);
-        let deposit_key = DataKey::DepositConfig(dao_id);
-        if let Some(deposit) = env
-            .storage()
-            .persistent()
-            .get::<_, ProposalDeposit>(&deposit_key)
-        {
-            token::Client::new(&env, &deposit.token).transfer(
-                &creator,
-                env.current_contract_address(),
-                &deposit.amount,
-            );
-            let proposal_deposit_key = DataKey::ProposalDeposit(dao_id, proposal_id);
-            env.storage()
-                .persistent()
-                .set(&proposal_deposit_key, &deposit);
-            Self::bump_persistent(&env, &proposal_deposit_key);
-        }
 
         let proposal = ProposalInfo {
             id: proposal_id,
@@ -1072,15 +945,6 @@ impl Voting {
         let curve_key = DataKey::ProposalCurve(dao_id, proposal_id);
         env.storage().persistent().set(&curve_key, &curve_id);
         Self::bump_persistent(&env, &curve_key);
-
-        let active_key = DataKey::ActiveProposalCount(dao_id);
-        let active: u64 = env.storage().instance().get(&active_key).unwrap_or(0);
-        env.storage().instance().set(&active_key, &(active + 1));
-        let cooldown_key = DataKey::ProposalCooldown(dao_id, creator.clone());
-        env.storage()
-            .persistent()
-            .set(&cooldown_key, &(now + ELECTION_CREATION_COOLDOWN));
-        Self::bump_persistent(&env, &cooldown_key);
 
         ProposalEvent {
             dao_id,
@@ -1173,7 +1037,15 @@ impl Voting {
             .get(&prop_key)
             .expect("proposal not found");
 
-        Self::check_voting_window(&env, dao_id, proposal_id, &proposal);
+        // Check voting period and state (voting starts at creation, ends at end_time)
+        // If end_time is 0, there's no deadline (voting never closes)
+        let now = env.ledger().timestamp();
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
+        if proposal.end_time != 0 && now > proposal.end_time {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
 
         // Revocation is now enforced by zeroing leaves in the Merkle tree.
         // A revoked member's commitment is zeroed, so their proof won't verify
@@ -1251,16 +1123,33 @@ impl Voting {
         }
 
         // Verify Groth16 proof
-        // Public signals: [root, nullifier, daoId, proposalId, voteChoice]
+        // Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates]
         // Note: daoId is included for domain separation (prevents cross-DAO nullifier linkability)
+        // numCandidates is bound into the proof to prevent circuit/contract candidate bound desync
         // Commitment is now private (computed internally in circuit) for improved vote unlinkability
-        let vote_signal = if vote_choice {
-            U256::from_u32(&env, 1)
-        } else {
-            U256::from_u32(&env, 0)
-        };
+        let election_config: ElectionConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ElectionConfig(dao_id, proposal_id))
+            .unwrap_or(ElectionConfig {
+                snapshot_ledger: 0,
+                min_balance: 0,
+                twab_window: 0,
+                candidate_seed: None,
+                num_candidates: 0,
+            });
+
+        let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
+        if election_config.num_candidates > 0
+            && vote_choice_index >= election_config.num_candidates
+        {
+            panic_with_error!(&env, VotingError::InvalidCandidateIndex);
+        }
+
+        let vote_signal = U256::from_u32(&env, vote_choice_index);
         let dao_signal = U256::from_u128(&env, dao_id as u128);
         let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+        let num_candidates_signal = U256::from_u32(&env, election_config.num_candidates);
 
         let pub_signals = soroban_sdk::vec![
             &env,
@@ -1268,7 +1157,8 @@ impl Voting {
             nullifier.clone(),
             dao_signal,
             proposal_signal,
-            vote_signal
+            vote_signal,
+            num_candidates_signal,
         ];
 
         if !Self::verify_groth16(&env, &vk, &proof, &pub_signals) {
@@ -1328,7 +1218,13 @@ impl Voting {
             .get(&prop_key)
             .expect("proposal not found");
 
-        Self::check_voting_window(&env, dao_id, proposal_id, &proposal);
+        let now = env.ledger().timestamp();
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
+        if proposal.end_time != 0 && now > proposal.end_time {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
 
         match proposal.vote_mode {
             VoteMode::Fixed => {
@@ -1388,13 +1284,29 @@ impl Voting {
             panic_with_error!(&env, VotingError::VkChanged);
         }
 
-        let vote_signal = if vote_choice {
-            U256::from_u32(&env, 1)
-        } else {
-            U256::from_u32(&env, 0)
-        };
+        let election_config: ElectionConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ElectionConfig(dao_id, proposal_id))
+            .unwrap_or(ElectionConfig {
+                snapshot_ledger: 0,
+                min_balance: 0,
+                twab_window: 0,
+                candidate_seed: None,
+                num_candidates: 0,
+            });
+
+        let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
+        if election_config.num_candidates > 0
+            && vote_choice_index >= election_config.num_candidates
+        {
+            panic_with_error!(&env, VotingError::InvalidCandidateIndex);
+        }
+
+        let vote_signal = U256::from_u32(&env, vote_choice_index);
         let dao_signal = U256::from_u128(&env, dao_id as u128);
         let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+        let num_candidates_signal = U256::from_u32(&env, election_config.num_candidates);
 
         let pub_signals = soroban_sdk::vec![
             &env,
@@ -1403,6 +1315,7 @@ impl Voting {
             dao_signal,
             proposal_signal,
             vote_signal,
+            num_candidates_signal,
         ];
 
         if !Self::verify_groth16_bls381(&env, &vk, &proof, &pub_signals) {
@@ -1527,8 +1440,6 @@ impl Voting {
             proposal.state = ProposalState::Closed;
             env.storage().persistent().set(&key, &proposal);
             Self::bump_persistent(&env, &key);
-            Self::decrement_active_count(&env, dao_id);
-            Self::refund_deposit(&env, dao_id, proposal_id, &proposal.created_by);
             ProposalClosedEvent {
                 dao_id,
                 proposal_id,
@@ -1536,46 +1447,6 @@ impl Voting {
             }
             .publish(&env);
         }
-    }
-
-    /// Cancel and delete an unvoted active election, refunding its creation deposit.
-    pub fn delete_election(env: Env, dao_id: u64, proposal_id: u64, admin: Address) {
-        Self::bump_instance(&env);
-        admin.require_auth();
-        Self::assert_admin(&env, dao_id, &admin);
-
-        let proposal_key = DataKey::Proposal(dao_id, proposal_id);
-        let proposal: ProposalInfo = env
-            .storage()
-            .persistent()
-            .get(&proposal_key)
-            .expect("proposal not found");
-        if proposal.state != ProposalState::Active {
-            panic_with_error!(&env, VotingError::InvalidState);
-        }
-        if proposal.yes_votes != 0 || proposal.no_votes != 0 {
-            panic_with_error!(&env, VotingError::ProposalHasVotes);
-        }
-
-        Self::decrement_active_count(&env, dao_id);
-        Self::refund_deposit(&env, dao_id, proposal_id, &proposal.created_by);
-        env.storage().persistent().remove(&proposal_key);
-        env.storage()
-            .persistent()
-            .remove(&DataKey::ProposalCurve(dao_id, proposal_id));
-        env.storage()
-            .persistent()
-            .remove(&DataKey::BalanceSnapshot(dao_id, proposal_id));
-        env.storage()
-            .persistent()
-            .remove(&DataKey::ElectionConfig(dao_id, proposal_id));
-
-        ProposalDeletedEvent {
-            dao_id,
-            proposal_id,
-            deleted_by: admin,
-        }
-        .publish(&env);
     }
 
     /// Archive a proposal (idempotent). Prevents further votes and signals off-chain cleanup.
@@ -1854,7 +1725,13 @@ impl Voting {
             .get(&prop_key)
             .expect("proposal not found");
 
-        Self::check_voting_window(&env, dao_id, proposal_id, &proposal);
+        let now = env.ledger().timestamp();
+        if proposal.state != ProposalState::Active {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
+        if proposal.end_time != 0 && now > proposal.end_time {
+            panic_with_error!(&env, VotingError::VotingClosed);
+        }
 
         match proposal.vote_mode {
             VoteMode::Fixed => {
@@ -1924,13 +1801,29 @@ impl Voting {
             }
         }
 
-        let vote_signal = if vote_choice {
-            U256::from_u32(&env, 1)
-        } else {
-            U256::from_u32(&env, 0)
-        };
+        let election_config: ElectionConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ElectionConfig(dao_id, proposal_id))
+            .unwrap_or(ElectionConfig {
+                snapshot_ledger: 0,
+                min_balance: 0,
+                twab_window: 0,
+                candidate_seed: None,
+                num_candidates: 0,
+            });
+
+        let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
+        if election_config.num_candidates > 0
+            && vote_choice_index >= election_config.num_candidates
+        {
+            panic_with_error!(&env, VotingError::InvalidCandidateIndex);
+        }
+
+        let vote_signal = U256::from_u32(&env, vote_choice_index);
         let dao_signal = U256::from_u128(&env, dao_id as u128);
         let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+        let num_candidates_signal = U256::from_u32(&env, election_config.num_candidates);
 
         let pub_signals = soroban_sdk::vec![
             &env,
@@ -1939,6 +1832,7 @@ impl Voting {
             dao_signal,
             proposal_signal,
             vote_signal,
+            num_candidates_signal,
         ];
 
         if !Self::verify_groth16(&env, &vk, &proof, &pub_signals) {
@@ -1967,8 +1861,9 @@ impl Voting {
 
     // ── Anti-Flash Loan Protection ──────────────────────────────────────────
 
-    /// Create or update election configuration with token-gating parameters and time bounds.
-    /// Sets minimum balance, TWAB window, start_time, and registration_end.
+    /// Create or update election configuration with token-gating parameters.
+    /// Sets the minimum balance required to vote, snapshot ledger, TWAB window,
+    /// and the number of valid candidates (bound into the ZK proof).
     /// Only callable during proposal creation or by DAO admin.
     pub fn set_election_config(
         env: Env,
@@ -1976,52 +1871,10 @@ impl Voting {
         proposal_id: u64,
         min_balance: i128,
         twab_window: u64,
-        start_time: u64,
-        registration_end: u64,
+        num_candidates: u32,
     ) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
-
-        let now = env.ledger().timestamp();
-        let prop_key = DataKey::Proposal(dao_id, proposal_id);
-        if let Some(proposal) = env.storage().persistent().get::<_, ProposalInfo>(&prop_key) {
-            let eff_start = if start_time > 0 {
-                start_time
-            } else {
-                proposal.created_at
-            };
-
-            if start_time > 0 && start_time + TIMESTAMP_TOLERANCE < now + MIN_NOTICE_PERIOD {
-                panic_with_error!(&env, VotingError::InvalidNoticePeriod);
-            }
-
-            if registration_end > 0
-                && registration_end + TIMESTAMP_TOLERANCE
-                    < proposal.created_at + MIN_REGISTRATION_PERIOD
-            {
-                panic_with_error!(&env, VotingError::InvalidRegistrationPeriod);
-            }
-
-            if registration_end > 0
-                && eff_start + TIMESTAMP_TOLERANCE < registration_end + MIN_REGISTRATION_GAP
-            {
-                panic_with_error!(&env, VotingError::InvalidRegistrationGap);
-            }
-
-            if proposal.end_time != 0 {
-                if proposal.end_time < eff_start {
-                    panic_with_error!(&env, VotingError::EndTimeInvalid);
-                }
-                let duration = proposal.end_time - eff_start;
-                if duration < MIN_ELECTION_DURATION {
-                    panic_with_error!(&env, VotingError::ElectionDurationTooShort);
-                }
-                if duration > MAX_ELECTION_DURATION {
-                    panic_with_error!(&env, VotingError::ElectionDurationTooLong);
-                }
-            }
-        }
-
         let snapshot_ledger = env.ledger().sequence();
         let key = DataKey::ElectionConfig(dao_id, proposal_id);
         let candidate_seed = env
@@ -2034,33 +1887,10 @@ impl Voting {
             min_balance,
             twab_window,
             candidate_seed,
-            start_time,
-            registration_end,
+            num_candidates,
         };
         env.storage().persistent().set(&key, &config);
         Self::bump_persistent(&env, &key);
-    }
-
-    fn check_voting_window(env: &Env, dao_id: u64, proposal_id: u64, proposal: &ProposalInfo) {
-        if proposal.state != ProposalState::Active {
-            panic_with_error!(env, VotingError::VotingClosed);
-        }
-
-        let now = env.ledger().timestamp();
-        let config = Self::get_election_config(env.clone(), dao_id, proposal_id);
-        let start_time = config
-            .as_ref()
-            .map(|c| c.start_time)
-            .filter(|&t| t > 0)
-            .unwrap_or(proposal.created_at);
-
-        if now + TIMESTAMP_TOLERANCE < start_time {
-            panic_with_error!(env, VotingError::VotingNotStarted);
-        }
-
-        if proposal.end_time != 0 && now > proposal.end_time + TIMESTAMP_TOLERANCE {
-            panic_with_error!(env, VotingError::VotingClosed);
-        }
     }
 
     /// Get election configuration for a proposal.
@@ -2072,6 +1902,14 @@ impl Voting {
             Self::bump_persistent(&env, &key);
         }
         config
+    }
+
+    /// Get the number of valid candidates for a proposal's election.
+    /// Returns 0 if no election config is set (backward-compatible default).
+    pub fn get_num_candidates(env: Env, dao_id: u64, proposal_id: u64) -> u32 {
+        Self::get_election_config(env, dao_id, proposal_id)
+            .map(|c| c.num_candidates)
+            .unwrap_or(0)
     }
 
     /// Get the snapshot ledger for a proposal (from ProposalInfo).
@@ -2414,8 +2252,7 @@ impl Voting {
                     min_balance: 0,
                     twab_window: 0,
                     candidate_seed: None,
-                    start_time: 0,
-                    registration_end: 0,
+                    num_candidates: 0,
                 });
         if config.candidate_seed.is_some() {
             panic_with_error!(&env, VotingError::CandidateSeedFinalized);
