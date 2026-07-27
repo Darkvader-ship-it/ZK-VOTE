@@ -93,7 +93,7 @@ function setCachedContent(cid: string, data: unknown): void {
 // ============================================
 
 /**
- * GET /ipfs/health - IPFS health check
+ * GET /ipfs/health - IPFS health check with pin verification status
  */
 router.get("/ipfs/health", queryLimiter, (async (
   req: Request,
@@ -105,9 +105,34 @@ router.get("/ipfs/health", queryLimiter, (async (
 
   try {
     const healthy = await ipfsService.isHealthy();
+
+    // Get enhanced pin verification data
+    let pinStatus;
+    try {
+      pinStatus = ipfsService.getEnhancedHealth();
+    } catch {
+      pinStatus = null;
+    }
+
     res.json({
       enabled: true,
       status: healthy ? "healthy" : "degraded",
+      pinVerification: pinStatus
+        ? {
+            monitorRunning: pinStatus.running,
+            totalPins: pinStatus.stats.totalPins,
+            healthyPins: pinStatus.stats.healthyPins,
+            degradedPins: pinStatus.stats.degradedPins,
+            failedPins: pinStatus.stats.failedPins,
+            totalSizeBytes: pinStatus.stats.totalSizeBytes,
+            estimatedMonthlyCostUsd: pinStatus.stats.estimatedMonthlyCostUsd,
+            lastScanAt: pinStatus.lastScanAt,
+            lastScanDurationMs: pinStatus.lastScanDurationMs,
+            nextScanAt: pinStatus.nextScanAt,
+            activeAlerts: pinStatus.alerts.length,
+            alerts: pinStatus.alerts.slice(0, 10), // Cap at 10 for response size
+          }
+        : null,
     });
   } catch (err) {
     res.json({

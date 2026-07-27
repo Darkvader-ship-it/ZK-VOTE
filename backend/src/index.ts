@@ -15,6 +15,11 @@ import { config, validateEnv, isValidContractId } from "./config.js";
 // Services
 import { log, logger } from "./services/logger.js";
 import * as ipfsService from "./services/ipfs.js";
+import { initPinManager } from "./services/ipfs-pin-manager.js";
+import {
+  startMonitor as startPinMonitor,
+  stopMonitor as stopPinMonitor,
+} from "./services/ipfs-monitor.js";
 import { server, relayerKeypair } from "./services/stellar.js";
 import {
   startDaoSync,
@@ -152,11 +157,37 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         : [],
     });
 
-    // Initialize Pinata
+    // Initialize Pinata and IPFS redundancy layer
     if (config.ipfsEnabled && config.pinataJwt) {
       try {
         ipfsService.initPinata(config.pinataJwt, config.pinataGateway);
         log("info", "pinata_initialized");
+
+        // Initialize pin manager (local backup + secondary pinning)
+        try {
+          initPinManager(config.ipfsBackupDir, config.web3StorageToken);
+          log("info", "pin_manager_initialized", {
+            backupDir: config.ipfsBackupDir,
+            hasWeb3Storage: !!config.web3StorageToken,
+          });
+
+          // Start pin verification monitor
+          startPinMonitor({
+            scanIntervalMs: config.pinVerifyIntervalMs,
+            alertThreshold: config.pinAlertThreshold,
+            autoRepin: config.pinAutoRepin,
+            repinFn: ipfsService.repinCallback,
+          });
+          log("info", "pin_monitor_started", {
+            intervalMs: config.pinVerifyIntervalMs,
+            alertThreshold: config.pinAlertThreshold,
+            autoRepin: config.pinAutoRepin,
+          });
+        } catch (err) {
+          log("warn", "pin_manager_init_failed", {
+            error: (err as Error).message,
+          });
+        }
       } catch (err) {
         log("error", "pinata_init_failed", { error: (err as Error).message });
       }
@@ -224,6 +255,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stopDaoSync();
     stopMembershipSync();
     stopTTLRenewal();
+    stopPinMonitor();
     process.exit(0);
   });
 
@@ -233,6 +265,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stopDaoSync();
     stopMembershipSync();
     stopTTLRenewal();
+    stopPinMonitor();
     process.exit(0);
   });
 }
