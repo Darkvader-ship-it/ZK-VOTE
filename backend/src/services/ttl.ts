@@ -301,9 +301,7 @@ async function collectEntries(): Promise<{
   return { entries, graceEntries };
 }
 
-async function executeBatch(
-  batch: RenewalEntry[],
-): Promise<{
+async function executeBatch(batch: RenewalEntry[]): Promise<{
   successCount: number;
   failCount: number;
   totalFee: number;

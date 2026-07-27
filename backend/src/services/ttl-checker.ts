@@ -58,9 +58,7 @@ export function estimateRemainingFromTracked(
   };
 }
 
-export async function queryContractInstanceTTL(
-  contractId: string,
-): Promise<{
+export async function queryContractInstanceTTL(contractId: string): Promise<{
   remainingLedgers: number;
   liveUntilLedger: number;
   latestLedger: number;

@@ -122,12 +122,10 @@ router.post(
         }
       } else {
         log("warn", "comment_pow_missing", { daoId, proposalId });
-        return res
-          .status(400)
-          .json({
-            error:
-              "PoW challenge required: obtain a challenge via GET /comment/challenge/:commitment",
-          });
+        return res.status(400).json({
+          error:
+            "PoW challenge required: obtain a challenge via GET /comment/challenge/:commitment",
+        });
       }
     }
 
