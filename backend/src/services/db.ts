@@ -16,13 +16,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   timeQuery,
-  getCachedOrCompute,
   invalidateCachePrefix,
   getDbStats as getMonitorDbStats,
   profileEventQueries,
-  analyzeQueryPlan,
 } from "./dbMonitor.js";
-import { migrateUp, getMigrationStatus } from "./migrate.js";
+import { migrateUp } from "./migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -392,50 +390,6 @@ function getAllPartitionDaoIds(database: DatabaseType): number[] {
   return rows.map((r) => r.dao_id);
 }
 
-/**
- * Build a UNION ALL sub-query across all known partitions for a
- * cross-DAO SELECT.  Each sub-query adds the literal `dao_id` column.
- *
- * Example output:
- *   SELECT id, 1 AS dao_id, type, ... FROM events_1
- *   UNION ALL SELECT id, 2 AS dao_id, type, ... FROM events_2
- */
-function buildUnionAllQuery(
-  columns: string,
-  whereClause: string,
-  orderAndLimit: string,
-  daoIds?: number[],
-): { sql: string; params: unknown[] } {
-  const database = db as DatabaseType;
-  const ids = daoIds ?? getAllPartitionDaoIds(database);
-  if (ids.length === 0) {
-    return {
-      sql: `SELECT ${columns} FROM (SELECT NULL AS id WHERE 1=0) AS _ WHERE ${whereClause} ${orderAndLimit}`,
-      params: [],
-    };
-  }
-
-  const parts: string[] = [];
-  const params: unknown[] = [];
-  for (const daoId of ids) {
-    const tableName = partitionTableName(daoId);
-    // The UNION ALL sub-query includes a literal dao_id column
-    parts.push(
-      `SELECT id, ${daoId} AS dao_id, type, data, ledger, tx_hash, timestamp, verified, created_at FROM ${tableName}`,
-    );
-  }
-  // Flatten params — each sub-query uses the same positional parameters
-  // (e.g. for WHERE type IN (?,?) the same params apply to every branch).
-  // We capture param placeholders from the whereClause once and repeat
-  // them per branch later — but for simplicity with UNION ALL we use a
-  // wrapper that applies the WHERE / ORDER / LIMIT to the UNION ALL result.
-  const unionSql = parts.join(" UNION ALL ");
-  return {
-    sql: `SELECT ${columns} FROM (${unionSql}) AS combined WHERE ${whereClause} ${orderAndLimit}`,
-    params,
-  };
-}
-
 // ============================================
 // INITIALIZATION
 // ============================================
@@ -649,7 +603,8 @@ export function initDb(dbPath?: string): DatabaseType {
     path: dbFile,
     partitions: knownPartitions.size,
   });
-  return database; (feat: events partitioning, db monitoring, migration framework, and data integrity constraints)
+  // feat: events partitioning, db monitoring, migration framework, and data integrity constraints
+  return database;
 }
 
 /**
@@ -1071,7 +1026,7 @@ export function getDbStatus(): DbStatus {
   const daoIds = getAllPartitionDaoIds(database);
 
   let totalEvents = 0;
-  let daoCount = daoIds.length;
+  const daoCount = daoIds.length;
 
   if (daoIds.length > 0) {
     // Count across all partitions

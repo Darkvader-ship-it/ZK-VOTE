@@ -16,7 +16,6 @@ const isTestMode = process.env.RELAYER_TEST_MODE === "true";
 // production prevents a post-foothold env flip from silently breaking every
 // guardrail at the next restart.
 if (process.env.NODE_ENV === "production" && isTestMode) {
-  // eslint-disable-next-line no-console
   console.error(
     "[fatal] RELAYER_TEST_MODE=true is forbidden when NODE_ENV=production",
   );
@@ -52,13 +51,13 @@ const keyGenerator = (req: Express.Request): string =>
 export const voteLimiter = isTestMode
   ? noopMiddleware
   : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 10,
-      message: { error: "Too many vote requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+    windowMs: 60 * 1000, // 1 minute
+    max: 10,
+    message: { error: "Too many vote requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator,
+  });
 
 /**
  * Rate limiter for general queries
@@ -67,13 +66,13 @@ export const voteLimiter = isTestMode
 export const queryLimiter = isTestMode
   ? noopMiddleware
   : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 60,
-      message: { error: "Too many requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+    windowMs: 60 * 1000, // 1 minute
+    max: 60,
+    message: { error: "Too many requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator,
+  });
 
 /**
  * Rate limiter for IPFS uploads
@@ -82,13 +81,13 @@ export const queryLimiter = isTestMode
 export const ipfsUploadLimiter = isTestMode
   ? noopMiddleware
   : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 10,
-      message: { error: "Too many upload requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+    windowMs: 60 * 1000, // 1 minute
+    max: 10,
+    message: { error: "Too many upload requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator,
+  });
 
 /**
  * Rate limiter for IPFS reads (more generous, cached content)
@@ -97,13 +96,13 @@ export const ipfsUploadLimiter = isTestMode
 export const ipfsReadLimiter = isTestMode
   ? noopMiddleware
   : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 200,
-      message: { error: "Too many requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+    windowMs: 60 * 1000, // 1 minute
+    max: 200,
+    message: { error: "Too many requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator,
+  });
 
 /**
  * Rate limiter for comment submissions
@@ -112,10 +111,10 @@ export const ipfsReadLimiter = isTestMode
 export const commentLimiter = isTestMode
   ? noopMiddleware
   : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 20,
-      message: { error: "Too many comment requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+    windowMs: 60 * 1000, // 1 minute
+    max: 20,
+    message: { error: "Too many comment requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator,
+  });

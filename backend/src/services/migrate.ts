@@ -566,12 +566,12 @@ export function printMigrationStatus(database: DatabaseType): void {
  *   status      Show migration status
  *   dry-run     Show what would be applied without running
  */
-function cli(): void {
+async function cli(): Promise<void> {
     const args = process.argv.slice(2);
     const command = args[0] || "status";
 
     // Initialize a temporary database connection
-    const Database = require("better-sqlite3") as typeof import("better-sqlite3").default;
+    const { default: Database } = await import("better-sqlite3");
     const DATA_DIR = path.resolve(__dirname, "..", "..", "data");
     const DB_FILE = path.join(DATA_DIR, "zkvote.db");
 
