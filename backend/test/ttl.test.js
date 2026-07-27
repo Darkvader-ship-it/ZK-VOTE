@@ -19,7 +19,7 @@ async function resetDb() {
 }
 
 test("TTL tracking: upsert and retrieve entry", async () => {
-  resetDb();
+  await resetDb();
   const { initDb, closeDb, upsertTTLTracking, getTTLTracking } = await import("../src/services/db.js");
   initDb();
 
@@ -44,7 +44,7 @@ test("TTL tracking: upsert and retrieve entry", async () => {
 });
 
 test("TTL tracking: upsert overwrites existing entry", async () => {
-  resetDb();
+  await resetDb();
   const { initDb, closeDb, upsertTTLTracking, getTTLTracking } = await import("../src/services/db.js");
   initDb();
 
@@ -77,7 +77,7 @@ test("TTL tracking: upsert overwrites existing entry", async () => {
 });
 
 test("TTL tracking: getAll sorts by remaining ledgers ascending", async () => {
-  resetDb();
+  await resetDb();
   const { initDb, closeDb, upsertTTLTracking, getAllTTLTracking } = await import("../src/services/db.js");
   initDb();
 
@@ -95,7 +95,7 @@ test("TTL tracking: getAll sorts by remaining ledgers ascending", async () => {
 });
 
 test("TTL tracking: getGracePeriodEntries returns only grace entries", async () => {
-  resetDb();
+  await resetDb();
   const { initDb, closeDb, upsertTTLTracking, getGracePeriodEntries } = await import("../src/services/db.js");
   initDb();
 
@@ -114,7 +114,7 @@ test("TTL tracking: getGracePeriodEntries returns only grace entries", async () 
 });
 
 test("TTL cost log: create, update, and query", async () => {
-  resetDb();
+  await resetDb();
   const { initDb, closeDb, createTTLCostLog, updateTTLCostLog, getTTLCostLogs, getTotalTTLCostXLM } = await import("../src/services/db.js");
   initDb();
 
@@ -144,7 +144,7 @@ test("TTL cost log: create, update, and query", async () => {
 });
 
 test("TTL cost log: multiple cycles accumulate total cost", async () => {
-  resetDb();
+  await resetDb();
   const { initDb, closeDb, createTTLCostLog, updateTTLCostLog, getTotalTTLCostXLM } = await import("../src/services/db.js");
   initDb();
 
@@ -238,7 +238,7 @@ test("start/stop TTL renewal service", async () => {
 });
 
 test("TTL service: renewAllTTLs handles empty DAOs gracefully", async () => {
-  resetDb();
+  await resetDb();
   const { initDb, closeDb } = await import("../src/services/db.js");
   initDb();
 

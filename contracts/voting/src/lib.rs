@@ -246,6 +246,20 @@ pub enum ProposalState {
     Archived,
 }
 
+impl ProposalState {
+    /// Returns true only for legal forward transitions in the state DAG:
+    ///   Active → Closed
+    ///   Closed → Archived
+    /// Archived is terminal — no transitions out of it.
+    pub fn is_valid_transition(self, to: ProposalState) -> bool {
+        matches!(
+            (self, to),
+            (ProposalState::Active, ProposalState::Closed)
+                | (ProposalState::Closed, ProposalState::Archived)
+        )
+    }
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub struct ProposalInfo {
@@ -1503,7 +1517,10 @@ impl Voting {
             .get(&key)
             .expect("proposal not found");
 
-        if proposal.state == ProposalState::Archived {
+        // Allow idempotent close (already Closed = no-op); reject invalid transitions (e.g. Archived → Closed).
+        if proposal.state != ProposalState::Closed
+            && !proposal.state.is_valid_transition(ProposalState::Closed)
+        {
             panic_with_error!(&env, VotingError::InvalidState);
         }
         if proposal.state != ProposalState::Closed {
@@ -1574,8 +1591,10 @@ impl Voting {
             .get(&key)
             .expect("proposal not found");
 
-        if proposal.state == ProposalState::Active {
-            // Require close before archive to preserve state progression
+        // Allow idempotent archive (already Archived = no-op); reject invalid transitions (e.g. Active → Archived).
+        if proposal.state != ProposalState::Archived
+            && !proposal.state.is_valid_transition(ProposalState::Archived)
+        {
             panic_with_error!(&env, VotingError::InvalidState);
         }
         if proposal.state != ProposalState::Archived {
