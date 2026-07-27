@@ -3,9 +3,13 @@
  *
  * Handles pinning and fetching content from IPFS via Pinata.
  * Also propagates content to public IPFS gateways for redundancy.
+ * Integrates with the Pin Manager for backup, redundancy, and verification.
  */
 
+import fs from "node:fs";
 import { PinataSDK } from "pinata";
+import * as pinManager from "./ipfs-pin-manager.js";
+import { getMonitorStatus, type MonitorStatus } from "./ipfs-monitor.js";
 
 // ============================================
 // TYPES
@@ -272,18 +276,49 @@ export async function pinJSON(
     throw new Error("Pinata client not initialized");
   }
 
+  // 1. Backup to local disk before uploading (recovery safety net)
+  let backupPath: string | undefined;
+  try {
+    backupPath = pinManager.backupJSON(data, name);
+  } catch (err) {
+    log("warn", "local_backup_failed", { name, error: (err as Error).message });
+    // Non-fatal — continue with the pin
+  }
+
+  // 2. Upload to Pinata (primary)
   // SDK v2.x: pinata.upload.public.json() with chainable methods
   const result = await pinata.upload.public.json(data).name(name).keyvalues({
     app: "zkvote",
     type: "proposal-metadata",
   });
 
-  // Propagate to public gateways in background
+  const sizeBytes = result.size || JSON.stringify(data).length;
+
+  // 3. Register in pin tracker
+  try {
+    pinManager.registerPin(
+      result.cid,
+      "json",
+      name,
+      sizeBytes,
+      "application/json",
+      backupPath,
+    );
+  } catch (err) {
+    log("warn", "pin_register_failed", { cid: result.cid, error: (err as Error).message });
+  }
+
+  // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
+  if (backupPath) {
+    pinManager.pinToSecondary(result.cid, backupPath, "json").catch(() => {});
+  }
+
+  // 5. Propagate to public gateways in background
   propagateToPublicGateways(result.cid);
 
   return {
     cid: result.cid,
-    size: result.size || 0,
+    size: sizeBytes,
     publicUrl: `https://ipfs.io/ipfs/${result.cid}`,
   };
 }
@@ -300,6 +335,15 @@ export async function pinFile(
     throw new Error("Pinata client not initialized");
   }
 
+  // 1. Backup to local disk before uploading (recovery safety net)
+  let backupPath: string | undefined;
+  try {
+    backupPath = pinManager.backupFile(buffer, filename);
+  } catch (err) {
+    log("warn", "local_backup_failed", { filename, error: (err as Error).message });
+  }
+
+  // 2. Upload to Pinata (primary)
   // Create a File object from the buffer
   // Cast buffer to BlobPart to satisfy strict TypeScript checks
   const file = new File([buffer as unknown as BlobPart], filename, {
@@ -315,12 +359,33 @@ export async function pinFile(
       type: "proposal-image",
     });
 
-  // Propagate to public gateways in background
+  const sizeBytes = result.size || buffer.length;
+
+  // 3. Register in pin tracker
+  try {
+    pinManager.registerPin(
+      result.cid,
+      "file",
+      filename,
+      sizeBytes,
+      mimeType,
+      backupPath,
+    );
+  } catch (err) {
+    log("warn", "pin_register_failed", { cid: result.cid, error: (err as Error).message });
+  }
+
+  // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
+  if (backupPath) {
+    pinManager.pinToSecondary(result.cid, backupPath, "file").catch(() => {});
+  }
+
+  // 5. Propagate to public gateways in background
   propagateToPublicGateways(result.cid);
 
   return {
     cid: result.cid,
-    size: result.size || buffer.length,
+    size: sizeBytes,
     publicUrl: `https://ipfs.io/ipfs/${result.cid}`,
   };
 }
@@ -490,6 +555,13 @@ export async function isHealthy(): Promise<boolean> {
 }
 
 /**
+ * Enhanced health check that includes pin verification status.
+ */
+export function getEnhancedHealth(): MonitorStatus {
+  return getMonitorStatus();
+}
+
+/**
  * Get public gateway URLs for a CID
  * These URLs are accessible without authentication and provide redundancy.
  */
@@ -507,5 +579,44 @@ export function getPublicUrls(cid: string): PublicUrls {
 export function ensurePublicAvailability(cid: string): void {
   if (isValidCid(cid)) {
     propagateToPublicGateways(cid);
+  }
+}
+
+/**
+ * Re-pin callback for the pin monitor.
+ * Reads content from the backup path and re-uploads to Pinata.
+ */
+export async function repinCallback(
+  backupPath: string,
+  contentType: "json" | "file",
+  name: string,
+  mimeType?: string,
+): Promise<string> {
+  if (!pinata) {
+    throw new Error("Pinata client not initialized");
+  }
+
+  if (contentType === "json") {
+    const raw = fs.readFileSync(backupPath, "utf-8");
+    const data = JSON.parse(raw);
+    const result = await pinata.upload.public.json(data).name(name).keyvalues({
+      app: "zkvote",
+      type: "proposal-metadata",
+    });
+    propagateToPublicGateways(result.cid);
+    return result.cid;
+  } else {
+    const buffer = fs.readFileSync(backupPath);
+    const file = new File(
+      [buffer as unknown as BlobPart],
+      name,
+      { type: mimeType || "application/octet-stream" },
+    );
+    const result = await pinata.upload.public.file(file).name(name).keyvalues({
+      app: "zkvote",
+      type: "proposal-image",
+    });
+    propagateToPublicGateways(result.cid);
+    return result.cid;
   }
 }

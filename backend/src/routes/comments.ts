@@ -25,10 +25,47 @@ import {
   queryLimiter,
   validateBody,
 } from "../middleware/index.js";
-import { anonymousCommentSchema } from "../validation/schemas.js";
+import { anonymousCommentSchema, flagCommentSchema, challengeQuerySchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
+import { generateChallenge, verifyChallenge } from "../services/pow.js";
+import {
+  checkCommitmentRateLimit,
+  recordCommentSubmission,
+  flagComment,
+  getHiddenCommentIds,
+} from "../services/anti-spam.js";
 
 const router = Router();
+
+// ============================================
+// PROOF-OF-WORK CHALLENGE
+// ============================================
+
+/**
+ * GET /comment/challenge/:commitment - Get PoW challenge for a commitment
+ */
+router.get("/comment/challenge/:commitment", queryLimiter, (async (
+  req: Request,
+  res: Response,
+) => {
+  const { commitment } = req.params;
+
+  const parsed = challengeQuerySchema.safeParse({ commitment });
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid commitment format" });
+  }
+
+  const challenge = generateChallenge(parsed.data.commitment, {
+    difficulty: config.powDifficulty,
+    challengeTtlMs: config.powChallengeTtlMs,
+  });
+
+  res.json({
+    serverId: challenge.serverId,
+    difficulty: challenge.difficulty,
+    expiresAt: challenge.expiresAt,
+  });
+}) as AsyncHandler);
 
 // ============================================
 // ANONYMOUS COMMENT
@@ -53,7 +90,41 @@ router.post(
       nullifier,
       root,
       proof,
+      serverId,
+      workNonce,
     } = config.stripRequestBodies ? {} : req.body;
+
+    if (config.powEnabled && !config.testMode) {
+      if (serverId && workNonce) {
+        const powConfig = { difficulty: config.powDifficulty, challengeTtlMs: config.powChallengeTtlMs };
+        const powResult = verifyChallenge(serverId, nullifier, workNonce, powConfig);
+        if (!powResult.valid) {
+          log("warn", "comment_pow_verification_failed", {
+            daoId,
+            proposalId,
+            reason: powResult.reason,
+          });
+          return res.status(400).json({ error: `PoW verification failed: ${powResult.reason}` });
+        }
+      } else {
+        log("warn", "comment_pow_missing", { daoId, proposalId });
+        return res.status(400).json({ error: "PoW challenge required: obtain a challenge via GET /comment/challenge/:commitment" });
+      }
+    }
+
+    if (!config.testMode) {
+      const allowed = checkCommitmentRateLimit(
+        nullifier,
+        daoId,
+        proposalId,
+        config.commitmentRateLimit,
+        config.commitmentRateWindowMs,
+      );
+      if (!allowed) {
+        log("warn", "comment_commitment_rate_limited", { daoId, proposalId, nullifier: nullifier.slice(0, 16) });
+        return res.status(429).json({ error: "Comment rate limit exceeded for this commitment" });
+      }
+    }
 
     try {
       log("info", "comment_anonymous_request", { daoId, proposalId });
@@ -149,6 +220,11 @@ router.post(
           proposalId,
           commentId,
         });
+
+        if (!config.testMode) {
+          recordCommentSubmission(nullifier, daoId, proposalId, config.commitmentRateWindowMs);
+        }
+
         res.json({ success: true, commentId, txHash: sendResult.hash });
       } else {
         // Log the actual failure reason
@@ -344,7 +420,14 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, (async (
           deletedBy: c.deleted_by,
           isAnonymous: !c.author,
         }));
-        res.json({ comments: transformed, total: transformed.length });
+
+        const hiddenIds = new Set(getHiddenCommentIds(parseInt(daoId), parseInt(proposalId)));
+        const filtered = transformed.map((c: any) => ({
+          ...c,
+          hidden: hiddenIds.has(c.id),
+        }));
+
+        res.json({ comments: filtered, total: filtered.length });
       } else {
         res.json({ comments: [], total: 0 });
       }
@@ -408,6 +491,7 @@ router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, (async (
       const result = simResult.result?.retval;
       if (result) {
         const c = StellarSdk.scValToNative(result);
+        const hiddenIds = getHiddenCommentIds(parseInt(daoId), parseInt(proposalId));
         res.json({
           id: Number(c.id),
           daoId: Number(c.dao_id),
@@ -421,6 +505,7 @@ router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, (async (
           deleted: c.deleted,
           deletedBy: c.deleted_by,
           isAnonymous: !c.author,
+          hidden: hiddenIds.includes(Number(c.id)),
         });
       } else {
         res.status(404).json({ error: "Comment not found" });
@@ -648,6 +733,78 @@ router.post("/comment/delete", authGuard, commentLimiter, (async (
     } else {
       res.status(500).json({ error: "Internal server error" });
     }
+  }
+}) as AsyncHandler);
+
+// ============================================
+// ANTI-SPAM: FLAG COMMENT
+// ============================================
+
+/**
+ * POST /comment/flag - Flag a comment as spam
+ */
+router.post("/comment/flag", authGuard, commentLimiter, validateBody(flagCommentSchema), (async (
+  req: Request,
+  res: Response,
+) => {
+  const {
+    daoId,
+    proposalId,
+    commentId,
+    flaggerCommitment,
+    flaggerNullifier,
+    serverId: flagServerId,
+    workNonce: flagWorkNonce,
+  } = config.stripRequestBodies ? {} : req.body;
+
+  if (config.powEnabled && !config.testMode) {
+    const powConfig = { difficulty: config.flagPowDifficulty, challengeTtlMs: config.powChallengeTtlMs };
+    const powResult = verifyChallenge(flagServerId, flaggerNullifier, flagWorkNonce, powConfig);
+    if (!powResult.valid) {
+      log("warn", "flag_pow_verification_failed", {
+        commentId,
+        daoId,
+        proposalId,
+        reason: powResult.reason,
+      });
+      return res.status(400).json({ error: `PoW verification failed: ${powResult.reason}` });
+    }
+  }
+
+  try {
+    const result = flagComment(
+      commentId,
+      daoId,
+      proposalId,
+      flaggerCommitment,
+      flaggerNullifier,
+      config.flagThreshold,
+    );
+
+    if (result.success) {
+      log("info", "comment_flagged_ok", {
+        commentId,
+        daoId,
+        proposalId,
+        flagCount: result.flagCount,
+        hidden: result.hidden,
+      });
+    }
+
+    res.json({
+      success: result.success,
+      hidden: result.hidden,
+      flagCount: result.flagCount,
+      threshold: result.threshold,
+    });
+  } catch (err) {
+    log("error", "comment_flag_exception", {
+      commentId,
+      daoId,
+      proposalId,
+      error: (err as Error).message,
+    });
+    res.status(500).json({ error: "Failed to flag comment" });
   }
 }) as AsyncHandler);
 

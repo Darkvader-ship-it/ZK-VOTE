@@ -88,6 +88,43 @@ export const config = {
   pinataGateway: process.env.PINATA_GATEWAY,
   ipfsEnabled: !!process.env.PINATA_JWT,
 
+  // IPFS Pin Redundancy
+  /** Local directory for content backups before pinning (default: ./data/ipfs-backup) */
+  ipfsBackupDir: process.env.IPFS_BACKUP_DIR || "./data/ipfs-backup",
+  /** Web3.Storage API token for secondary pinning (optional) */
+  web3StorageToken: process.env.WEB3_STORAGE_TOKEN,
+  /** Interval between pin verification scans in ms (default: 1 hour) */
+  pinVerifyIntervalMs: Number(
+    process.env.PIN_VERIFY_INTERVAL_MS || 3_600_000,
+  ),
+  /** Consecutive failures before alerting (default: 3) */
+  pinAlertThreshold: Number(process.env.PIN_ALERT_THRESHOLD || 3),
+  /** Automatically re-pin failed content from backup (default: true) */
+  pinAutoRepin: process.env.PIN_AUTO_REPIN !== "false",
+
+  // Anti-spam: proof-of-work
+  powEnabled: process.env.POW_ENABLED !== "false",
+  powDifficulty: Number(process.env.POW_DIFFICULTY || 20),
+  powChallengeTtlMs: Number(process.env.POW_CHALLENGE_TTL_MS || 300_000),
+
+  // Anti-spam: per-commitment rate limiting
+  commitmentRateLimit: Number(process.env.COMMITMENT_RATE_LIMIT || 5),
+  commitmentRateWindowMs: Number(process.env.COMMITMENT_RATE_WINDOW_MS || 60_000),
+
+  // Anti-spam: community flagging
+  flagThreshold: Number(process.env.FLAG_THRESHOLD || 3),
+  flagPowDifficulty: Number(process.env.FLAG_POW_DIFFICULTY || 10),
+
+  // TTL Renewal Optimization
+  ttlRenewalIntervalMs: Number(process.env.TTL_RENEWAL_INTERVAL_MS || 604_800_000), // 7 days
+  ttlRenewalThresholdMs: Number(process.env.TTL_RENEWAL_THRESHOLD_MS || 1_209_600_000), // 14 days
+  ttlGracePeriodMs: Number(process.env.TTL_GRACE_PERIOD_MS || 259_200_000), // 3 days
+  ttlBatchSize: Number(process.env.TTL_BATCH_SIZE || 5),
+  ttlCheckEnabled: process.env.TTL_CHECK_ENABLED !== "false",
+  ttlCostTrackingEnabled: process.env.TTL_COST_TRACKING_ENABLED !== "false",
+  ttlMaxFee: process.env.TTL_MAX_FEE || "1000000",
+  ttlSlippageLedgers: Number(process.env.TTL_SLIPPAGE_LEDGERS || 8640), // ~2 days safety margin
+
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
 } as const;

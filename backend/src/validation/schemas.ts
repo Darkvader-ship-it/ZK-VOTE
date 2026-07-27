@@ -167,6 +167,8 @@ export const anonymousCommentSchema = z.object({
   nullifier: bn254Field,
   root: bn254Field,
   proof: groth16Proof,
+  serverId: z.string().optional(),
+  workNonce: z.string().optional(),
 });
 
 export type AnonymousCommentRequest = z.infer<typeof anonymousCommentSchema>;
@@ -193,6 +195,33 @@ export const deleteCommentSchema = z.object({
 });
 
 export type DeleteCommentRequest = z.infer<typeof deleteCommentSchema>;
+
+// ============================================
+// ANTI-SPAM: FLAG SCHEMA
+// ============================================
+
+export const flagCommentSchema = z.object({
+  daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
+  proposalId: z
+    .number()
+    .int()
+    .nonnegative("proposalId must be a non-negative integer"),
+  commentId: z.number().int().nonnegative("commentId must be a non-negative integer"),
+  flaggerCommitment: bn254Field,
+  flaggerNullifier: bn254Field,
+  serverId: z.string(),
+  workNonce: z.string(),
+});
+
+export type FlagCommentRequest = z.infer<typeof flagCommentSchema>;
+
+// ============================================
+// ANTI-SPAM: CHALLENGE SCHEMA
+// ============================================
+
+export const challengeQuerySchema = z.object({
+  commitment: bn254Field,
+});
 
 // ============================================
 // EVENT SCHEMAS
