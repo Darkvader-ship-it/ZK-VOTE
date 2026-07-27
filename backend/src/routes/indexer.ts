@@ -14,6 +14,7 @@ import {
   addManualEvent,
   notifyEvent,
 } from "../services/indexer.js";
+import { getArchiveIndex, readArchivedEvents } from "../services/archival.js";
 import { authGuard, queryLimiter } from "../middleware/index.js";
 import type { AsyncHandler } from "../types/index.js";
 
@@ -32,6 +33,35 @@ export function initIndexerRoutes(
     triggerMembershipSync = membershipSyncFn;
   }
 }
+
+/**
+ * GET /events/archived - List historical event archives
+ */
+router.get("/events/archived", queryLimiter, (req: Request, res: Response) => {
+  const { daoId } = req.query;
+  try {
+    const id = daoId ? parseInt(daoId as string) : undefined;
+    const archives = getArchiveIndex(id);
+    res.json({ archives, total: archives.length });
+  } catch (err) {
+    log("error", "get_archived_events_index_failed", { error: (err as Error).message });
+    res.status(500).json({ error: "Failed to get archived events index" });
+  }
+});
+
+/**
+ * GET /events/archived/:archiveId - Retrieve historical archived events
+ */
+router.get("/events/archived/:archiveId", queryLimiter, (req: Request, res: Response) => {
+  const { archiveId } = req.params;
+  try {
+    const events = readArchivedEvents(archiveId);
+    res.json({ archiveId, events, total: events.length });
+  } catch (err) {
+    log("error", "read_archived_events_failed", { archiveId, error: (err as Error).message });
+    res.status(500).json({ error: "Failed to read archived events" });
+  }
+});
 
 /**
  * GET /events/:daoId - Get events for a DAO

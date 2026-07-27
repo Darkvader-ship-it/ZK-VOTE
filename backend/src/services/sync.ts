@@ -1,9 +1,13 @@
 /**
- * Sync Service
- *
+ * Sync Service with Optimistic Concurrency Control (Copy-on-Write Cache Snapshots)
+ * 
  * Handles DAO and membership synchronization from contracts to local cache.
+ * Implements immutable cache snapshots with atomic reference swapping to eliminate
+ * race conditions during async interleaving, cache versioning, invalidation notifications,
+ * and hit/miss metrics.
  */
 
+import { EventEmitter } from "events";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { config, isValidContractId } from "../config.js";
@@ -19,11 +23,187 @@ import {
 import type { Dao } from "../types/index.js";
 
 // ============================================
-// MEMBERSHIP CACHE (GLOBAL)
+// IMMUTABLE CACHE SNAPSHOT & CONCURRENCY STATE
 // ============================================
 
-export const daoMembersCache = new Map<number, Set<string>>(); // daoId -> Set<memberAddress>
-export const daoAdminsCache = new Map<number, string>(); // daoId -> adminAddress
+export interface CacheSnapshot {
+  daoMembers: Map<number, Set<string>>;
+  daoAdmins: Map<number, string>;
+  version: number;
+  updatedAt: string;
+}
+
+export interface CacheMetrics {
+  hits: number;
+  misses: number;
+  hitRate: number;
+  version: number;
+  daoCount: number;
+}
+
+// Initial empty snapshot
+let currentSnapshot: CacheSnapshot = {
+  daoMembers: new Map<number, Set<string>>(),
+  daoAdmins: new Map<number, string>(),
+  version: 0,
+  updatedAt: new Date().toISOString(),
+};
+
+// Hit/Miss Counters
+let cacheHits = 0;
+let cacheMisses = 0;
+
+// Event Emitter for Cache Invalidation Notifications
+export const cacheEmitter = new EventEmitter();
+
+/**
+ * Get current immutable cache snapshot
+ */
+export function getCacheSnapshot(): CacheSnapshot {
+  return currentSnapshot;
+}
+
+/**
+ * Get current cache version counter
+ */
+export function getCacheVersion(): number {
+  return currentSnapshot.version;
+}
+
+/**
+ * Get member set for DAO with metrics tracking
+ */
+export function getDaoMembersFromCache(daoId: number): Set<string> | undefined {
+  const members = currentSnapshot.daoMembers.get(daoId);
+  if (members) {
+    cacheHits++;
+  } else {
+    cacheMisses++;
+  }
+  return members;
+}
+
+/**
+ * Get admin address for DAO with metrics tracking
+ */
+export function getDaoAdminFromCache(daoId: number): string | undefined {
+  const admin = currentSnapshot.daoAdmins.get(daoId);
+  if (admin) {
+    cacheHits++;
+  } else {
+    cacheMisses++;
+  }
+  return admin;
+}
+
+/**
+ * Get cache hit/miss metrics
+ */
+export function getCacheMetrics(): CacheMetrics {
+  const total = cacheHits + cacheMisses;
+  const hitRate = total > 0 ? Math.round((cacheHits / total) * 100) / 100 : 0;
+  return {
+    hits: cacheHits,
+    misses: cacheMisses,
+    hitRate,
+    version: currentSnapshot.version,
+    daoCount: currentSnapshot.daoMembers.size,
+  };
+}
+
+/**
+ * Register listener for cache invalidation notifications
+ */
+export function onCacheInvalidated(listener: (snapshot: CacheSnapshot) => void): () => void {
+  cacheEmitter.on("cache:invalidated", listener);
+  return () => {
+    cacheEmitter.off("cache:invalidated", listener);
+  };
+}
+
+/**
+ * Atomically swap cache snapshot reference (Copy-on-Write)
+ */
+function swapCacheSnapshot(
+  newMembers: Map<number, Set<string>>,
+  newAdmins: Map<number, string>
+): CacheSnapshot {
+  const nextVersion = currentSnapshot.version + 1;
+  const nextSnapshot: CacheSnapshot = {
+    daoMembers: newMembers,
+    daoAdmins: newAdmins,
+    version: nextVersion,
+    updatedAt: new Date().toISOString(),
+  };
+
+  // Atomic reference swap
+  currentSnapshot = nextSnapshot;
+
+  // Emit invalidation notification to connected clients/subscribers
+  cacheEmitter.emit("cache:invalidated", currentSnapshot);
+
+  log("debug", "cache_snapshot_swapped", {
+    version: nextVersion,
+    daoCount: newMembers.size,
+    adminCount: newAdmins.size,
+  });
+
+  return currentSnapshot;
+}
+
+// ============================================
+// BACKWARD COMPATIBILITY PROXIES
+// ============================================
+
+export const daoMembersCache = new Proxy(new Map<number, Set<string>>(), {
+  get(_target, prop, receiver) {
+    const snapshotMap = currentSnapshot.daoMembers;
+    if (prop === "get") {
+      return (key: number) => getDaoMembersFromCache(key);
+    }
+    if (prop === "has") {
+      return (key: number) => snapshotMap.has(key);
+    }
+    if (prop === "size") {
+      return snapshotMap.size;
+    }
+    if (prop === "set") {
+      return (key: number, value: Set<string>) => {
+        const nextMembers = new Map(currentSnapshot.daoMembers);
+        nextMembers.set(key, value);
+        swapCacheSnapshot(nextMembers, currentSnapshot.daoAdmins);
+        return receiver;
+      };
+    }
+    const val = Reflect.get(snapshotMap, prop, snapshotMap);
+    return typeof val === "function" ? val.bind(snapshotMap) : val;
+  },
+});
+
+export const daoAdminsCache = new Proxy(new Map<number, string>(), {
+  get(_target, prop, receiver) {
+    const snapshotMap = currentSnapshot.daoAdmins;
+    if (prop === "get") {
+      return (key: number) => getDaoAdminFromCache(key);
+    }
+    if (prop === "has") {
+      return (key: number) => snapshotMap.has(key);
+    }
+    if (prop === "size") {
+      return snapshotMap.size;
+    }
+    if (prop === "set") {
+      return (key: number, value: string) => {
+        const nextAdmins = new Map(currentSnapshot.daoAdmins);
+        nextAdmins.set(key, value);
+        swapCacheSnapshot(currentSnapshot.daoMembers, nextAdmins);
+        return receiver;
+      };
+    }
+    const val = Reflect.get(snapshotMap, prop, snapshotMap);
+    return typeof val === "function" ? val.bind(snapshotMap) : val;
+  },
+});
 
 // ============================================
 // DAO SYNC FROM CONTRACT
@@ -209,7 +389,7 @@ export function stopDaoSync(): void {
 // ============================================
 
 /**
- * Sync members for a single DAO
+ * Sync members for a single DAO (uses Copy-on-Write atomic snapshot update)
  */
 export async function syncDaoMembership(daoId: number): Promise<void> {
   if (
@@ -273,7 +453,11 @@ export async function syncDaoMembership(daoId: number): Promise<void> {
       }
     }
 
-    daoMembersCache.set(daoId, members);
+    // Build new map copy and atomically swap reference
+    const nextMembersMap = new Map(currentSnapshot.daoMembers);
+    nextMembersMap.set(daoId, members);
+    swapCacheSnapshot(nextMembersMap, currentSnapshot.daoAdmins);
+
     log("info", "dao_membership_synced", { daoId, memberCount: members.size });
   } catch (err) {
     log("warn", "dao_membership_sync_failed", {
@@ -284,7 +468,7 @@ export async function syncDaoMembership(daoId: number): Promise<void> {
 }
 
 /**
- * Sync all memberships
+ * Sync all memberships (uses Copy-on-Write atomic snapshot update)
  */
 export async function syncAllMemberships(): Promise<void> {
   if (
@@ -305,10 +489,11 @@ export async function syncAllMemberships(): Promise<void> {
 
   log("info", "membership_sync_start", { daoCount: daos.length });
 
-  // Cache admin addresses
+  // Prepare admin addresses copy
+  const nextAdminsMap = new Map(currentSnapshot.daoAdmins);
   for (const dao of daos) {
     if (dao.creator) {
-      daoAdminsCache.set(dao.id, dao.creator);
+      nextAdminsMap.set(dao.id, dao.creator);
     }
   }
 
