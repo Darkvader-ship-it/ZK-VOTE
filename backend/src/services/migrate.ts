@@ -135,7 +135,13 @@ export function loadMigrations(migrationsDir?: string): MigrationFile[] {
   // Build sorted list
   const migrations: MigrationFile[] = [];
   for (const [name, { up, down }] of migrationMap) {
-    const id = parseMigrationId(name)!;
+    // Extract the numeric ID from the beginning of the name (e.g. "001" from "001_initial_schema")
+    const idMatch = name.match(/^(\d+)/);
+    if (!idMatch) {
+      log("warn", "migration_missing_id", { name });
+      continue;
+    }
+    const id = idMatch[1];
     if (!up) {
       log("warn", "migration_missing_up", { name });
       continue;
@@ -399,7 +405,7 @@ export function migrateUp(
     });
     throw new Error(
       `Migration lock held by PID ${lockInfo.pid} since ${new Date(lockInfo.lockedAt).toISOString()}. ` +
-        `Wait ${LOCK_TIMEOUT_MS / 1000}s or delete metadata key '${LOCK_KEY}' to force.`,
+      `Wait ${LOCK_TIMEOUT_MS / 1000}s or delete metadata key '${LOCK_KEY}' to force.`,
     );
   }
 
