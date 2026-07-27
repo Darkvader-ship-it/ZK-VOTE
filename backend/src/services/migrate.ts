@@ -405,7 +405,7 @@ export function migrateUp(
     });
     throw new Error(
       `Migration lock held by PID ${lockInfo.pid} since ${new Date(lockInfo.lockedAt).toISOString()}. ` +
-      `Wait ${LOCK_TIMEOUT_MS / 1000}s or delete metadata key '${LOCK_KEY}' to force.`,
+        `Wait ${LOCK_TIMEOUT_MS / 1000}s or delete metadata key '${LOCK_KEY}' to force.`,
     );
   }
 
