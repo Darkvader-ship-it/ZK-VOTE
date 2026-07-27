@@ -3339,3 +3339,30 @@ fn test_voting_after_end_time_outside_tolerance_fails() {
         &proof,
     );
 }
+
+// ── ProposalState transition matrix tests (#54) ──────────────────────────────
+
+#[test]
+fn test_valid_transitions() {
+    assert!(ProposalState::Active.is_valid_transition(ProposalState::Closed));
+    assert!(ProposalState::Closed.is_valid_transition(ProposalState::Archived));
+}
+
+#[test]
+fn test_invalid_transitions_from_active() {
+    assert!(!ProposalState::Active.is_valid_transition(ProposalState::Archived));
+    assert!(!ProposalState::Active.is_valid_transition(ProposalState::Active));
+}
+
+#[test]
+fn test_invalid_transitions_from_closed() {
+    assert!(!ProposalState::Closed.is_valid_transition(ProposalState::Active));
+    assert!(!ProposalState::Closed.is_valid_transition(ProposalState::Closed));
+}
+
+#[test]
+fn test_archived_is_terminal() {
+    assert!(!ProposalState::Archived.is_valid_transition(ProposalState::Active));
+    assert!(!ProposalState::Archived.is_valid_transition(ProposalState::Closed));
+    assert!(!ProposalState::Archived.is_valid_transition(ProposalState::Archived));
+}
