@@ -374,9 +374,7 @@ function ensurePartitionTable(daoId: number): void {
  */
 function recordPartitionDaoId(database: DatabaseType, daoId: number): void {
   database
-    .prepare(
-      "INSERT OR IGNORE INTO partition_registry (dao_id) VALUES (?)",
-    )
+    .prepare("INSERT OR IGNORE INTO partition_registry (dao_id) VALUES (?)")
     .run(daoId);
 }
 
@@ -783,9 +781,9 @@ export function getMetadata<T>(key: string): T | null {
   const row = timeQuery(
     "getMetadata",
     () =>
-      database
-        .prepare("SELECT value FROM metadata WHERE key = ?")
-        .get(key) as MetadataRow | undefined,
+      database.prepare("SELECT value FROM metadata WHERE key = ?").get(key) as
+        | MetadataRow
+        | undefined,
     { key },
   );
   return row ? (JSON.parse(row.value) as T) : null;
@@ -1005,7 +1003,9 @@ export function getIndexedDaos(): IndexedDao[] {
   const parts: string[] = [];
   for (const daoId of daoIds) {
     const tableName = partitionTableName(daoId);
-    parts.push(`SELECT ${daoId} AS dao_id, COUNT(*) AS event_count FROM ${tableName}`);
+    parts.push(
+      `SELECT ${daoId} AS dao_id, COUNT(*) AS event_count FROM ${tableName}`,
+    );
   }
 
   const rows = database
@@ -1069,9 +1069,7 @@ export function getUnverifiedEvents(limit = 10): Event[] {
   }
 
   const rows = database
-    .prepare(
-      `${parts.join(" UNION ALL ")} ORDER BY created_at ASC LIMIT ?`,
-    )
+    .prepare(`${parts.join(" UNION ALL ")} ORDER BY created_at ASC LIMIT ?`)
     .all(limit) as EventRow[];
 
   return rows.map(rowToEvent);
@@ -1086,9 +1084,7 @@ export function deleteUnverifiedEvent(txHash: string): void {
   for (const daoId of daoIds) {
     const tableName = partitionTableName(daoId);
     const result = database
-      .prepare(
-        `DELETE FROM ${tableName} WHERE tx_hash = ? AND verified = 0`,
-      )
+      .prepare(`DELETE FROM ${tableName} WHERE tx_hash = ? AND verified = 0`)
       .run(txHash);
     if (result.changes > 0) return;
   }
@@ -1117,7 +1113,9 @@ export function dropPartition(daoId: number): void {
   const tableName = partitionTableName(daoId);
 
   database.exec(`DROP TABLE IF EXISTS ${tableName}`);
-  database.prepare("DELETE FROM partition_registry WHERE dao_id = ?").run(daoId);
+  database
+    .prepare("DELETE FROM partition_registry WHERE dao_id = ?")
+    .run(daoId);
   knownPartitions.delete(daoId);
 
   log("info", "partition_dropped", { daoId });
@@ -1212,7 +1210,10 @@ export function migrateToPartitions(): number {
     }
   })();
 
-  log("info", "partition_migration_complete", { migrated, totalOld: oldCount.total });
+  log("info", "partition_migration_complete", {
+    migrated,
+    totalOld: oldCount.total,
+  });
   return migrated;
 }
 
@@ -1329,9 +1330,7 @@ export function profileDaoQueries(daoId: number): void {
   const database = initDb();
   const tableName = partitionTableName(daoId);
   const tableExists = database
-    .prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
-    )
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
     .get(tableName);
   if (tableExists) {
     profileEventQueries(database, daoId);
