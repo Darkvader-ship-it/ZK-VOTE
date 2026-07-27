@@ -45,6 +45,7 @@ fn create_test_vk(env: &Env) -> VerificationKey {
                 g1_gen.clone(),
                 g1_gen.clone(),
                 g1_gen.clone(),
+                g1_gen, // 7 elements for 6 public signals + 1
             ],
         ),
     }
