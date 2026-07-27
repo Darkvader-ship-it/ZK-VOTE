@@ -129,6 +129,12 @@ export const config = {
   ttlMaxFee: process.env.TTL_MAX_FEE || "1000000",
   ttlSlippageLedgers: Number(process.env.TTL_SLIPPAGE_LEDGERS || 8640), // ~2 days safety margin
 
+  // Backup & Archival
+  backupIntervalMs: Number(process.env.BACKUP_INTERVAL_MS || 86_400_000), // 24 hours
+  s3Bucket: process.env.BACKUP_S3_BUCKET || process.env.S3_BUCKET,
+  archivalAgeDays: Number(process.env.ARCHIVAL_AGE_DAYS || 90),
+  archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
+
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
 } as const;

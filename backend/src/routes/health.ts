@@ -10,6 +10,7 @@ import { config } from "../config.js";
 import { extractAuthToken } from "../middleware/auth.js";
 import { log } from "../services/logger.js";
 import { getDbDiagnostics, getDbStatus } from "../services/db.js";
+import { getBackupStatus } from "../services/backup.js";
 
 const router = Router();
 
@@ -77,6 +78,7 @@ router.get("/health", async (req: Request, res: Response) => {
   // Always include basic DB status (no auth needed for aggregate stats)
   try {
     base.db = getDbStatus();
+    base.backup = getBackupStatus();
   } catch (err) {
     base.db = { error: (err as Error).message };
   }
