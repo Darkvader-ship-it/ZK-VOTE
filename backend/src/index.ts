@@ -16,7 +16,10 @@ import { config, validateEnv, isValidContractId } from "./config.js";
 import { log, logger } from "./services/logger.js";
 import * as ipfsService from "./services/ipfs.js";
 import { initPinManager } from "./services/ipfs-pin-manager.js";
-import { startMonitor as startPinMonitor, stopMonitor as stopPinMonitor } from "./services/ipfs-monitor.js";
+import {
+  startMonitor as startPinMonitor,
+  stopMonitor as stopPinMonitor,
+} from "./services/ipfs-monitor.js";
 import { server, relayerKeypair } from "./services/stellar.js";
 import {
   startDaoSync,

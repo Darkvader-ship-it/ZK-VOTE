@@ -31,12 +31,19 @@ function startCleanup(): void {
       }
     }
   }, CLEANUP_INTERVAL_MS);
-  if (cleanupTimer && typeof cleanupTimer === "object" && "unref" in cleanupTimer) {
+  if (
+    cleanupTimer &&
+    typeof cleanupTimer === "object" &&
+    "unref" in cleanupTimer
+  ) {
     (cleanupTimer as NodeJS.Timeout).unref();
   }
 }
 
-export function generateChallenge(commitment: string, config: PowConfig): PowChallenge {
+export function generateChallenge(
+  commitment: string,
+  config: PowConfig,
+): PowChallenge {
   const serverId = crypto.randomBytes(32).toString("hex");
   const now = Date.now();
   const challenge: PowChallenge = {
@@ -49,7 +56,10 @@ export function generateChallenge(commitment: string, config: PowConfig): PowCha
   };
   CHALLENGES.set(serverId, challenge);
   startCleanup();
-  log("info", "pow_challenge_generated", { commitment: commitment.slice(0, 16), difficulty: config.difficulty });
+  log("info", "pow_challenge_generated", {
+    commitment: commitment.slice(0, 16),
+    difficulty: config.difficulty,
+  });
   return challenge;
 }
 
@@ -82,11 +92,17 @@ export function verifyChallenge(
   const leadingBits = countLeadingZeroBits(hash);
 
   if (leadingBits < config.difficulty) {
-    return { valid: false, reason: `Insufficient PoW: got ${leadingBits} leading bits, need ${config.difficulty}` };
+    return {
+      valid: false,
+      reason: `Insufficient PoW: got ${leadingBits} leading bits, need ${config.difficulty}`,
+    };
   }
 
   challenge.consumed = true;
-  log("info", "pow_challenge_verified", { commitment: commitment.slice(0, 16), leadingBits });
+  log("info", "pow_challenge_verified", {
+    commitment: commitment.slice(0, 16),
+    leadingBits,
+  });
   return { valid: true };
 }
 

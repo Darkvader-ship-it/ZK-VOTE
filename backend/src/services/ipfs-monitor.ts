@@ -176,7 +176,10 @@ async function _runScan(): Promise<void> {
       if (record.consecutiveFailures >= threshold) {
         const alert: PinAlert = {
           cid,
-          severity: record.consecutiveFailures >= threshold * 2 ? "critical" : "warning",
+          severity:
+            record.consecutiveFailures >= threshold * 2
+              ? "critical"
+              : "warning",
           message: `CID ${cid} unreachable for ${record.consecutiveFailures} consecutive checks`,
           timestamp: new Date().toISOString(),
           consecutiveFailures: record.consecutiveFailures,
@@ -192,7 +195,10 @@ async function _runScan(): Promise<void> {
         // Auto re-pin if configured
         if (monitorConfig?.autoRepin && monitorConfig.repinFn) {
           log.info("auto_repin_attempt", { cid });
-          const newCid = await pinManager.repinFromBackup(cid, monitorConfig.repinFn);
+          const newCid = await pinManager.repinFromBackup(
+            cid,
+            monitorConfig.repinFn,
+          );
           if (newCid) {
             log.info("auto_repin_success", { oldCid: cid, newCid });
           } else {

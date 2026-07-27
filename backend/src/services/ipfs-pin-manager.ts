@@ -65,7 +65,7 @@ export interface PinManagerStats {
 // ============================================
 
 // Pinata free tier: $0 for first 500 MB, ~$0.10/GB/month after
-const PINATA_COST_PER_BYTE_MONTH = 0.10 / (1024 * 1024 * 1024);
+const PINATA_COST_PER_BYTE_MONTH = 0.1 / (1024 * 1024 * 1024);
 
 // Verification fetch timeout per gateway
 const VERIFY_TIMEOUT_MS = 15_000;
@@ -150,10 +150,7 @@ export function backupJSON(
  * Backup a file buffer to local disk before pinning.
  * Returns the path where it was saved.
  */
-export function backupFile(
-  buffer: Buffer,
-  filename: string,
-): string {
+export function backupFile(buffer: Buffer, filename: string): string {
   _ensureInitialized();
   const safeName = `${Date.now()}_${filename.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
   const filePath = path.join(backupDir!, "files", safeName);
@@ -219,8 +216,10 @@ export async function pinToSecondary(
     // Read the backup file
     const content = fs.readFileSync(backupPath);
 
-    const filename = contentType === "json" ? `${cid}.json` : path.basename(backupPath);
-    const mime = contentType === "json" ? "application/json" : "application/octet-stream";
+    const filename =
+      contentType === "json" ? `${cid}.json` : path.basename(backupPath);
+    const mime =
+      contentType === "json" ? "application/json" : "application/octet-stream";
 
     // Web3.Storage HTTP API (w3up compatible endpoint)
     const formData = new FormData();
@@ -409,13 +408,25 @@ export async function repinFromBackup(
   }
 
   try {
-    const newCid = await pinFn(bkPath, record.contentType, record.name, record.mimeType);
+    const newCid = await pinFn(
+      bkPath,
+      record.contentType,
+      record.name,
+      record.mimeType,
+    );
     log.info("repin_success", { oldCid: cid, newCid });
 
     // Update registry if CID changed
     if (newCid !== cid) {
       pinRegistry.delete(cid);
-      registerPin(newCid, record.contentType, record.name, record.sizeBytes, record.mimeType, bkPath);
+      registerPin(
+        newCid,
+        record.contentType,
+        record.name,
+        record.sizeBytes,
+        record.mimeType,
+        bkPath,
+      );
     } else {
       record.consecutiveFailures = 0;
       record.lastVerifiedAt = new Date().toISOString();
@@ -454,13 +465,13 @@ export function getStats(): PinManagerStats {
   }
 
   // Pinata cost: ~$0.10 / GB / month
-  const estimatedMonthlyCostUsd =
-    totalSizeBytes * PINATA_COST_PER_BYTE_MONTH;
+  const estimatedMonthlyCostUsd = totalSizeBytes * PINATA_COST_PER_BYTE_MONTH;
 
   return {
     totalPins: pinRegistry.size,
     totalSizeBytes,
-    estimatedMonthlyCostUsd: Math.round(estimatedMonthlyCostUsd * 10000) / 10000,
+    estimatedMonthlyCostUsd:
+      Math.round(estimatedMonthlyCostUsd * 10000) / 10000,
     healthyPins: healthyCount,
     degradedPins: degradedCount,
     failedPins: failedCount,
@@ -489,9 +500,7 @@ export function getPinRecord(cid: string): PinRecord | undefined {
 
 function _ensureInitialized(): void {
   if (!backupDir) {
-    throw new Error(
-      "PinManager not initialized. Call initPinManager() first.",
-    );
+    throw new Error("PinManager not initialized. Call initPinManager() first.");
   }
 }
 

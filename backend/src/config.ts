@@ -94,9 +94,7 @@ export const config = {
   /** Web3.Storage API token for secondary pinning (optional) */
   web3StorageToken: process.env.WEB3_STORAGE_TOKEN,
   /** Interval between pin verification scans in ms (default: 1 hour) */
-  pinVerifyIntervalMs: Number(
-    process.env.PIN_VERIFY_INTERVAL_MS || 3_600_000,
-  ),
+  pinVerifyIntervalMs: Number(process.env.PIN_VERIFY_INTERVAL_MS || 3_600_000),
   /** Consecutive failures before alerting (default: 3) */
   pinAlertThreshold: Number(process.env.PIN_ALERT_THRESHOLD || 3),
   /** Automatically re-pin failed content from backup (default: true) */
@@ -109,15 +107,21 @@ export const config = {
 
   // Anti-spam: per-commitment rate limiting
   commitmentRateLimit: Number(process.env.COMMITMENT_RATE_LIMIT || 5),
-  commitmentRateWindowMs: Number(process.env.COMMITMENT_RATE_WINDOW_MS || 60_000),
+  commitmentRateWindowMs: Number(
+    process.env.COMMITMENT_RATE_WINDOW_MS || 60_000,
+  ),
 
   // Anti-spam: community flagging
   flagThreshold: Number(process.env.FLAG_THRESHOLD || 3),
   flagPowDifficulty: Number(process.env.FLAG_POW_DIFFICULTY || 10),
 
   // TTL Renewal Optimization
-  ttlRenewalIntervalMs: Number(process.env.TTL_RENEWAL_INTERVAL_MS || 604_800_000), // 7 days
-  ttlRenewalThresholdMs: Number(process.env.TTL_RENEWAL_THRESHOLD_MS || 1_209_600_000), // 14 days
+  ttlRenewalIntervalMs: Number(
+    process.env.TTL_RENEWAL_INTERVAL_MS || 604_800_000,
+  ), // 7 days
+  ttlRenewalThresholdMs: Number(
+    process.env.TTL_RENEWAL_THRESHOLD_MS || 1_209_600_000,
+  ), // 14 days
   ttlGracePeriodMs: Number(process.env.TTL_GRACE_PERIOD_MS || 259_200_000), // 3 days
   ttlBatchSize: Number(process.env.TTL_BATCH_SIZE || 5),
   ttlCheckEnabled: process.env.TTL_CHECK_ENABLED !== "false",

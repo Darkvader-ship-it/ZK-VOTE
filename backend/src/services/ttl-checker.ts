@@ -30,16 +30,21 @@ function categorizeUrgency(remainingMs: number): Urgency {
   return "healthy";
 }
 
-export function estimateRemainingFromTracked(entry: TTLTrackingEntry | null): TTLInfo | null {
+export function estimateRemainingFromTracked(
+  entry: TTLTrackingEntry | null,
+): TTLInfo | null {
   if (!entry || !entry.lastRenewedAt) return null;
 
   const lastRenewed = new Date(entry.lastRenewedAt).getTime();
   const elapsedMs = Date.now() - lastRenewed;
-  const estimatedRemainingMs = SOROBAN_TTL_LEDGERS * LEDGER_DURATION_MS - elapsedMs;
+  const estimatedRemainingMs =
+    SOROBAN_TTL_LEDGERS * LEDGER_DURATION_MS - elapsedMs;
 
   if (estimatedRemainingMs <= 0) return null;
 
-  const remainingLedgers = Math.floor(estimatedRemainingMs / LEDGER_DURATION_MS);
+  const remainingLedgers = Math.floor(
+    estimatedRemainingMs / LEDGER_DURATION_MS,
+  );
 
   return {
     entryId: entry.entryId,
@@ -55,11 +60,17 @@ export function estimateRemainingFromTracked(entry: TTLTrackingEntry | null): TT
 
 export async function queryContractInstanceTTL(
   contractId: string,
-): Promise<{ remainingLedgers: number; liveUntilLedger: number; latestLedger: number } | null> {
+): Promise<{
+  remainingLedgers: number;
+  liveUntilLedger: number;
+  latestLedger: number;
+} | null> {
   try {
     if (config.testMode) return null;
 
-    const rawId = StellarSdk.StrKey.decodeContract(contractId) as unknown as StellarSdk.xdr.Hash;
+    const rawId = StellarSdk.StrKey.decodeContract(
+      contractId,
+    ) as unknown as StellarSdk.xdr.Hash;
     const ledgerKey = StellarSdk.xdr.LedgerKey.contractData(
       new StellarSdk.xdr.LedgerKeyContractData({
         contract: StellarSdk.xdr.ScAddress.scAddressTypeContract(rawId),
@@ -68,8 +79,11 @@ export async function queryContractInstanceTTL(
       }),
     );
 
-    const response = await (server as StellarSdk.rpc.Server).getLedgerEntries(ledgerKey);
-    if (!response || !response.entries || response.entries.length === 0) return null;
+    const response = await (server as StellarSdk.rpc.Server).getLedgerEntries(
+      ledgerKey,
+    );
+    if (!response || !response.entries || response.entries.length === 0)
+      return null;
 
     const entry = response.entries[0];
     const liveUntilLedger = entry.liveUntilLedgerSeq;

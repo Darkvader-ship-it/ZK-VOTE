@@ -26,7 +26,11 @@ const CONTRACT_META: Array<{
   { envKey: "treeContractId", method: "version", label: "tree" },
   { envKey: "commentsContractId", method: "version", label: "comments" },
   { envKey: "daoRegistryContractId", method: "version", label: "dao_registry" },
-  { envKey: "membershipSbtContractId", method: "version", label: "membership_sbt" },
+  {
+    envKey: "membershipSbtContractId",
+    method: "version",
+    label: "membership_sbt",
+  },
 ];
 
 const DAO_METHODS: Array<{
@@ -71,7 +75,9 @@ async function submitCall(
   try {
     return await withSequenceLock(async () => {
       const rpcServer = server as StellarSdk.rpc.Server;
-      const sourceAccount = await rpcServer.getAccount(relayerKeypair.publicKey());
+      const sourceAccount = await rpcServer.getAccount(
+        relayerKeypair.publicKey(),
+      );
       const contract = new StellarSdk.Contract(contractId);
 
       const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
@@ -91,7 +97,9 @@ async function submitCall(
         return { success: false, error: simResult.error };
       }
 
-      const prepared = StellarSdk.rpc.assembleTransaction(tx, simResult).build();
+      const prepared = StellarSdk.rpc
+        .assembleTransaction(tx, simResult)
+        .build();
       prepared.sign(relayerKeypair as StellarSdk.Keypair);
 
       const sendResult = await callWithTimeout(
@@ -109,7 +117,9 @@ async function submitCall(
       try {
         const feeStr = prepared.fee;
         feeXlm = Number(feeStr) / 10_000_000;
-      } catch { /* fee parsing is best-effort */ }
+      } catch {
+        /* fee parsing is best-effort */
+      }
 
       return { success: true, feeXlm, txHash: sendResult.hash };
     });
@@ -118,7 +128,11 @@ async function submitCall(
   }
 }
 
-function buildEntryId(contractId: string, daoId?: number, method?: string): string {
+function buildEntryId(
+  contractId: string,
+  daoId?: number,
+  method?: string,
+): string {
   const parts = [contractId.slice(0, 16)];
   if (daoId !== undefined) parts.push(`dao${daoId}`);
   if (method) parts.push(method);
@@ -129,12 +143,17 @@ function makeDaoIdScVal(daoId: number): StellarSdk.xdr.ScVal {
   return StellarSdk.nativeToScVal(daoId, { type: "u64" });
 }
 
-async function hasActiveProposals(contractId: string, daoId: number): Promise<boolean> {
+async function hasActiveProposals(
+  contractId: string,
+  daoId: number,
+): Promise<boolean> {
   try {
     if (config.testMode) return true;
 
     const rpcServer = server as StellarSdk.rpc.Server;
-    const sourceAccount = await rpcServer.getAccount(relayerKeypair.publicKey());
+    const sourceAccount = await rpcServer.getAccount(
+      relayerKeypair.publicKey(),
+    );
     const contract = new StellarSdk.Contract(contractId);
 
     const tx = new StellarSdk.TransactionBuilder(sourceAccount, {
@@ -150,7 +169,10 @@ async function hasActiveProposals(contractId: string, daoId: number): Promise<bo
       "ttl_check_proposal_count",
     );
 
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult) || !simResult.result?.retval) {
+    if (
+      !StellarSdk.rpc.Api.isSimulationSuccess(simResult) ||
+      !simResult.result?.retval
+    ) {
       return true;
     }
 
@@ -281,7 +303,12 @@ async function collectEntries(): Promise<{
 
 async function executeBatch(
   batch: RenewalEntry[],
-): Promise<{ successCount: number; failCount: number; totalFee: number; txCount: number }> {
+): Promise<{
+  successCount: number;
+  failCount: number;
+  totalFee: number;
+  txCount: number;
+}> {
   let successCount = 0;
   let failCount = 0;
   let totalFee = 0;
@@ -329,7 +356,8 @@ async function renewAllTTLs(): Promise<void> {
 
   if (entries.length === 0 && graceEntries.length === 0) {
     log("info", "ttl_renewal_all_healthy", {
-      message: "All entries have sufficient remaining TTL. Skipping renewal cycle.",
+      message:
+        "All entries have sufficient remaining TTL. Skipping renewal cycle.",
     });
     if (costLogId !== null) {
       dbService.updateTTLCostLog(costLogId, {
@@ -387,7 +415,8 @@ async function renewAllTTLs(): Promise<void> {
     log("warn", "ttl_grace_period_alerts", {
       count: graceEntries.length,
       entries: graceEntries.map((e) => e.label),
-      message: "These entries are within the grace period and need immediate attention.",
+      message:
+        "These entries are within the grace period and need immediate attention.",
     });
   }
 
@@ -409,12 +438,16 @@ export function startTTLRenewal(intervalMs?: number): void {
   const interval = intervalMs ?? config.ttlRenewalIntervalMs;
 
   renewAllTTLs().catch((err) => {
-    log("error", "ttl_renewal_initial_failed", { error: (err as Error).message });
+    log("error", "ttl_renewal_initial_failed", {
+      error: (err as Error).message,
+    });
   });
 
   renewalTimerId = setInterval(() => {
     renewAllTTLs().catch((err) => {
-      log("error", "ttl_renewal_periodic_failed", { error: (err as Error).message });
+      log("error", "ttl_renewal_periodic_failed", {
+        error: (err as Error).message,
+      });
     });
   }, interval);
 

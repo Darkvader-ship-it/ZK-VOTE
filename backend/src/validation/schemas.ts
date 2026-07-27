@@ -206,7 +206,10 @@ export const flagCommentSchema = z.object({
     .number()
     .int()
     .nonnegative("proposalId must be a non-negative integer"),
-  commentId: z.number().int().nonnegative("commentId must be a non-negative integer"),
+  commentId: z
+    .number()
+    .int()
+    .nonnegative("commentId must be a non-negative integer"),
   flaggerCommitment: bn254Field,
   flaggerNullifier: bn254Field,
   serverId: z.string(),

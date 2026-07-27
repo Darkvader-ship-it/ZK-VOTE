@@ -143,10 +143,25 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "id", type: "INTEGER", notNull: true, primaryKey: true },
       { name: "name", type: "TEXT", notNull: true, primaryKey: false },
       { name: "creator", type: "TEXT", notNull: true, primaryKey: false },
-      { name: "membership_open", type: "INTEGER", notNull: false, primaryKey: false },
-      { name: "members_can_propose", type: "INTEGER", notNull: false, primaryKey: false },
+      {
+        name: "membership_open",
+        type: "INTEGER",
+        notNull: false,
+        primaryKey: false,
+      },
+      {
+        name: "members_can_propose",
+        type: "INTEGER",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "metadata_cid", type: "TEXT", notNull: false, primaryKey: false },
-      { name: "member_count", type: "INTEGER", notNull: false, primaryKey: false },
+      {
+        name: "member_count",
+        type: "INTEGER",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "updated_at", type: "TEXT", notNull: false, primaryKey: false },
     ],
     indexes: [],
@@ -156,7 +171,12 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "commitment", type: "TEXT", notNull: true, primaryKey: true },
       { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: true },
       { name: "proposal_id", type: "INTEGER", notNull: true, primaryKey: true },
-      { name: "window_start", type: "INTEGER", notNull: true, primaryKey: true },
+      {
+        name: "window_start",
+        type: "INTEGER",
+        notNull: true,
+        primaryKey: true,
+      },
       { name: "count", type: "INTEGER", notNull: false, primaryKey: false },
     ],
     indexes: [],
@@ -166,9 +186,24 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "id", type: "INTEGER", notNull: false, primaryKey: false },
       { name: "comment_id", type: "INTEGER", notNull: true, primaryKey: false },
       { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: false },
-      { name: "proposal_id", type: "INTEGER", notNull: true, primaryKey: false },
-      { name: "flagger_commitment", type: "TEXT", notNull: true, primaryKey: false },
-      { name: "flagger_nullifier", type: "TEXT", notNull: true, primaryKey: false },
+      {
+        name: "proposal_id",
+        type: "INTEGER",
+        notNull: true,
+        primaryKey: false,
+      },
+      {
+        name: "flagger_commitment",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: false,
+      },
+      {
+        name: "flagger_nullifier",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: false,
+      },
       { name: "created_at", type: "TEXT", notNull: false, primaryKey: false },
     ],
     indexes: [],
@@ -178,7 +213,12 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "comment_id", type: "INTEGER", notNull: true, primaryKey: true },
       { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: true },
       { name: "proposal_id", type: "INTEGER", notNull: true, primaryKey: true },
-      { name: "flag_count", type: "INTEGER", notNull: false, primaryKey: false },
+      {
+        name: "flag_count",
+        type: "INTEGER",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "hidden_at", type: "TEXT", notNull: false, primaryKey: false },
     ],
     indexes: [],
@@ -189,8 +229,18 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "contract_id", type: "TEXT", notNull: true, primaryKey: false },
       { name: "dao_id", type: "INTEGER", notNull: false, primaryKey: false },
       { name: "method", type: "TEXT", notNull: false, primaryKey: false },
-      { name: "last_renewed_at", type: "TEXT", notNull: false, primaryKey: false },
-      { name: "remaining_ledgers", type: "INTEGER", notNull: false, primaryKey: false },
+      {
+        name: "last_renewed_at",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
+      {
+        name: "remaining_ledgers",
+        type: "INTEGER",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "urgency", type: "TEXT", notNull: false, primaryKey: false },
     ],
     indexes: [
@@ -204,22 +254,37 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "cycle_id", type: "TEXT", notNull: true, primaryKey: false },
       { name: "cycle_start", type: "TEXT", notNull: false, primaryKey: false },
       { name: "cycle_end", type: "TEXT", notNull: false, primaryKey: false },
-      { name: "entries_renewed", type: "INTEGER", notNull: false, primaryKey: false },
-      { name: "entries_skipped", type: "INTEGER", notNull: false, primaryKey: false },
+      {
+        name: "entries_renewed",
+        type: "INTEGER",
+        notNull: false,
+        primaryKey: false,
+      },
+      {
+        name: "entries_skipped",
+        type: "INTEGER",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "tx_count", type: "INTEGER", notNull: false, primaryKey: false },
-      { name: "total_fee_xlm", type: "REAL", notNull: false, primaryKey: false },
+      {
+        name: "total_fee_xlm",
+        type: "REAL",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "status", type: "TEXT", notNull: false, primaryKey: false },
     ],
-    indexes: [
-      { name: "idx_ttl_cost_cycle", columns: ["cycle_id"] },
-    ],
+    indexes: [{ name: "idx_ttl_cost_cycle", columns: ["cycle_id"] }],
   },
 };
 
 function normalizeType(t: string): string {
   const u = t.toUpperCase().trim();
-  if (["INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT"].includes(u)) return "INTEGER";
-  if (["TEXT", "VARCHAR", "NVARCHAR", "CHAR", "CLOB"].includes(u)) return "TEXT";
+  if (["INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT"].includes(u))
+    return "INTEGER";
+  if (["TEXT", "VARCHAR", "NVARCHAR", "CHAR", "CLOB"].includes(u))
+    return "TEXT";
   if (["REAL", "FLOAT", "DOUBLE"].includes(u)) return "REAL";
   if (["NUMERIC", "DECIMAL"].includes(u)) return "NUMERIC";
   if (u === "BLOB") return "BLOB";
@@ -361,15 +426,19 @@ export function initDb(dbPath?: string): DatabaseType {
     CREATE INDEX IF NOT EXISTS idx_ttl_cost_cycle ON ttl_cost_log(cycle_id);
   `);
 
-  const versionRow = database.prepare(
-    "SELECT value FROM metadata WHERE key = 'schema_version'"
-  ).get() as MetadataRow | undefined;
-  const storedVersion = versionRow ? (JSON.parse(versionRow.value) as number) : null;
+  const versionRow = database
+    .prepare("SELECT value FROM metadata WHERE key = 'schema_version'")
+    .get() as MetadataRow | undefined;
+  const storedVersion = versionRow
+    ? (JSON.parse(versionRow.value) as number)
+    : null;
 
   if (!storedVersion) {
-    database.prepare(
-      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)"
-    ).run(JSON.stringify(CURRENT_SCHEMA_VERSION));
+    database
+      .prepare(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)",
+      )
+      .run(JSON.stringify(CURRENT_SCHEMA_VERSION));
   }
 
   const { valid, errors, warnings, migrations } = validateSchema(database);
@@ -389,10 +458,15 @@ export function initDb(dbPath?: string): DatabaseType {
   }
 
   if (storedVersion && storedVersion < CURRENT_SCHEMA_VERSION) {
-    database.prepare(
-      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)"
-    ).run(JSON.stringify(CURRENT_SCHEMA_VERSION));
-    log("info", "schema_version_upgraded", { from: storedVersion, to: CURRENT_SCHEMA_VERSION });
+    database
+      .prepare(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)",
+      )
+      .run(JSON.stringify(CURRENT_SCHEMA_VERSION));
+    log("info", "schema_version_upgraded", {
+      from: storedVersion,
+      to: CURRENT_SCHEMA_VERSION,
+    });
   }
 
   if (!dbPath) {
@@ -431,9 +505,9 @@ function validateSchema(database: DatabaseType): SchemaValidationResult {
   const migrations: string[] = [];
 
   for (const [tableName, expected] of Object.entries(EXPECTED_SCHEMA)) {
-    const tableExists = database.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
-    ).get(tableName);
+    const tableExists = database
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+      .get(tableName);
 
     if (!tableExists) {
       errors.push(`Missing required table: ${tableName}`);
@@ -450,10 +524,12 @@ function validateSchema(database: DatabaseType): SchemaValidationResult {
     }>;
 
     for (const expectedCol of expected.columns) {
-      const actualCol = actualColumns.find(c => c.name === expectedCol.name);
+      const actualCol = actualColumns.find((c) => c.name === expectedCol.name);
 
       if (!actualCol) {
-        migrations.push(`Missing column ${tableName}.${expectedCol.name} (${expectedCol.type})`);
+        migrations.push(
+          `Missing column ${tableName}.${expectedCol.name} (${expectedCol.type})`,
+        );
         continue;
       }
 
@@ -461,20 +537,30 @@ function validateSchema(database: DatabaseType): SchemaValidationResult {
       const expectedType = normalizeType(expectedCol.type);
 
       if (actualType !== expectedType) {
-        errors.push(`Column ${tableName}.${expectedCol.name} type mismatch: expected ${expectedCol.type}, got ${actualCol.type}`);
+        errors.push(
+          `Column ${tableName}.${expectedCol.name} type mismatch: expected ${expectedCol.type}, got ${actualCol.type}`,
+        );
       }
 
-      if (expectedCol.notNull && !actualCol.notnull && !expectedCol.primaryKey) {
-        warnings.push(`Column ${tableName}.${expectedCol.name} missing NOT NULL constraint`);
+      if (
+        expectedCol.notNull &&
+        !actualCol.notnull &&
+        !expectedCol.primaryKey
+      ) {
+        warnings.push(
+          `Column ${tableName}.${expectedCol.name} missing NOT NULL constraint`,
+        );
       }
 
       if (expectedCol.primaryKey && !actualCol.pk) {
-        errors.push(`Column ${tableName}.${expectedCol.name} missing PRIMARY KEY`);
+        errors.push(
+          `Column ${tableName}.${expectedCol.name} missing PRIMARY KEY`,
+        );
       }
     }
 
     for (const actualCol of actualColumns) {
-      const match = expected.columns.find(c => c.name === actualCol.name);
+      const match = expected.columns.find((c) => c.name === actualCol.name);
       if (!match) {
         warnings.push(`Extra column ${tableName}.${actualCol.name}`);
       }
@@ -489,27 +575,31 @@ function validateSchema(database: DatabaseType): SchemaValidationResult {
     }>;
 
     for (const expectedIdx of expected.indexes) {
-      const actualIdx = actualIndexes.find(i => i.name === expectedIdx.name);
+      const actualIdx = actualIndexes.find((i) => i.name === expectedIdx.name);
 
       if (!actualIdx) {
         warnings.push(`Missing index ${expectedIdx.name} on ${tableName}`);
         continue;
       }
 
-      const indexCols = database.pragma(`index_info(${expectedIdx.name})`) as Array<{
+      const indexCols = database.pragma(
+        `index_info(${expectedIdx.name})`,
+      ) as Array<{
         seqno: number;
         cid: number;
         name: string;
       }>;
-      const actualColNames = indexCols.map(c => c.name);
+      const actualColNames = indexCols.map((c) => c.name);
       if (actualColNames.join(",") !== expectedIdx.columns.join(",")) {
-        warnings.push(`Index ${expectedIdx.name} columns mismatch: expected [${expectedIdx.columns}], got [${actualColNames}]`);
+        warnings.push(
+          `Index ${expectedIdx.name} columns mismatch: expected [${expectedIdx.columns}], got [${actualColNames}]`,
+        );
       }
     }
 
     for (const actualIdx of actualIndexes) {
       if (actualIdx.origin === "pk" || actualIdx.origin === "u") continue;
-      const match = expected.indexes.find(i => i.name === actualIdx.name);
+      const match = expected.indexes.find((i) => i.name === actualIdx.name);
       if (!match) {
         warnings.push(`Extra index ${actualIdx.name} on ${tableName}`);
       }
@@ -530,7 +620,7 @@ function applyMigrations(database: DatabaseType, migrations: string[]): void {
     const table = EXPECTED_SCHEMA[tableName];
     if (!table) continue;
 
-    const colDef = table.columns.find(c => c.name === columnName);
+    const colDef = table.columns.find((c) => c.name === columnName);
     if (!colDef) continue;
 
     let sql = `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${colDef.type}`;
@@ -539,7 +629,10 @@ function applyMigrations(database: DatabaseType, migrations: string[]): void {
       sql += ` DEFAULT ${def} NOT NULL`;
     }
     database.exec(sql);
-    log("info", "schema_migration_applied", { table: tableName, column: columnName });
+    log("info", "schema_migration_applied", {
+      table: tableName,
+      column: columnName,
+    });
   }
 }
 
@@ -986,7 +1079,9 @@ export interface TTLCostLogEntry {
 
 export function upsertTTLTracking(entry: TTLTrackingEntry): void {
   const database = initDb();
-  database.prepare(`
+  database
+    .prepare(
+      `
     INSERT INTO ttl_tracking (entry_id, contract_id, dao_id, method, last_renewed_at, remaining_ledgers, urgency)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(entry_id) DO UPDATE SET
@@ -996,20 +1091,24 @@ export function upsertTTLTracking(entry: TTLTrackingEntry): void {
       last_renewed_at = excluded.last_renewed_at,
       remaining_ledgers = excluded.remaining_ledgers,
       urgency = excluded.urgency
-  `).run(
-    entry.entryId,
-    entry.contractId,
-    entry.daoId ?? null,
-    entry.method ?? null,
-    entry.lastRenewedAt ?? null,
-    entry.remainingLedgers ?? null,
-    entry.urgency,
-  );
+  `,
+    )
+    .run(
+      entry.entryId,
+      entry.contractId,
+      entry.daoId ?? null,
+      entry.method ?? null,
+      entry.lastRenewedAt ?? null,
+      entry.remainingLedgers ?? null,
+      entry.urgency,
+    );
 }
 
 export function getTTLTracking(entryId: string): TTLTrackingEntry | null {
   const database = initDb();
-  const row = database.prepare("SELECT * FROM ttl_tracking WHERE entry_id = ?").get(entryId) as Record<string, unknown> | undefined;
+  const row = database
+    .prepare("SELECT * FROM ttl_tracking WHERE entry_id = ?")
+    .get(entryId) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
     entryId: row.entry_id as string,
@@ -1024,7 +1123,9 @@ export function getTTLTracking(entryId: string): TTLTrackingEntry | null {
 
 export function getAllTTLTracking(): TTLTrackingEntry[] {
   const database = initDb();
-  const rows = database.prepare("SELECT * FROM ttl_tracking ORDER BY remaining_ledgers ASC").all() as Record<string, unknown>[];
+  const rows = database
+    .prepare("SELECT * FROM ttl_tracking ORDER BY remaining_ledgers ASC")
+    .all() as Record<string, unknown>[];
   return rows.map((row) => ({
     entryId: row.entry_id as string,
     contractId: row.contract_id as string,
@@ -1038,9 +1139,11 @@ export function getAllTTLTracking(): TTLTrackingEntry[] {
 
 export function getGracePeriodEntries(): TTLTrackingEntry[] {
   const database = initDb();
-  const rows = database.prepare(
-    "SELECT * FROM ttl_tracking WHERE urgency = 'grace' ORDER BY remaining_ledgers ASC"
-  ).all() as Record<string, unknown>[];
+  const rows = database
+    .prepare(
+      "SELECT * FROM ttl_tracking WHERE urgency = 'grace' ORDER BY remaining_ledgers ASC",
+    )
+    .all() as Record<string, unknown>[];
   return rows.map((row) => ({
     entryId: row.entry_id as string,
     contractId: row.contract_id as string,
@@ -1054,10 +1157,14 @@ export function getGracePeriodEntries(): TTLTrackingEntry[] {
 
 export function createTTLCostLog(cycleId: string, cycleStart: string): number {
   const database = initDb();
-  const result = database.prepare(`
+  const result = database
+    .prepare(
+      `
     INSERT INTO ttl_cost_log (cycle_id, cycle_start, status)
     VALUES (?, ?, 'in_progress')
-  `).run(cycleId, cycleStart);
+  `,
+    )
+    .run(cycleId, cycleStart);
   return result.lastInsertRowid as number;
 }
 
@@ -1076,23 +1183,43 @@ export function updateTTLCostLog(
   const sets: string[] = [];
   const values: unknown[] = [];
 
-  if (fields.cycleEnd !== undefined) { sets.push("cycle_end = ?"); values.push(fields.cycleEnd); }
-  if (fields.entriesRenewed !== undefined) { sets.push("entries_renewed = ?"); values.push(fields.entriesRenewed); }
-  if (fields.entriesSkipped !== undefined) { sets.push("entries_skipped = ?"); values.push(fields.entriesSkipped); }
-  if (fields.txCount !== undefined) { sets.push("tx_count = ?"); values.push(fields.txCount); }
-  if (fields.totalFeeXlm !== undefined) { sets.push("total_fee_xlm = ?"); values.push(fields.totalFeeXlm); }
-  if (fields.status !== undefined) { sets.push("status = ?"); values.push(fields.status); }
+  if (fields.cycleEnd !== undefined) {
+    sets.push("cycle_end = ?");
+    values.push(fields.cycleEnd);
+  }
+  if (fields.entriesRenewed !== undefined) {
+    sets.push("entries_renewed = ?");
+    values.push(fields.entriesRenewed);
+  }
+  if (fields.entriesSkipped !== undefined) {
+    sets.push("entries_skipped = ?");
+    values.push(fields.entriesSkipped);
+  }
+  if (fields.txCount !== undefined) {
+    sets.push("tx_count = ?");
+    values.push(fields.txCount);
+  }
+  if (fields.totalFeeXlm !== undefined) {
+    sets.push("total_fee_xlm = ?");
+    values.push(fields.totalFeeXlm);
+  }
+  if (fields.status !== undefined) {
+    sets.push("status = ?");
+    values.push(fields.status);
+  }
 
   if (sets.length === 0) return;
   values.push(id);
-  database.prepare(`UPDATE ttl_cost_log SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  database
+    .prepare(`UPDATE ttl_cost_log SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...values);
 }
 
 export function getTTLCostLogs(limit = 10): TTLCostLogEntry[] {
   const database = initDb();
-  const rows = database.prepare(
-    "SELECT * FROM ttl_cost_log ORDER BY id DESC LIMIT ?"
-  ).all(limit) as Record<string, unknown>[];
+  const rows = database
+    .prepare("SELECT * FROM ttl_cost_log ORDER BY id DESC LIMIT ?")
+    .all(limit) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: row.id as number,
     cycleId: row.cycle_id as string,
@@ -1108,9 +1235,11 @@ export function getTTLCostLogs(limit = 10): TTLCostLogEntry[] {
 
 export function getTotalTTLCostXLM(): number {
   const database = initDb();
-  const row = database.prepare(
-    "SELECT COALESCE(SUM(total_fee_xlm), 0) as total FROM ttl_cost_log WHERE status = 'completed'"
-  ).get() as { total: number };
+  const row = database
+    .prepare(
+      "SELECT COALESCE(SUM(total_fee_xlm), 0) as total FROM ttl_cost_log WHERE status = 'completed'",
+    )
+    .get() as { total: number };
   return row.total;
 }
 

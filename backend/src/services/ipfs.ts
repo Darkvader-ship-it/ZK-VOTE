@@ -305,7 +305,10 @@ export async function pinJSON(
       backupPath,
     );
   } catch (err) {
-    log("warn", "pin_register_failed", { cid: result.cid, error: (err as Error).message });
+    log("warn", "pin_register_failed", {
+      cid: result.cid,
+      error: (err as Error).message,
+    });
   }
 
   // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
@@ -340,7 +343,10 @@ export async function pinFile(
   try {
     backupPath = pinManager.backupFile(buffer, filename);
   } catch (err) {
-    log("warn", "local_backup_failed", { filename, error: (err as Error).message });
+    log("warn", "local_backup_failed", {
+      filename,
+      error: (err as Error).message,
+    });
   }
 
   // 2. Upload to Pinata (primary)
@@ -372,7 +378,10 @@ export async function pinFile(
       backupPath,
     );
   } catch (err) {
-    log("warn", "pin_register_failed", { cid: result.cid, error: (err as Error).message });
+    log("warn", "pin_register_failed", {
+      cid: result.cid,
+      error: (err as Error).message,
+    });
   }
 
   // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
@@ -607,11 +616,9 @@ export async function repinCallback(
     return result.cid;
   } else {
     const buffer = fs.readFileSync(backupPath);
-    const file = new File(
-      [buffer as unknown as BlobPart],
-      name,
-      { type: mimeType || "application/octet-stream" },
-    );
+    const file = new File([buffer as unknown as BlobPart], name, {
+      type: mimeType || "application/octet-stream",
+    });
     const result = await pinata.upload.public.file(file).name(name).keyvalues({
       app: "zkvote",
       type: "proposal-image",
