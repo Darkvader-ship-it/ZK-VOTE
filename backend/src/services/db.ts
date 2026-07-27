@@ -3,12 +3,26 @@
  *
  * Provides persistent storage for events with efficient querying.
  * Supports frontend notifications with on-chain verification.
+ *
+ * Partitioning Strategy (2026-07-27):
+ * Events are stored in per-DAO tables (events_{daoId}) to avoid a single
+ * monolithic events table becoming a bottleneck as the platform scales.
+ * Cross-DAO queries use UNION ALL across all known partitions.
  */
 
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  timeQuery,
+  getCachedOrCompute,
+  invalidateCachePrefix,
+  getDbStats as getMonitorDbStats,
+  profileEventQueries,
+  analyzeQueryPlan,
+} from "./dbMonitor.js";
+import { migrateUp, getMigrationStatus } from "./migrate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -312,8 +326,122 @@ const log = (
 
 let db: DatabaseType | null = null;
 
+/** Cache of known partition tables (events_{daoId}) to avoid redundant DDL */
+const knownPartitions: Set<number> = new Set();
+
 /**
- * Initialize the database
+ * Return the partition table name for a given DAO ID.
+ */
+function partitionTableName(daoId: number): string {
+  return `events_${daoId}`;
+}
+
+/**
+ * Ensure a partition table exists for the given DAO ID.
+ * Idempotent — safe to call on every write.
+ */
+function ensurePartitionTable(daoId: number): void {
+  if (knownPartitions.has(daoId)) return;
+  const database = db as DatabaseType;
+  const tableName = partitionTableName(daoId);
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS ${tableName} (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL CHECK(type IN (
+        'dao_create','admin_transfer','member_added','member_revoked','member_left',
+        'tree_init','voter_registered','voter_removed','voter_reinstated',
+        'vk_updated','proposal_created','proposal_closed','proposal_archived','vote_cast'
+      )),
+      data TEXT, -- JSON
+      ledger INTEGER,
+      tx_hash TEXT,
+      timestamp TEXT NOT NULL,
+      verified INTEGER NOT NULL DEFAULT 0 CHECK(verified IN (0, 1)),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(ledger, tx_hash, type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_${tableName}_type ON ${tableName}(type);
+    CREATE INDEX IF NOT EXISTS idx_${tableName}_timestamp ON ${tableName}(timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_${tableName}_ledger ON ${tableName}(ledger DESC);
+    CREATE INDEX IF NOT EXISTS idx_${tableName}_verified ON ${tableName}(verified);
+  `);
+  knownPartitions.add(daoId);
+  // Record this partition in metadata for cross-DAO queries
+  recordPartitionDaoId(database, daoId);
+}
+
+/**
+ * Record a DAO ID in the partition registry so cross-DAO queries
+ * can discover all existing partitions.
+ */
+function recordPartitionDaoId(database: DatabaseType, daoId: number): void {
+  database
+    .prepare(
+      "INSERT OR IGNORE INTO partition_registry (dao_id) VALUES (?)",
+    )
+    .run(daoId);
+}
+
+/**
+ * Get all registered DAO IDs from the partition registry.
+ */
+function getAllPartitionDaoIds(database: DatabaseType): number[] {
+  const rows = database
+    .prepare("SELECT dao_id FROM partition_registry ORDER BY dao_id ASC")
+    .all() as Array<{ dao_id: number }>;
+  return rows.map((r) => r.dao_id);
+}
+
+/**
+ * Build a UNION ALL sub-query across all known partitions for a
+ * cross-DAO SELECT.  Each sub-query adds the literal `dao_id` column.
+ *
+ * Example output:
+ *   SELECT id, 1 AS dao_id, type, ... FROM events_1
+ *   UNION ALL SELECT id, 2 AS dao_id, type, ... FROM events_2
+ */
+function buildUnionAllQuery(
+  columns: string,
+  whereClause: string,
+  orderAndLimit: string,
+  daoIds?: number[],
+): { sql: string; params: unknown[] } {
+  const database = db as DatabaseType;
+  const ids = daoIds ?? getAllPartitionDaoIds(database);
+  if (ids.length === 0) {
+    return {
+      sql: `SELECT ${columns} FROM (SELECT NULL AS id WHERE 1=0) AS _ WHERE ${whereClause} ${orderAndLimit}`,
+      params: [],
+    };
+  }
+
+  const parts: string[] = [];
+  const params: unknown[] = [];
+  for (const daoId of ids) {
+    const tableName = partitionTableName(daoId);
+    // The UNION ALL sub-query includes a literal dao_id column
+    parts.push(
+      `SELECT id, ${daoId} AS dao_id, type, data, ledger, tx_hash, timestamp, verified, created_at FROM ${tableName}`,
+    );
+  }
+  // Flatten params — each sub-query uses the same positional parameters
+  // (e.g. for WHERE type IN (?,?) the same params apply to every branch).
+  // We capture param placeholders from the whereClause once and repeat
+  // them per branch later — but for simplicity with UNION ALL we use a
+  // wrapper that applies the WHERE / ORDER / LIMIT to the UNION ALL result.
+  const unionSql = parts.join(" UNION ALL ");
+  return {
+    sql: `SELECT ${columns} FROM (${unionSql}) AS combined WHERE ${whereClause} ${orderAndLimit}`,
+    params,
+  };
+}
+
+// ============================================
+// INITIALIZATION
+// ============================================
+
+/**
+ * Initialize the database and migrate from the monolithic schema.
  */
 export function initDb(dbPath?: string): DatabaseType {
   if (db && !dbPath) return db;
@@ -332,27 +460,17 @@ export function initDb(dbPath?: string): DatabaseType {
   const dbFile = dbPath ?? DB_FILE;
   const database = new Database(dbFile);
   database.pragma("journal_mode = WAL");
+  database.pragma("foreign_keys = ON");
 
+  // Create system tables (daos, metadata, partition_registry)
   database.exec(`
-    CREATE TABLE IF NOT EXISTS events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      dao_id INTEGER NOT NULL,
-      type TEXT NOT NULL,
-      data TEXT,
-      ledger INTEGER,
-      tx_hash TEXT,
-      timestamp TEXT NOT NULL,
-      verified INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(dao_id, ledger, tx_hash, type)
+    -- Partition registry tracks which DAOs have their own event tables
+    CREATE TABLE IF NOT EXISTS partition_registry (
+      dao_id INTEGER PRIMARY KEY,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE INDEX IF NOT EXISTS idx_events_dao_id ON events(dao_id);
-    CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
-    CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
-    CREATE INDEX IF NOT EXISTS idx_events_ledger ON events(ledger DESC);
-    CREATE INDEX IF NOT EXISTS idx_events_dao_type ON events(dao_id, type);
-
+    -- Metadata table for tracking state (feat: events partitioning, db monitoring, migration framework, and data integrity constraints)
     CREATE TABLE IF NOT EXISTS metadata (
       key TEXT PRIMARY KEY,
       value TEXT
@@ -424,6 +542,21 @@ export function initDb(dbPath?: string): DatabaseType {
     );
 
     CREATE INDEX IF NOT EXISTS idx_ttl_cost_cycle ON ttl_cost_log(cycle_id);
+
+    -- Keep the old events table temporarily during migration,
+    -- then drop it once migration completes.
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dao_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      data TEXT,
+      ledger INTEGER,
+      tx_hash TEXT,
+      timestamp TEXT NOT NULL,
+      verified INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(dao_id, ledger, tx_hash, type)
+    );
   `);
 
   const versionRow = database
@@ -469,12 +602,54 @@ export function initDb(dbPath?: string): DatabaseType {
     });
   }
 
+  // Populate knownPartitions from the registry
+  const rows = database
+    .prepare("SELECT dao_id FROM partition_registry")
+    .all() as Array<{ dao_id: number }>;
+  for (const row of rows) {
+    knownPartitions.add(row.dao_id);
+  }
+
+  // Run pending migrations using the migration framework
+  // Migrations are idempotent and tracked in the _migrations table
+  try {
+    const migrationResults = migrateUp(database);
+    if (migrationResults.length > 0) {
+      log("info", "migrations_applied", {
+        count: migrationResults.length,
+        results: migrationResults.map((r) => ({
+          id: r.id,
+          direction: r.direction,
+          success: r.success,
+          durationMs: Math.round(r.durationMs),
+        })),
+      });
+    }
+  } catch (err) {
+    // Migration lock contention is not fatal — another process may have
+    // already applied the migrations. Log and continue.
+    const error = err as Error;
+    if (error.message.includes("Migration lock")) {
+      log("warn", "migration_skipped_locked", {
+        error: error.message,
+      });
+    } else {
+      log("error", "migration_failed", {
+        error: error.message,
+      });
+      throw err;
+    }
+  }
+
   if (!dbPath) {
     db = database;
   }
 
-  log("info", "db_initialized", { path: dbFile });
-  return database;
+  log("info", "db_initialized", {
+    path: dbFile,
+    partitions: knownPartitions.size,
+  });
+  return database; (feat: events partitioning, db monitoring, migration framework, and data integrity constraints)
 }
 
 /**
@@ -484,6 +659,7 @@ export function closeDb(): void {
   if (db) {
     db.close();
     db = null;
+    knownPartitions.clear();
     log("info", "db_closed");
   }
 }
@@ -649,9 +825,14 @@ interface MetadataRow {
  */
 export function getMetadata<T>(key: string): T | null {
   const database = initDb();
-  const row = database
-    .prepare("SELECT value FROM metadata WHERE key = ?")
-    .get(key) as MetadataRow | undefined;
+  const row = timeQuery(
+    "getMetadata",
+    () =>
+      database
+        .prepare("SELECT value FROM metadata WHERE key = ?")
+        .get(key) as MetadataRow | undefined,
+    { key },
+  );
   return row ? (JSON.parse(row.value) as T) : null;
 }
 
@@ -660,13 +841,20 @@ export function getMetadata<T>(key: string): T | null {
  */
 export function setMetadata<T>(key: string, value: T): void {
   const database = initDb();
-  database
-    .prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)")
-    .run(key, JSON.stringify(value));
+  timeQuery(
+    "setMetadata",
+    () =>
+      database
+        .prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)")
+        .run(key, JSON.stringify(value)),
+    { key },
+  );
+  // Invalidate any cached queries that depend on metadata
+  invalidateCachePrefix("metadata");
 }
 
 // ============================================
-// EVENT FUNCTIONS
+// EVENT FUNCTIONS (Partition-aware)
 // ============================================
 
 interface EventRow {
@@ -686,41 +874,74 @@ interface CountRow {
 }
 
 /**
- * Add an event to the database
- * Returns true if added, false if duplicate
+ * Convert a raw EventRow (with numeric verified) to an Event object.
  */
-export function addEvent(event: EventInput): boolean {
-  const database = initDb();
-  try {
-    database
-      .prepare(
-        `
-      INSERT INTO events (dao_id, type, data, ledger, tx_hash, timestamp, verified)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `,
-      )
-      .run(
-        event.daoId,
-        event.type,
-        JSON.stringify(event.data),
-        event.ledger ?? null,
-        event.txHash ?? null,
-        event.timestamp ?? new Date().toISOString(),
-        event.verified ? 1 : 0,
-      );
-    return true;
-  } catch (err) {
-    const error = err as { code?: string };
-    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
-      return false; // Duplicate
-    }
-    throw err;
-  }
+function rowToEvent(row: EventRow): Event {
+  return {
+    id: row.id,
+    dao_id: row.dao_id,
+    type: row.type,
+    data: row.data ? (JSON.parse(row.data) as Record<string, unknown>) : null,
+    ledger: row.ledger,
+    tx_hash: row.tx_hash,
+    timestamp: row.timestamp,
+    verified: !!row.verified,
+    created_at: row.created_at,
+  };
 }
 
 /**
- * Add a pending (unverified) event from frontend notification
- * The event will be verified against the chain before being marked as verified
+ * Add an event to the database.
+ * Writes to the partition table for the DAO.
+ * Returns true if added, false if duplicate.
+ */
+export function addEvent(event: EventInput): boolean {
+  const database = initDb();
+  const tableName = partitionTableName(event.daoId);
+  ensurePartitionTable(event.daoId);
+
+  const result = timeQuery(
+    "addEvent",
+    () => {
+      try {
+        database
+          .prepare(
+            `
+        INSERT INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+          )
+          .run(
+            event.type,
+            JSON.stringify(event.data),
+            event.ledger ?? null,
+            event.txHash ?? null,
+            event.timestamp ?? new Date().toISOString(),
+            event.verified ? 1 : 0,
+          );
+        return true;
+      } catch (err) {
+        const error = err as { code?: string };
+        if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
+          return false; // Duplicate
+        }
+        throw err;
+      }
+    },
+    { daoId: event.daoId, type: event.type },
+  );
+
+  // Invalidate cached DAO event counts
+  if (result) {
+    invalidateCachePrefix(`indexedDaos`);
+    invalidateCachePrefix(`dbStatus`);
+  }
+
+  return result;
+}
+
+/**
+ * Add a pending (unverified) event from frontend notification.
  */
 export function addPendingEvent(
   daoId: number,
@@ -740,23 +961,35 @@ export function addPendingEvent(
 }
 
 /**
- * Mark an event as verified
+ * Mark an event as verified.
+ * Searches across the DAO's partition table.
  */
 export function verifyEvent(txHash: string, ledger: number): void {
   const database = initDb();
-  database
-    .prepare("UPDATE events SET verified = 1, ledger = ? WHERE tx_hash = ?")
-    .run(ledger, txHash);
+  // Search in all partitions for the matching tx_hash
+  const daoIds = getAllPartitionDaoIds(database);
+  for (const daoId of daoIds) {
+    const tableName = partitionTableName(daoId);
+    const result = database
+      .prepare(
+        `UPDATE ${tableName} SET verified = 1, ledger = ? WHERE tx_hash = ? AND verified = 0`,
+      )
+      .run(ledger, txHash);
+    if (result.changes > 0) return; // Done
+  }
 }
 
 /**
- * Get events for a DAO
+ * Get events for a DAO (from its partition).
  */
 export function getEventsForDao(
   daoId: number,
   options: EventQueryOptions = {},
 ): EventQueryResult {
   const database = initDb();
+  const tableName = partitionTableName(daoId);
+  ensurePartitionTable(daoId);
+
   const {
     limit = 50,
     offset = 0,
@@ -764,8 +997,8 @@ export function getEventsForDao(
     verifiedOnly = false,
   } = options;
 
-  let query = "SELECT * FROM events WHERE dao_id = ?";
-  const params: (number | string)[] = [daoId];
+  let query = `SELECT * FROM ${tableName} WHERE 1=1`;
+  const params: (number | string)[] = [];
 
   if (types && types.length > 0) {
     query += ` AND type IN (${types.map(() => "?").join(",")})`;
@@ -781,9 +1014,11 @@ export function getEventsForDao(
 
   const events = database.prepare(query).all(...params) as EventRow[];
 
-  // Get total count
-  let countQuery = "SELECT COUNT(*) as total FROM events WHERE dao_id = ?";
-  const countParams: (number | string)[] = [daoId];
+  // Add dao_id to each row (partition tables don't store it)
+  const enrichedEvents = events.map((e) => ({ ...e, dao_id: daoId }));
+
+  let countQuery = `SELECT COUNT(*) as total FROM ${tableName} WHERE 1=1`;
+  const countParams: (number | string)[] = [];
   if (types && types.length > 0) {
     countQuery += ` AND type IN (${types.map(() => "?").join(",")})`;
     countParams.push(...types);
@@ -791,41 +1026,35 @@ export function getEventsForDao(
   if (verifiedOnly) {
     countQuery += " AND verified = 1";
   }
+
   const countResult = database
     .prepare(countQuery)
     .get(...countParams) as CountRow;
 
   return {
-    events: events.map((e) => ({
-      id: e.id,
-      dao_id: e.dao_id,
-      type: e.type,
-      data: e.data ? (JSON.parse(e.data) as Record<string, unknown>) : null,
-      ledger: e.ledger,
-      tx_hash: e.tx_hash,
-      timestamp: e.timestamp,
-      verified: !!e.verified,
-      created_at: e.created_at,
-    })),
+    events: enrichedEvents.map(rowToEvent),
     total: countResult.total,
     daoId,
   };
 }
 
 /**
- * Get all indexed DAOs
+ * Get all indexed DAOs (with event counts from partitions).
  */
 export function getIndexedDaos(): IndexedDao[] {
   const database = initDb();
+  const daoIds = getAllPartitionDaoIds(database);
+  if (daoIds.length === 0) return [];
+
+  // Build a UNION ALL query to get per-DAO counts
+  const parts: string[] = [];
+  for (const daoId of daoIds) {
+    const tableName = partitionTableName(daoId);
+    parts.push(`SELECT ${daoId} AS dao_id, COUNT(*) AS event_count FROM ${tableName}`);
+  }
+
   const rows = database
-    .prepare(
-      `
-    SELECT dao_id, COUNT(*) as event_count
-    FROM events
-    GROUP BY dao_id
-    ORDER BY dao_id
-  `,
-    )
+    .prepare(`${parts.join(" UNION ALL ")} ORDER BY dao_id`)
     .all() as Array<{ dao_id: number; event_count: number }>;
 
   return rows.map((r) => ({
@@ -835,62 +1064,323 @@ export function getIndexedDaos(): IndexedDao[] {
 }
 
 /**
- * Get database status
+ * Get database status (cross-DAO aggregates).
  */
 export function getDbStatus(): DbStatus {
   const database = initDb();
-  const totalResult = database
-    .prepare("SELECT COUNT(*) as total FROM events")
-    .get() as CountRow;
-  const daoCountResult = database
-    .prepare("SELECT COUNT(DISTINCT dao_id) as daoCount FROM events")
-    .get() as { daoCount: number };
+  const daoIds = getAllPartitionDaoIds(database);
+
+  let totalEvents = 0;
+  let daoCount = daoIds.length;
+
+  if (daoIds.length > 0) {
+    // Count across all partitions
+    const countParts: string[] = [];
+    for (const daoId of daoIds) {
+      const tableName = partitionTableName(daoId);
+      countParts.push(`SELECT COUNT(*) AS cnt FROM ${tableName}`);
+    }
+    const countRow = database
+      .prepare(`${countParts.join(" UNION ALL ")}`)
+      .all() as Array<{ cnt: number }>;
+    totalEvents = countRow.reduce((sum, r) => sum + r.cnt, 0);
+  }
+
   const lastLedger = getMetadata<number>("lastLedger") ?? 0;
 
   return {
-    totalEvents: totalResult.total,
-    daoCount: daoCountResult.daoCount,
+    totalEvents,
+    daoCount,
     lastLedger,
   };
 }
 
 /**
- * Get unverified events that need chain verification
+ * Get unverified events that need chain verification.
+ * Searches across all partitions.
  */
 export function getUnverifiedEvents(limit = 10): Event[] {
   const database = initDb();
+  const daoIds = getAllPartitionDaoIds(database);
+  if (daoIds.length === 0) return [];
+
+  // Build a UNION ALL sub-query across partitions
+  const parts: string[] = [];
+  for (const daoId of daoIds) {
+    const tableName = partitionTableName(daoId);
+    parts.push(
+      `SELECT id, ${daoId} AS dao_id, type, data, ledger, tx_hash, timestamp, verified, created_at FROM ${tableName} WHERE verified = 0 AND tx_hash IS NOT NULL`,
+    );
+  }
+
   const rows = database
     .prepare(
-      `
-    SELECT * FROM events
-    WHERE verified = 0 AND tx_hash IS NOT NULL
-    ORDER BY created_at ASC
-    LIMIT ?
-  `,
+      `${parts.join(" UNION ALL ")} ORDER BY created_at ASC LIMIT ?`,
     )
     .all(limit) as EventRow[];
 
-  return rows.map((e) => ({
-    id: e.id,
-    dao_id: e.dao_id,
-    type: e.type,
-    data: e.data ? (JSON.parse(e.data) as Record<string, unknown>) : null,
-    ledger: e.ledger,
-    tx_hash: e.tx_hash,
-    timestamp: e.timestamp,
-    verified: !!e.verified,
-    created_at: e.created_at,
-  }));
+  return rows.map(rowToEvent);
 }
 
 /**
- * Delete an unverified event (if verification fails)
+ * Delete an unverified event (if verification fails).
  */
 export function deleteUnverifiedEvent(txHash: string): void {
   const database = initDb();
-  database
-    .prepare("DELETE FROM events WHERE tx_hash = ? AND verified = 0")
-    .run(txHash);
+  const daoIds = getAllPartitionDaoIds(database);
+  for (const daoId of daoIds) {
+    const tableName = partitionTableName(daoId);
+    const result = database
+      .prepare(
+        `DELETE FROM ${tableName} WHERE tx_hash = ? AND verified = 0`,
+      )
+      .run(txHash);
+    if (result.changes > 0) return;
+  }
+}
+
+// ============================================
+// PARTITION MANAGEMENT
+// ============================================
+
+/**
+ * Ensure a partition table exists for the given DAO ID.
+ * Public version — call this when a new DAO is created.
+ */
+export function ensurePartition(daoId: number): void {
+  initDb();
+  ensurePartitionTable(daoId);
+  log("info", "partition_created", { daoId });
+}
+
+/**
+ * Drop a partition table (for DAO deletion/archival).
+ * Removes the DAO from the registry as well.
+ */
+export function dropPartition(daoId: number): void {
+  const database = initDb();
+  const tableName = partitionTableName(daoId);
+
+  database.exec(`DROP TABLE IF EXISTS ${tableName}`);
+  database.prepare("DELETE FROM partition_registry WHERE dao_id = ?").run(daoId);
+  knownPartitions.delete(daoId);
+
+  log("info", "partition_dropped", { daoId });
+}
+
+// ============================================
+// MIGRATION: Monolithic -> Partitioned
+// ============================================
+
+/**
+ * Migrate events from the old monolithic `events` table to per-DAO
+ * partition tables.  This is idempotent — safe to re-run.
+ *
+ * Returns the number of events migrated.
+ */
+export function migrateToPartitions(): number {
+  const database = initDb();
+
+  // Check if there are any rows in the old events table
+  const oldCount = database
+    .prepare("SELECT COUNT(*) AS total FROM events")
+    .get() as CountRow;
+
+  if (oldCount.total === 0) {
+    log("info", "partition_migration_skipped", { reason: "no_old_events" });
+    return 0;
+  }
+
+  // Read all old events, grouped by dao_id
+  const oldRows = database
+    .prepare(
+      "SELECT id, dao_id, type, data, ledger, tx_hash, timestamp, verified, created_at FROM events ORDER BY dao_id, id",
+    )
+    .all() as EventRow[];
+
+  let migrated = 0;
+
+  database.transaction(() => {
+    for (const row of oldRows) {
+      const tableName = partitionTableName(row.dao_id);
+      // Ensure partition exists (creates the table + indexes)
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS ${tableName} (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL,
+          data TEXT,
+          ledger INTEGER,
+          tx_hash TEXT,
+          timestamp TEXT NOT NULL,
+          verified INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(ledger, tx_hash, type)
+        );
+      `);
+      knownPartitions.add(row.dao_id);
+      recordPartitionDaoId(database, row.dao_id);
+
+      // Insert into partition (ignore duplicates)
+      const result = database
+        .prepare(
+          `
+        INSERT OR IGNORE INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+        )
+        .run(
+          row.type,
+          row.data,
+          row.ledger,
+          row.tx_hash,
+          row.timestamp,
+          row.verified,
+          row.created_at,
+        );
+      if (result.changes > 0) migrated++;
+    }
+
+    // Drop the old monolithic events table
+    database.exec("DROP TABLE IF EXISTS events");
+  })();
+
+  // Ensure indexes exist on new partitions
+  database.transaction(() => {
+    for (const daoId of knownPartitions) {
+      const tableName = partitionTableName(daoId);
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS idx_${tableName}_type ON ${tableName}(type);
+        CREATE INDEX IF NOT EXISTS idx_${tableName}_timestamp ON ${tableName}(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_${tableName}_ledger ON ${tableName}(ledger DESC);
+        CREATE INDEX IF NOT EXISTS idx_${tableName}_verified ON ${tableName}(verified);
+      `);
+    }
+  })();
+
+  log("info", "partition_migration_complete", { migrated, totalOld: oldCount.total });
+  return migrated;
+}
+
+/**
+ * Migrate events from JSON file to SQLite (legacy migration).
+ * Now routes into partition tables.
+ */
+export function migrateFromJson(jsonPath: string): number {
+  const database = initDb();
+
+  if (!fs.existsSync(jsonPath)) {
+    log("info", "no_json_to_migrate");
+    return 0;
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(jsonPath, "utf-8")) as {
+      events?: Record<
+        string,
+        Array<{
+          type: string;
+          data: Record<string, unknown> | null;
+          ledger?: number | null;
+          txHash?: string | null;
+          timestamp?: string;
+        }>
+      >;
+      lastLedger?: number;
+    };
+    const events = data.events ?? {};
+    let migrated = 0;
+
+    database.transaction(() => {
+      for (const [daoIdStr, daoEvents] of Object.entries(events)) {
+        const daoId = Number(daoIdStr);
+        const tableName = partitionTableName(daoId);
+        ensurePartitionTable(daoId);
+
+        const insertStmt = database.prepare(`
+          INSERT OR IGNORE INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
+          VALUES (?, ?, ?, ?, ?, 1)
+        `);
+
+        for (const event of daoEvents) {
+          try {
+            insertStmt.run(
+              event.type,
+              JSON.stringify(event.data),
+              event.ledger ?? null,
+              event.txHash ?? null,
+              event.timestamp ?? new Date().toISOString(),
+            );
+            migrated++;
+          } catch {
+            // Skip duplicates
+          }
+        }
+      }
+
+      // Save last ledger
+      if (data.lastLedger) {
+        setMetadata("lastLedger", data.lastLedger);
+      }
+    })();
+
+    log("info", "json_migration_complete", { migrated });
+
+    // Rename old file
+    fs.renameSync(jsonPath, jsonPath + ".migrated");
+
+    return migrated;
+  } catch (err) {
+    const error = err as Error;
+    log("error", "json_migration_failed", { error: error.message });
+    return 0;
+  }
+}
+
+// ============================================
+// DIAGNOSTICS & PERFORMANCE
+// ============================================
+
+/**
+ * Get comprehensive database diagnostics for the /db/stats endpoint.
+ * Includes query metrics, table statistics, cache stats, and index analysis.
+ */
+export function getDbDiagnostics(): Record<string, unknown> {
+  const database = initDb();
+  const stats = getMonitorDbStats(database);
+
+  // Profile event queries for large DAOs (10K+ events)
+  const largeDaos = stats.tables
+    .filter((t) => t.name.startsWith("events_") && t.rowCount >= 10_000)
+    .map((t) => Number(t.name.replace("events_", "")));
+
+  for (const daoId of largeDaos) {
+    profileEventQueries(database, daoId);
+  }
+
+  return {
+    queries: stats.queries,
+    tables: stats.tables,
+    cache: stats.cache,
+    config: stats.config,
+    partitions: knownPartitions.size,
+    largeDaos: largeDaos.length,
+  };
+}
+
+/**
+ * Profile queries for a specific DAO partition (for diagnostics).
+ */
+export function profileDaoQueries(daoId: number): void {
+  const database = initDb();
+  const tableName = partitionTableName(daoId);
+  const tableExists = database
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
+    )
+    .get(tableName);
+  if (tableExists) {
+    profileEventQueries(database, daoId);
+  }
 }
 
 // ============================================
@@ -1021,8 +1511,6 @@ export function getCachedDao(daoId: number): DaoCache | null {
  * For now, returns all DAOs - user filtering will be done by the frontend
  */
 export function getDaosForUser(_userAddress: string): DaoCache[] {
-  // This would require a separate user_dao_memberships table
-  // For now, just return all DAOs
   return getAllCachedDaos();
 }
 
@@ -1241,79 +1729,4 @@ export function getTotalTTLCostXLM(): number {
     )
     .get() as { total: number };
   return row.total;
-}
-
-// ============================================
-// MIGRATION FUNCTIONS
-// ============================================
-
-/**
- * Migrate events from JSON file to SQLite
- */
-export function migrateFromJson(jsonPath: string): number {
-  const database = initDb();
-
-  if (!fs.existsSync(jsonPath)) {
-    log("info", "no_json_to_migrate");
-    return 0;
-  }
-
-  try {
-    const data = JSON.parse(fs.readFileSync(jsonPath, "utf-8")) as {
-      events?: Record<
-        string,
-        Array<{
-          type: string;
-          data: Record<string, unknown> | null;
-          ledger?: number | null;
-          txHash?: string | null;
-          timestamp?: string;
-        }>
-      >;
-      lastLedger?: number;
-    };
-    const events = data.events ?? {};
-    let migrated = 0;
-
-    const insertStmt = database.prepare(`
-      INSERT OR IGNORE INTO events (dao_id, type, data, ledger, tx_hash, timestamp, verified)
-      VALUES (?, ?, ?, ?, ?, ?, 1)
-    `);
-
-    database.transaction(() => {
-      for (const [daoId, daoEvents] of Object.entries(events)) {
-        for (const event of daoEvents) {
-          try {
-            insertStmt.run(
-              Number(daoId),
-              event.type,
-              JSON.stringify(event.data),
-              event.ledger ?? null,
-              event.txHash ?? null,
-              event.timestamp ?? new Date().toISOString(),
-            );
-            migrated++;
-          } catch {
-            // Skip duplicates
-          }
-        }
-      }
-
-      // Save last ledger
-      if (data.lastLedger) {
-        setMetadata("lastLedger", data.lastLedger);
-      }
-    })();
-
-    log("info", "json_migration_complete", { migrated });
-
-    // Rename old file
-    fs.renameSync(jsonPath, jsonPath + ".migrated");
-
-    return migrated;
-  } catch (err) {
-    const error = err as Error;
-    log("error", "json_migration_failed", { error: error.message });
-    return 0;
-  }
 }

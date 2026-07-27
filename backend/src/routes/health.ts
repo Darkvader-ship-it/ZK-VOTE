@@ -9,6 +9,7 @@ import type * as StellarSdk from "@stellar/stellar-sdk";
 import { config } from "../config.js";
 import { extractAuthToken } from "../middleware/auth.js";
 import { log } from "../services/logger.js";
+import { getDbDiagnostics, getDbStatus } from "../services/db.js";
 
 const router = Router();
 
@@ -73,6 +74,13 @@ router.get("/health", async (req: Request, res: Response) => {
     }
   }
 
+  // Always include basic DB status (no auth needed for aggregate stats)
+  try {
+    base.db = getDbStatus();
+  } catch (err) {
+    base.db = { error: (err as Error).message };
+  }
+
   res.json(base);
 });
 
@@ -125,6 +133,34 @@ router.get("/config", (_req: Request, res: Response) => {
     ipfsEnabled: config.ipfsEnabled,
     pinataGateway: config.pinataGateway,
   });
+});
+
+/**
+ * GET /db/stats
+ * Database diagnostics endpoint (admin only)
+ */
+router.get("/db/stats", async (req: Request, res: Response) => {
+  // Require auth token for detailed diagnostics
+  if (config.healthExposeDetails) {
+    const token = extractAuthToken(req);
+    if (token !== config.relayerAuthToken) {
+      // Return basic stats without diagnostics
+      try {
+        const dbStatus = getDbStatus();
+        return res.json({ status: "unauthorized", db: dbStatus });
+      } catch (err) {
+        return res.status(500).json({ error: (err as Error).message });
+      }
+    }
+  }
+
+  try {
+    const diagnostics = getDbDiagnostics();
+    res.json(diagnostics);
+  } catch (err) {
+    log("error", "db_stats_failed", { error: (err as Error).message });
+    res.status(500).json({ error: "Failed to get database statistics" });
+  }
 });
 
 export default router;
