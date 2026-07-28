@@ -928,3 +928,115 @@ fn test_transfer_with_permit() {
     assert_eq!(client.balance(&charlie), 100);
     assert_eq!(client.nonces(&alice), 1);
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Issue #106: Token Balance Snapshotting for Historical Queries
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_checkpoint_created_on_mint() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    let checkpoints = client.get_checkpoints(&alice);
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints.get(0).unwrap().balance, 1000);
+}
+
+#[test]
+fn test_balance_at_returns_correct_historical_balance() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    let ledger_before_mint = env.ledger().sequence();
+
+    // Transfer changes balance
+    client.transfer(&alice, &bob, &300i128);
+
+    let ledger_after_transfer = env.ledger().sequence();
+
+    // Balance at mint time should be 1000
+    assert_eq!(client.balance_at(&alice, ledger_before_mint), 1000);
+    // Balance after transfer should be 700
+    assert_eq!(client.balance_at(&alice, ledger_after_transfer), 700);
+}
+
+#[test]
+fn test_balance_at_before_any_checkpoint() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Query before any checkpoint was created
+    assert_eq!(client.balance_at(&alice, 0), 0);
+    assert_eq!(client.balance_at(&alice, 999999), 1000);
+}
+
+#[test]
+fn test_checkpoints_track_multiple_operations() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let charlie = Address::generate(&env);
+
+    client.transfer(&alice, &bob, &200i128);
+    client.mint(&charlie, &500i128);
+    client.burn(&alice, &100i128);
+
+    let checkpoints = client.get_checkpoints(&alice);
+    // Should have: initial(1000), after_transfer(800), after_burn(700)
+    assert_eq!(checkpoints.len(), 3);
+    assert_eq!(checkpoints.get(0).unwrap().balance, 1000);
+    assert_eq!(checkpoints.get(1).unwrap().balance, 800);
+    assert_eq!(checkpoints.get(2).unwrap().balance, 700);
+}
+
+#[test]
+fn test_checkpoint_retention_configurable() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Set retention to 2
+    client.set_checkpoint_retention(&2u32);
+    assert_eq!(client.checkpoint_retention(), 2);
+
+    // Create more checkpoints than retention
+    let charlie = Address::generate(&env);
+    client.transfer(&alice, &bob, &100i128);
+    client.transfer(&alice, &charlie, &100i128);
+    client.transfer(&alice, &bob, &100i128);
+
+    // Should only keep last 2 checkpoints
+    let checkpoints = client.get_checkpoints(&alice);
+    assert!(checkpoints.len() <= 2);
+}
+
+#[test]
+fn test_balance_at_binary_search() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Create multiple checkpoints at different ledgers
+    client.transfer(&alice, &bob, &100i128);
+    let ledger1 = env.ledger().sequence();
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number = l.sequence_number + 5);
+    client.transfer(&alice, &bob, &100i128);
+    let ledger2 = env.ledger().sequence();
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number = l.sequence_number + 5);
+    client.transfer(&alice, &bob, &100i128);
+    let ledger3 = env.ledger().sequence();
+
+    // Binary search should find correct balance at each point
+    assert_eq!(client.balance_at(&alice, ledger1), 900);
+    assert_eq!(client.balance_at(&alice, ledger2), 800);
+    assert_eq!(client.balance_at(&alice, ledger3), 700);
+
+    // Query between checkpoints should return the last known balance
+    assert_eq!(client.balance_at(&alice, ledger1 + 2), 900);
+    assert_eq!(client.balance_at(&alice, ledger2 + 2), 800);
+}
+
+#[test]
+fn test_balance_at_zero_address() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Address that never had a balance
+    let nobody = Address::generate(&env);
+    assert_eq!(client.balance_at(&nobody, 100), 0);
+}
