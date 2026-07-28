@@ -22,6 +22,7 @@ import {
 } from "../services/stellar.js";
 import {
   authGuard,
+  auditLog,
   voteLimiter,
   queryLimiter,
   validateBody,
@@ -41,7 +42,7 @@ const router = Router();
 /**
  * POST /vote - Submit anonymous vote with ZK proof
  */
-router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
+router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBody(voteSchema), (async (
   req: Request,
   res: Response,
 ) => {

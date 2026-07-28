@@ -8,6 +8,9 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
+import swaggerUi from "swagger-ui-express";
+
+import { buildOpenApiDocument } from "./openapi.js";
 
 // Configuration and types
 import { config, validateEnv, isValidContractId } from "./config.js";
@@ -33,7 +36,12 @@ import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
 import { startMemoryMonitor, stopMemoryMonitor } from "./services/memory-monitor.js";
 
 // Middleware
-import { csrfGuard, requestLogger, errorHandler, metricsMiddleware } from "./middleware/index.js";
+import {
+  csrfGuard,
+  requestLogger,
+  errorHandler,
+  graduatedSlowDown,
+} from "./middleware/index.js";
 
 // Routes
 import {
@@ -47,8 +55,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
-  metricsRoutes,
-  remediationRoutes,
+  adminRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -85,6 +92,9 @@ app.use(express.json({ limit: "100kb" }));
 // Logging middleware
 app.use(requestLogger);
 
+// Graduated throttling (delays before a client is hard rate-limited)
+app.use(graduatedSlowDown);
+
 // CSRF protection (applied globally)
 app.use(csrfGuard);
 
@@ -107,6 +117,26 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(adminRoutes);
+
+// OpenAPI spec + interactive docs
+const openApiDocument = buildOpenApiDocument();
+app.get("/api-docs/openapi.json", (_req, res) => res.json(openApiDocument));
+app.use(
+  "/api-docs",
+  // helmet's default CSP blocks the inline scripts/styles Swagger UI's
+  // bundled assets need; relax it for this documentation-only route.
+  (
+    _req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    res.removeHeader("Content-Security-Policy");
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(openApiDocument),
+);
 
 // Global error handler (must be last)
 app.use(errorHandler);

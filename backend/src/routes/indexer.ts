@@ -16,7 +16,12 @@ import {
 } from "../services/indexer.js";
 import { getArchiveIndex, readArchivedEvents } from "../services/archival.js";
 import { getPendingEventsCountForDao } from "../services/db.js";
-import { authGuard, queryLimiter, validateParams } from "../middleware/index.js";
+import {
+  authGuard,
+  auditLog,
+  queryLimiter,
+  validateParams,
+} from "../middleware/index.js";
 import { daoParamsSchema, archiveParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 
@@ -114,7 +119,7 @@ router.get("/indexer/daos", queryLimiter, (req: Request, res: Response) => {
 /**
  * POST /events - Manual event submission (admin only)
  */
-router.post("/events", authGuard, (req: Request, res: Response) => {
+router.post("/events", authGuard, auditLog("events_manual_insert"), (req: Request, res: Response) => {
   const { daoId, type, data } = req.body;
 
   if (!daoId || !type) {
@@ -135,7 +140,7 @@ router.post("/events", authGuard, (req: Request, res: Response) => {
 // N4 hardening: was unauthenticated. Inbound events fan out into Soroban RPC
 // reads (sync_membership) — unauthenticated callers could amplify into a
 // downstream-RPC DoS.
-router.post("/events/notify", authGuard, queryLimiter, (async (
+router.post("/events/notify", authGuard, auditLog("events_notify"), queryLimiter, (async (
   req: Request,
   res: Response,
 ) => {

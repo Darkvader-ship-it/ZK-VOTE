@@ -21,7 +21,7 @@ const REDACTED_FIELDS = [
   "jwt",
 ];
 
-function redact(obj: LogMeta): LogMeta {
+export function redact(obj: LogMeta): LogMeta {
   const safe = { ...obj };
   for (const key of REDACTED_FIELDS) {
     if (key in safe) {
