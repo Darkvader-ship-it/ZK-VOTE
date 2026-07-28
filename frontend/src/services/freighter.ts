@@ -133,7 +133,7 @@ export async function connectFreighter(): Promise<string> {
 const CONNECTION_INTENT_KEY = "freighter_connection_intent";
 
 export function persistConnectionIntent(hasIntent: boolean): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
+  if (typeof localStorage === "undefined") return;
   try {
     if (hasIntent) {
       localStorage.setItem(CONNECTION_INTENT_KEY, "true");
@@ -146,7 +146,7 @@ export function persistConnectionIntent(hasIntent: boolean): void {
 }
 
 export function hasConnectionIntent(): boolean {
-  if (typeof window === "undefined" || !window.localStorage) return false;
+  if (typeof localStorage === "undefined") return false;
   try {
     return localStorage.getItem(CONNECTION_INTENT_KEY) === "true";
   } catch {

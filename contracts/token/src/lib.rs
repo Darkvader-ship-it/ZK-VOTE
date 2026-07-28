@@ -49,6 +49,13 @@ pub enum TokenError {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Checkpoint {
+    pub ledger_sequence: u32,
+    pub balance: i128,
+}
+
+#[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Balance(Address),
@@ -67,6 +74,8 @@ pub enum DataKey {
     ClawbackPeriodStart,
     ClawbackPeriodLimit,
     Nonce(Address),
+    Checkpoints(Address),
+    CheckpointRetention,
 }
 
 #[soroban_sdk::contractevent]
@@ -256,6 +265,7 @@ impl Token {
         });
         env.storage().persistent().set(&key, &new);
         Self::bump_persistent(env, &key);
+        Self::create_checkpoint(env, to, new);
     }
 
     fn spend_balance(env: &Env, from: &Address, amount: i128) {
@@ -274,6 +284,131 @@ impl Token {
             env.storage().persistent().set(&key, &new);
             Self::bump_persistent(env, &key);
         }
+        Self::create_checkpoint(env, from, new);
+    }
+
+    // ── Checkpoint / Snapshotting (Issue #106) ─────────────────────────────
+
+    fn create_checkpoint(env: &Env, address: &Address, balance: i128) {
+        let ledger = env.ledger().sequence();
+        let cp_key = DataKey::Checkpoints(address.clone());
+
+        let mut checkpoints: Vec<Checkpoint> = env
+            .storage()
+            .persistent()
+            .get(&cp_key)
+            .unwrap_or_else(|| Vec::new(env));
+
+        // Avoid duplicate checkpoint at the same ledger
+        if let Some(last) = checkpoints.last() {
+            if last.ledger_sequence == ledger {
+                // Update the last checkpoint in-place
+                let len = checkpoints.len();
+                checkpoints.set(len - 1, Checkpoint {
+                    ledger_sequence: ledger,
+                    balance,
+                });
+                env.storage().persistent().set(&cp_key, &checkpoints);
+                Self::bump_persistent(env, &cp_key);
+                return;
+            }
+        }
+
+        checkpoints.push_back(Checkpoint {
+            ledger_sequence: ledger,
+            balance,
+        });
+
+        // Prune old checkpoints beyond retention period
+        let retention = Self::get_checkpoint_retention(env);
+        if retention > 0 && checkpoints.len() > retention as u32 {
+            let prune_count = checkpoints.len() - retention as u32;
+            let mut pruned = Vec::new(env);
+            for i in prune_count..checkpoints.len() {
+                if let Some(cp) = checkpoints.get(i) {
+                    pruned.push_back(cp);
+                }
+            }
+            checkpoints = pruned;
+        }
+
+        env.storage().persistent().set(&cp_key, &checkpoints);
+        Self::bump_persistent(env, &cp_key);
+    }
+
+    /// Get balance at a specific ledger sequence using binary search on checkpoints.
+    /// Returns the balance that was active at the given ledger.
+    pub fn balance_at(env: Env, address: Address, ledger_sequence: u32) -> i128 {
+        Self::bump_instance(&env);
+        let cp_key = DataKey::Checkpoints(address.clone());
+        let checkpoints: Vec<Checkpoint> = env
+            .storage()
+            .persistent()
+            .get(&cp_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if checkpoints.is_empty() {
+            return 0;
+        }
+
+        // Binary search for the latest checkpoint <= ledger_sequence
+        let mut low: u32 = 0;
+        let mut high: u32 = checkpoints.len() - 1;
+        let mut result: i128 = 0;
+
+        while low <= high {
+            let mid = (low + high) / 2;
+            if let Some(cp) = checkpoints.get(mid) {
+                if cp.ledger_sequence <= ledger_sequence {
+                    result = cp.balance;
+                    low = mid + 1;
+                } else {
+                    if mid == 0 {
+                        break;
+                    }
+                    high = mid - 1;
+                }
+            } else {
+                break;
+            }
+        }
+
+        result
+    }
+
+    /// Get all checkpoints for an address (for debugging).
+    pub fn get_checkpoints(env: Env, address: Address) -> Vec<Checkpoint> {
+        Self::bump_instance(&env);
+        let cp_key = DataKey::Checkpoints(address);
+        env.storage()
+            .persistent()
+            .get(&cp_key)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Set checkpoint retention period (number of checkpoints to keep per address).
+    /// 0 means unlimited retention.
+    pub fn set_checkpoint_retention(env: Env, retention: u32) {
+        let admin: Address = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        let key = DataKey::CheckpointRetention;
+        env.storage().persistent().set(&key, &retention);
+        Self::bump_persistent(&env, &key);
+    }
+
+    fn get_checkpoint_retention(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CheckpointRetention)
+            .unwrap_or(0)
+    }
+
+    /// Get checkpoint retention period.
+    pub fn checkpoint_retention(env: Env) -> u32 {
+        Self::bump_instance(&env);
+        Self::get_checkpoint_retention(&env)
     }
 
     fn xfer(env: &Env, from: &Address, to: &Address, amount: i128) {

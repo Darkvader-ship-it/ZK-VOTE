@@ -194,15 +194,15 @@ export default function Comment({
   };
 
   return (
-    <div className={`${depth > 0 ? "ml-6 border-l-2 border-muted pl-4" : ""}`}>
+    <div className={`${depth > 0 ? "ml-2 sm:ml-4 md:ml-6 border-l-2 border-muted pl-2 sm:pl-4" : ""}`}>
       <div className="group py-3">
         {/* Header */}
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
           {/* Collapse toggle for comments with replies */}
           {comment.replies.length > 0 && (
             <button
               onClick={() => setIsCollapsed(!isCollapsed)}
-              className="p-0.5 hover:bg-muted rounded"
+              className="p-2 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center hover:bg-muted rounded-md"
             >
               {isCollapsed ? (
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
@@ -250,10 +250,11 @@ export default function Comment({
 
           {/* Actions */}
           {!comment.deleted && (
-            <div className="relative">
+            <div className="relative ml-auto">
               <button
                 onClick={() => setShowActions(!showActions)}
-                className="p-1 opacity-0 group-hover:opacity-100 hover:bg-muted rounded transition-opacity"
+                className="p-2 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center opacity-100 sm:opacity-0 group-hover:opacity-100 hover:bg-muted rounded-md transition-opacity"
+                aria-label="Comment options"
               >
                 <MoreHorizontal className="w-4 h-4 text-muted-foreground" />
               </button>
