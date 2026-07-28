@@ -48,6 +48,7 @@ import {
   circuitRoutes,
   metricsRoutes,
   remediationRoutes,
+  novaRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -106,6 +107,7 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use("/api/v1/nova", novaRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);

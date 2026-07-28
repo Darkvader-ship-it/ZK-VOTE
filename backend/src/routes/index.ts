@@ -14,3 +14,4 @@ export { default as bridgeRoutes } from "./bridge.js";
 export { default as circuitRoutes } from "./circuits.js";
 export { default as metricsRoutes } from "./metrics.js";
 export { default as remediationRoutes } from "./remediation.js";
+export { default as novaRoutes } from "./nova.js";
