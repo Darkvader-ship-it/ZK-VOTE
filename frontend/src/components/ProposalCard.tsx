@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import { getZKCredentials } from "../lib/zk";
 import { toIdSlug } from "../lib/utils";
+import { useMounted } from "../hooks/useMounted";
 import { Badge } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import { Card, CardContent } from "./ui/Card";
@@ -65,6 +66,7 @@ export default function ProposalCard({
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const mounted = useMounted();
   const MAX_RETRIES = 3;
 
   const totalVotes = proposal.yesVotes + proposal.noVotes;
@@ -75,7 +77,7 @@ export default function ProposalCard({
 
   const isRegistered = publicKey ? !!getZKCredentials(daoId, publicKey) : false;
 
-  const now = Math.floor(Date.now() / 1000);
+  const now = mounted ? Math.floor(Date.now() / 1000) : 0;
   const hasDeadline = proposal.endTime > 0;
   const isPastDeadline = hasDeadline && now > proposal.endTime;
 

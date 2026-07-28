@@ -24,11 +24,15 @@ import {
   commentLimiter,
   queryLimiter,
   validateBody,
+  validateParams,
 } from "../middleware/index.js";
 import {
   anonymousCommentSchema,
   flagCommentSchema,
   challengeQuerySchema,
+  commentParamsSchema,
+  proposalParamsSchema,
+  commitmentParamsSchema,
 } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 import { generateChallenge, verifyChallenge } from "../services/pow.js";
@@ -49,18 +53,13 @@ const router = Router();
 /**
  * GET /comment/challenge/:commitment - Get PoW challenge for a commitment
  */
-router.get("/comment/challenge/:commitment", queryLimiter, (async (
+router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commitmentParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { commitment } = req.params;
+  const { commitment } = (req as any).validatedParams;
 
-  const parsed = challengeQuerySchema.safeParse({ commitment });
-  if (!parsed.success) {
-    return res.status(400).json({ error: "Invalid commitment format" });
-  }
-
-  const challenge = generateChallenge(parsed.data.commitment, {
+  const challenge = generateChallenge(commitment, {
     difficulty: config.powDifficulty,
     challengeTtlMs: config.powChallengeTtlMs,
   });
@@ -319,11 +318,11 @@ router.post(
 /**
  * GET /comments/:daoId/:proposalId/nonce - Get next comment nonce
  */
-router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, (async (
+router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(proposalParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId } = req.params;
+  const { daoId, proposalId } = (req as any).validatedParams;
   const { commitment } = req.query;
 
   if (!commitment) {
@@ -337,8 +336,8 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, (async (
     const scCommitment = u256ToScVal(commitment as string);
 
     const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
       scCommitment,
     ];
 
@@ -392,19 +391,19 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, (async (
 /**
  * GET /comments/:daoId/:proposalId - Get comments for a proposal
  */
-router.get("/comments/:daoId/:proposalId", queryLimiter, (async (
+router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId } = req.params;
+  const { daoId, proposalId } = (req as any).validatedParams;
   const { limit = "50", offset = "0" } = req.query;
 
   try {
     const contract = new StellarSdk.Contract(config.commentsContractId!);
 
     const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
       StellarSdk.nativeToScVal(parseInt(offset as string), { type: "u64" }),
       StellarSdk.nativeToScVal(Math.min(parseInt(limit as string), 100), {
         type: "u64",
@@ -452,9 +451,7 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, (async (
           isAnonymous: !c.author,
         }));
 
-        const hiddenIds = new Set(
-          getHiddenCommentIds(parseInt(daoId), parseInt(proposalId)),
-        );
+        const hiddenIds = new Set(getHiddenCommentIds(daoId, proposalId));
         const filtered = transformed.map((c: any) => ({
           ...c,
           hidden: hiddenIds.has(c.id),
@@ -484,19 +481,19 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, (async (
 /**
  * GET /comment/:daoId/:proposalId/:commentId - Get single comment
  */
-router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, (async (
+router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, validateParams(commentParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId, commentId } = req.params;
+  const { daoId, proposalId, commentId } = (req as any).validatedParams;
 
   try {
     const contract = new StellarSdk.Contract(config.commentsContractId!);
 
     const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(commentId), { type: "u64" }),
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
+      StellarSdk.nativeToScVal(commentId, { type: "u64" }),
     ];
 
     const operation = contract.call("get_comment", ...args);
@@ -524,10 +521,7 @@ router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, (async (
       const result = simResult.result?.retval;
       if (result) {
         const c = StellarSdk.scValToNative(result);
-        const hiddenIds = getHiddenCommentIds(
-          parseInt(daoId),
-          parseInt(proposalId),
-        );
+        const hiddenIds = getHiddenCommentIds(daoId, proposalId);
         res.json({
           id: Number(c.id),
           daoId: Number(c.dao_id),

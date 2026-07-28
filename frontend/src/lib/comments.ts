@@ -282,7 +282,7 @@ export function buildCommentTree(
   return rootComments;
 }
 
-// Format relative time
+// Format relative time - uses UTC on server, local time on client
 export function formatRelativeTime(timestamp: number): string {
   const now = Math.floor(Date.now() / 1000);
   const diff = now - timestamp;
@@ -301,8 +301,10 @@ export function formatRelativeTime(timestamp: number): string {
     return `${days} day${days !== 1 ? "s" : ""} ago`;
   }
 
-  // Fallback to date
-  return new Date(timestamp * 1000).toLocaleDateString();
+  // Fallback to date - use UTC to prevent hydration mismatch
+  // The date will be consistent between server and client
+  const date = new Date(timestamp * 1000);
+  return date.toUTCString().split(' ').slice(1, 4).join(' ');
 }
 
 // Truncate address for display

@@ -23,7 +23,8 @@ import {
   u256ToScVal,
 } from "../services/stellar.js";
 
-import { authGuard, queryLimiter, validateBody } from "../middleware/index.js";
+import { authGuard, queryLimiter, validateBody, validateParams } from "../middleware/index.js";
+import { nullifierParamsSchema } from "../validation/schemas.js";
 import { z } from "zod";
 import type { AsyncHandler } from "../types/index.js";
 
@@ -231,14 +232,15 @@ router.post("/bridge/vote", validateBody(bridgeVoteSchema), (async (
 router.get(
   "/bridge/nullifier/:daoId/:proposalId/:nullifier",
   queryLimiter,
+  validateParams(nullifierParamsSchema),
   (async (req: Request, res: Response) => {
-    const { daoId, proposalId, nullifier } = req.params;
+    const { daoId, proposalId, nullifier } = (req as any).validatedParams;
 
     try {
       const contract = new StellarSdk.Contract(config.bridgeContractId!);
       const args = [
-        StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-        StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
+        StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+        StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
         u256ToScVal(nullifier),
       ];
 
@@ -271,8 +273,8 @@ router.get(
       const used = resultScVal.b();
 
       res.json({
-        daoId: parseInt(daoId),
-        proposalId: parseInt(proposalId),
+        daoId,
+        proposalId,
         nullifier,
         used,
       });
