@@ -30,6 +30,11 @@ import {
 } from "./services/sync.js";
 import { startIndexer, stopIndexer } from "./services/indexer.js";
 import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
+import {
+  startAuthScheduler,
+  stopAuthScheduler,
+  ensureLegacyTokenMigrated,
+} from "./services/authScheduler.js";
 
 // Middleware
 import { csrfGuard, requestLogger, errorHandler } from "./middleware/index.js";
@@ -46,6 +51,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  authRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -68,7 +74,14 @@ const corsOrigins = config.corsOrigins === "*" ? "*" : config.corsOrigins;
 const corsOptions: cors.CorsOptions = {
   origin: corsOrigins,
   methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Relayer-Auth",
+    "X-Client-Id",
+    "X-Master-Key",
+  ],
+  exposedHeaders: ["X-Token-Id", "X-Client-Id"],
   maxAge: 86400, // 24 hours
 };
 app.use(cors(corsOptions));
@@ -99,6 +112,7 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(authRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -246,6 +260,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
     // Start TTL renewal service (prevents contract data from expiring)
     startTTLRenewal();
+
+    // Initialize auth: migrate legacy token and start rotation scheduler
+    ensureLegacyTokenMigrated();
+    startAuthScheduler();
   });
 
   // Graceful shutdown
@@ -256,6 +274,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stopMembershipSync();
     stopTTLRenewal();
     stopPinMonitor();
+    stopAuthScheduler();
     process.exit(0);
   });
 
@@ -266,6 +285,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stopMembershipSync();
     stopTTLRenewal();
     stopPinMonitor();
+    stopAuthScheduler();
     process.exit(0);
   });
 }

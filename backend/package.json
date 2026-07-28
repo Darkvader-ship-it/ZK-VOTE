@@ -16,7 +16,16 @@
     "migrate:up": "tsx src/services/migrate.ts up",
     "migrate:down": "tsx src/services/migrate.ts down",
     "migrate:status": "tsx src/services/migrate.ts status",
-    "migrate:dry-run": "tsx src/services/migrate.ts dry-run"
+    "migrate:dry-run": "tsx src/services/migrate.ts dry-run",
+    "token:create": "tsx src/token-manager.ts create",
+    "token:list": "tsx src/token-manager.ts list",
+    "token:revoke": "tsx src/token-manager.ts revoke",
+    "token:rotate": "tsx src/token-manager.ts rotate",
+    "token:audit": "tsx src/token-manager.ts audit",
+    "token:maintenance": "tsx src/token-manager.ts maintenance",
+    "token:migrate-legacy": "tsx src/token-manager.ts migrate-legacy",
+    "token:config": "tsx src/token-manager.ts config",
+    "rotate-tokens": "bash src/rotate-tokens.sh"
   },
   "keywords": [
     "stellar",
