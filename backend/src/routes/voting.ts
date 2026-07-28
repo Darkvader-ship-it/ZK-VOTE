@@ -25,8 +25,9 @@ import {
   voteLimiter,
   queryLimiter,
   validateBody,
+  validateParams,
 } from "../middleware/index.js";
-import { voteSchema } from "../validation/schemas.js";
+import { voteSchema, proposalParamsSchema, daoParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 import {
   getTransactionLog,
@@ -268,17 +269,17 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
 /**
  * GET /proposal/:daoId/:proposalId - Get proposal results
  */
-router.get("/proposal/:daoId/:proposalId", queryLimiter, (async (
+router.get("/proposal/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId } = req.params;
+  const { daoId, proposalId } = (req as any).validatedParams;
 
   try {
     const contract = new StellarSdk.Contract(config.votingContractId!);
     const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
     ];
 
     const operation = contract.call("get_results", ...args);
@@ -319,8 +320,8 @@ router.get("/proposal/:daoId/:proposalId", queryLimiter, (async (
     const closed = resultVec[2].b();
 
     res.json({
-      daoId: parseInt(daoId),
-      proposalId: parseInt(proposalId),
+      daoId,
+      proposalId,
       yesVotes,
       noVotes,
       closed,
@@ -338,15 +339,15 @@ router.get("/proposal/:daoId/:proposalId", queryLimiter, (async (
 /**
  * GET /root/:daoId - Get current Merkle root for a DAO
  */
-router.get("/root/:daoId", queryLimiter, (async (
+router.get("/root/:daoId", queryLimiter, validateParams(daoParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId } = req.params;
+  const { daoId } = (req as any).validatedParams;
 
   try {
     const contract = new StellarSdk.Contract(config.treeContractId!);
-    const args = [StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" })];
+    const args = [StellarSdk.nativeToScVal(daoId, { type: "u64" })];
 
     const operation = contract.call("get_root", ...args);
 
@@ -379,7 +380,7 @@ router.get("/root/:daoId", queryLimiter, (async (
     const root = scValToU256Hex(resultScVal);
 
     res.json({
-      daoId: parseInt(daoId),
+      daoId,
       root,
     });
   } catch (err) {

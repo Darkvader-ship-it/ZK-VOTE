@@ -13,7 +13,8 @@ import {
   daoMembersCache,
   daoAdminsCache,
 } from "../services/sync.js";
-import { authGuard, queryLimiter } from "../middleware/index.js";
+import { authGuard, queryLimiter, validateParams } from "../middleware/index.js";
+import { daoParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler, DaoWithRole } from "../types/index.js";
 
 const router = Router();
@@ -77,10 +78,10 @@ router.get("/daos", queryLimiter, (async (req: Request, res: Response) => {
 /**
  * GET /dao/:daoId - Get specific DAO from cache
  */
-router.get("/dao/:daoId", queryLimiter, (req: Request, res: Response) => {
-  const { daoId } = req.params;
+router.get("/dao/:daoId", queryLimiter, validateParams(daoParamsSchema), (req: Request, res: Response) => {
+  const { daoId } = (req as any).validatedParams;
   try {
-    const dao = dbService.getCachedDao(parseInt(daoId));
+    const dao = dbService.getCachedDao(daoId);
     if (!dao) {
       return res.status(404).json({ error: "DAO not found in cache" });
     }
