@@ -19,6 +19,15 @@ import { config, validateEnv, isValidContractId } from "./config.js";
 import { log, logger } from "./services/logger.js";
 import * as ipfsService from "./services/ipfs.js";
 import { initPinManager } from "./services/ipfs-pin-manager.js";
+import { getDb } from "./services/db.js";
+import {
+  startWalCheckpointing,
+  stopWalResilience,
+  startWalMonitor,
+  startPeriodicBackups,
+  performInitialCheckpoint,
+  detectAndHandleWalIssue,
+} from "./services/walResilience.js";
 import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
@@ -285,6 +294,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // Start TTL renewal service (prevents contract data from expiring)
     startTTLRenewal();
 
+    // Start WAL resilience services (checkpointing, monitoring, backups)
+    try {
+      const database = getDb();
+      const dbPath = database.name;
+      performInitialCheckpoint(database);
+      detectAndHandleWalIssue(database, dbPath);
+      startWalCheckpointing(database);
+      startWalMonitor(database, dbPath);
+      startPeriodicBackups(database, dbPath);
+    } catch (err) {
+      log("warn", "wal_resilience_start_failed", { error: (err as Error).message });
+    }
+
     // Start periodic memory monitoring; triggers a graceful restart if
     // usage crosses the critical threshold (see #191).
     startMemoryMonitor(() => gracefulShutdown("memory_threshold"));
@@ -318,6 +340,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stopTTLRenewal();
     stopPinMonitor();
     stopMemoryMonitor();
+    stopWalResilience();
 
     const forceExitTimer = setTimeout(() => {
       log("warn", "shutdown_forced", { reason, timeoutMs: DRAIN_TIMEOUT_MS });

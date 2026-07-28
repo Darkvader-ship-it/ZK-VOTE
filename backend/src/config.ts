@@ -201,6 +201,16 @@ export const config = {
   maxCachedDaos: Number(process.env.MAX_CACHED_DAOS || 5000),
   dbQueryCacheMaxEntries: Number(process.env.DB_QUERY_CACHE_MAX_ENTRIES || 500),
 
+  // Database / WAL Resilience
+  dbBusyTimeoutMs: Number(process.env.DB_BUSY_TIMEOUT_MS || 5000),
+  dbCheckpointIntervalMs: Number(process.env.DB_CHECKPOINT_INTERVAL_MS || 60000),
+  dbCheckpointTransactionCount: Number(process.env.DB_CHECKPOINT_TRANSACTION_COUNT || 1000),
+  dbWalWarningThresholdBytes: Number(process.env.DB_WAL_WARNING_THRESHOLD_BYTES || 100 * 1024 * 1024),
+  dbBackupIntervalMs: Number(process.env.DB_BACKUP_INTERVAL_MS || 3600000),
+  dbRetryCount: Number(process.env.DB_RETRY_COUNT || 5),
+  dbRetryBaseDelayMs: Number(process.env.DB_RETRY_BASE_DELAY_MS || 50),
+  dbRetryMaxDelayMs: Number(process.env.DB_RETRY_MAX_DELAY_MS || 2000),
+
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
 } as const;

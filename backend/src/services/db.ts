@@ -15,13 +15,10 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import {
-  timeQuery,
-  invalidateCachePrefix,
-  getDbStats as getMonitorDbStats,
-  profileEventQueries,
-} from "./dbMonitor.js";
+import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
 import { migrateUp } from "./migrate.js";
+import { initWalResilience, configureWalResilience, incrementTransactionCounter } from "./walResilience.js";
+import { config } from "../config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -520,6 +517,19 @@ export function initDb(dbPath?: string): DatabaseType {
   // SECURITY: Enable WAL mode and foreign key constraints
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
+
+  // WAL Resilience: configure and initialize
+  configureWalResilience({
+    busyTimeoutMs: config.dbBusyTimeoutMs,
+    checkpointIntervalMs: config.dbCheckpointIntervalMs,
+    checkpointTransactionCount: config.dbCheckpointTransactionCount,
+    walWarningThresholdBytes: config.dbWalWarningThresholdBytes,
+    backupIntervalMs: config.dbBackupIntervalMs,
+    retryCount: config.dbRetryCount,
+    retryBaseDelayMs: config.dbRetryBaseDelayMs,
+    retryMaxDelayMs: config.dbRetryMaxDelayMs,
+  });
+  initWalResilience(database, dbFile);
   
   // SECURITY: Enable strict mode if available (better-sqlite3 v8+)
   try {
@@ -990,6 +1000,7 @@ export function setMetadata<T>(key: string, value: T): void {
   );
   // Invalidate any cached queries that depend on metadata
   invalidateCachePrefix("metadata");
+  incrementTransactionCounter();
 }
 
 // ============================================
@@ -1080,6 +1091,7 @@ export function addEvent(event: EventInput): boolean {
   if (result) {
     invalidateCachePrefix(`indexedDaos`);
     invalidateCachePrefix(`dbStatus`);
+    incrementTransactionCounter();
   }
 
   return result;
@@ -1348,6 +1360,7 @@ export function recordTransactionLog(
          updated_at = CURRENT_TIMESTAMP`,
     )
     .run(nullifierHash, txHash, status);
+  incrementTransactionCounter();
 }
 
 /**
@@ -1937,6 +1950,7 @@ export function upsertDao(dao: DaoInput): void {
       dao.metadata_cid ?? null,
       dao.member_count ?? 0,
     );
+  incrementTransactionCounter();
 }
 
 /**
@@ -1972,6 +1986,7 @@ export function upsertDaos(daos: DaoInput[]): void {
   })();
 
   log("info", "daos_upserted", { count: daos.length });
+  incrementTransactionCounter();
 }
 
 /**
