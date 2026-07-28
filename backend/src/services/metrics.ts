@@ -270,6 +270,41 @@ export const indexerLag = new Gauge({
 });
 
 // ============================================
+// CIRCUIT BREAKER METRICS
+// ============================================
+
+export const circuitBreakerState = new Gauge({
+  name: "zkvote_circuit_breaker_state",
+  help: "Circuit breaker state (0=closed, 1=open, 2=half_open)",
+  labelNames: ["breaker"] as const,
+  registers: [register],
+});
+
+export const circuitBreakerTripsTotal = new Counter({
+  name: "zkvote_circuit_breaker_trips_total",
+  help: "Total number of times a circuit breaker has tripped open",
+  labelNames: ["breaker"] as const,
+  registers: [register],
+});
+
+// ============================================
+// MEMORY MONITORING METRICS
+// ============================================
+
+export const memoryUsageRatio = new Gauge({
+  name: "zkvote_memory_usage_ratio",
+  help: "Process RSS memory as a ratio of the configured container memory limit",
+  registers: [register],
+});
+
+export const memoryThresholdBreachesTotal = new Counter({
+  name: "zkvote_memory_threshold_breaches_total",
+  help: "Total number of times memory usage crossed the warn/critical threshold",
+  labelNames: ["level"] as const,
+  registers: [register],
+});
+
+// ============================================
 // HELPER: Normalise route labels
 // ============================================
 

@@ -3,6 +3,8 @@ import { truncateAddress } from "../lib/utils";
 import { useMounted } from "../hooks/useMounted";
 import { Button } from "./ui/Button";
 import { Moon, Sun, Wallet, LogOut, Menu, X } from "lucide-react";
+import LanguageSwitcher from "./LanguageSwitcher";
+import { useTranslation } from "../i18n/I18nContext";
 
 interface NavbarProps {
   onConnect: () => void;
@@ -33,6 +35,7 @@ export default function Navbar({
 }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mounted = useMounted();
+  const { t } = useTranslation();
 
   const handleNavigate = (view: "home" | "browse" | "votes" | "docs") => {
     onNavigate(view);
@@ -84,7 +87,7 @@ export default function Navbar({
                 : "text-foreground/60"
             }`}
           >
-            Browse DAOs
+            {t("nav.browse")}
           </button>
           <button
             onClick={() => handleNavigate("votes")}
@@ -92,7 +95,7 @@ export default function Navbar({
               currentView === "votes" ? "text-foreground" : "text-foreground/60"
             }`}
           >
-            Public Votes
+            {t("nav.publicVotes")}
           </button>
           <button
             onClick={() => handleNavigate("docs")}
@@ -100,12 +103,14 @@ export default function Navbar({
               currentView === "docs" ? "text-foreground" : "text-foreground/60"
             }`}
           >
-            Docs
+            {t("nav.docs")}
           </button>
         </nav>
 
         <div className="flex flex-1 items-center justify-end space-x-2">
           <div className="flex items-center gap-2">
+            <LanguageSwitcher />
+
             {relayerStatus && (
               <div className="hidden sm:flex items-center px-2 py-1 rounded-md bg-muted text-xs font-medium">
                 <div
@@ -148,6 +153,8 @@ export default function Navbar({
                 >
                   <LogOut className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
                   <span className="text-xs sm:text-sm">Disconnect</span>
+                  <LogOut className="mr-2 h-3.5 w-3.5" />
+                  {t("nav.disconnect")}
                 </Button>
               </div>
             ) : (
@@ -161,6 +168,8 @@ export default function Navbar({
                 <span className="text-xs sm:text-sm">
                   {connecting ? "Connecting..." : "Connect Wallet"}
                 </span>
+                <Wallet className="mr-2 h-3.5 w-3.5" />
+                {connecting ? t("nav.connecting") : t("nav.connectWallet")}
               </Button>
             ))}
           </div>
