@@ -11,6 +11,7 @@ import { extractAuthToken } from "../middleware/auth.js";
 import { log } from "../services/logger.js";
 import { getDbDiagnostics, getDbStatus } from "../services/db.js";
 import { getBackupStatus } from "../services/backup.js";
+import { checkRotationHealth, getSecretBackend } from "../services/secrets/index.js";
 
 import { rpcPoolManager } from "../services/stellar.js";
 
@@ -168,6 +169,36 @@ router.get("/db/stats", async (req: Request, res: Response) => {
     log("error", "db_stats_failed", { error: (err as Error).message });
     res.status(500).json({ error: "Failed to get database statistics" });
   }
+});
+
+/**
+ * GET /health/secrets
+ * Secret health monitoring (admin only)
+ * Reports rotation status, backend availability, and expiration.
+ */
+router.get("/health/secrets", async (_req: Request, res: Response) => {
+  try {
+    const health = await checkRotationHealth();
+    res.json(health);
+  } catch (err) {
+    log("error", "secret_health_check_failed", { error: (err as Error).message });
+    res.status(500).json({ error: "Secret health check failed" });
+  }
+});
+
+/**
+ * GET /health/backend
+ * Returns backend configuration summary (no secret values)
+ */
+router.get("/health/backend", (_req: Request, res: Response) => {
+  res.json({
+    backend: getSecretBackend(),
+    vaultConfigured: !!process.env.VAULT_URL,
+    ipfsEnabled: config.ipfsEnabled,
+    pinataGateway: config.pinataGateway,
+    rpcUrl: config.rpcUrl,
+    networkPassphrase: config.networkPassphrase,
+  });
 });
 
 export default router;

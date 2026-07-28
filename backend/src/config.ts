@@ -2,6 +2,8 @@
  * Environment Configuration
  *
  * Centralizes all environment variables and configuration.
+ * Secrets can be retrieved dynamically via the SecretManager
+ * for runtime fetch from Vault or Fly.io secrets.
  */
 
 import dotenv from "dotenv";
@@ -43,7 +45,7 @@ export const config = {
     process.env.NETWORK_PASSPHRASE || "Standalone Network ; February 2017",
   rpcTimeoutMs: Number(process.env.RPC_TIMEOUT_MS || 30_000),
 
-  // Authentication
+  // Authentication (read from env as fallback; see getSecret() for dynamic retrieval)
   relayerAuthToken: process.env.RELAYER_AUTH_TOKEN,
   relayerSecretKey: process.env.RELAYER_SECRET_KEY,
 
@@ -86,7 +88,7 @@ export const config = {
     process.env.MEMBERSHIP_SYNC_INTERVAL_MS || 600000,
   ),
 
-  // IPFS/Pinata
+  // IPFS/Pinata (read from env as fallback; see getSecret() for dynamic retrieval)
   pinataJwt: process.env.PINATA_JWT,
   pinataGateway: process.env.PINATA_GATEWAY,
   ipfsEnabled: !!process.env.PINATA_JWT,
@@ -178,7 +180,7 @@ export const ALLOWED_IMAGE_MIMES = [
 
 // BN254 field modulus (p)
 export const BN254_MODULUS = BigInt(
-  "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+  "218882428718392752222464057452572750885483644004160343698204186575808495617",
 );
 
 // BN254 scalar field modulus (r)
