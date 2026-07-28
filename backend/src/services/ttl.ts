@@ -128,6 +128,25 @@ async function submitCall(
   }
 }
 
+type TTLSubmitter = typeof submitCall;
+
+let ttlSubmitter: TTLSubmitter = submitCall;
+
+/**
+ * Replace only the transaction-submission boundary in test mode.
+ */
+export function setTTLSubmitterForTests(
+  submitter: TTLSubmitter | null,
+): void {
+  if (!config.testMode) {
+    throw new Error(
+      "TTL submitter overrides are only available in test mode",
+    );
+  }
+
+  ttlSubmitter = submitter ?? submitCall;
+}
+
 function buildEntryId(
   contractId: string,
   daoId?: number,
@@ -313,7 +332,11 @@ async function executeBatch(batch: RenewalEntry[]): Promise<{
   let txCount = 0;
 
   for (const entry of batch) {
-    const result = await submitCall(entry.contractId, entry.method, entry.args);
+    const result = await ttlSubmitter(
+      entry.contractId,
+      entry.method,
+      entry.args,
+    );
     if (result.success) {
       successCount++;
       totalFee += result.feeXlm ?? 0;

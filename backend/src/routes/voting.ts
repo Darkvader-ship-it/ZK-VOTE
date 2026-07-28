@@ -39,6 +39,92 @@ import { votesProcessed } from "../services/metrics.js";
 
 const router = Router();
 
+interface VoteExecutionInput {
+  daoId: number;
+  proposalId: number;
+  choice: boolean;
+  nullifier: string;
+  root: string;
+  proof: unknown;
+  scNullifier: StellarSdk.xdr.ScVal;
+  scRoot: StellarSdk.xdr.ScVal;
+  scProof: StellarSdk.xdr.ScVal;
+}
+
+interface VoteExecutionResult {
+  sendResult: {
+    status: string;
+    hash?: string;
+  };
+  result: {
+    status: string;
+  };
+}
+
+type VoteExecutor = (
+  input: VoteExecutionInput,
+) => Promise<VoteExecutionResult>;
+
+let voteExecutorOverride: VoteExecutor | null = null;
+
+/**
+ * Replace only the external Stellar submission boundary in test mode.
+ */
+export function setVoteExecutorForTests(
+  executor: VoteExecutor | null,
+): void {
+  if (!config.testMode) {
+    throw new Error("Vote executor overrides are only available in test mode");
+  }
+
+  voteExecutorOverride = executor;
+}
+
+function respondToVoteExecution(
+  res: Response,
+  execution: VoteExecutionResult,
+  nullifier: string,
+  daoId: number,
+  proposalId: number,
+): Response {
+  const { sendResult, result } = execution;
+
+  if (result.status === "SUCCESS") {
+    if (nullifier && sendResult.hash) {
+      updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
+    }
+
+    votesProcessed.inc({ status: "success" });
+    log("info", "vote_success", {
+      txHash: sendResult.hash,
+      daoId,
+      proposalId,
+    });
+
+    return res.json({
+      success: true,
+      txHash: sendResult.hash,
+      status: result.status,
+    });
+  }
+
+  if (nullifier && sendResult.hash) {
+    updateTransactionLogStatus(nullifier, "FAILED", sendResult.hash);
+  }
+
+  votesProcessed.inc({ status: "failed" });
+  log("error", "vote_failed", {
+    txHash: sendResult.hash,
+    status: result.status,
+  });
+
+  return res.status(500).json({
+    error: "Transaction failed",
+    txHash: sendResult.hash,
+    status: result.status,
+  });
+}
+
 /**
  * POST /vote - Submit anonymous vote with ZK proof
  */
@@ -80,7 +166,39 @@ router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBod
     }
 
     if (config.testMode) {
-      return res.status(400).json({ error: "Simulation failed (test mode)" });
+      if (!voteExecutorOverride) {
+        return res.status(400).json({
+          error: "Simulation failed (test mode)",
+        });
+      }
+
+      const execution = await voteExecutorOverride({
+        daoId,
+        proposalId,
+        choice,
+        nullifier,
+        root,
+        proof,
+        scNullifier,
+        scRoot,
+        scProof,
+      });
+
+      if (nullifier && execution.sendResult.hash) {
+        recordTransactionLog(
+          nullifier,
+          execution.sendResult.hash,
+          "PENDING",
+        );
+      }
+
+      return respondToVoteExecution(
+        res,
+        execution,
+        nullifier,
+        daoId,
+        proposalId,
+      );
     }
 
     // Build contract call
@@ -190,36 +308,13 @@ router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBod
       return { sendResult: sr, result: r };
     });
 
-    if (result.status === "SUCCESS") {
-      if (nullifier && sendResult.hash) {
-        updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
-      }
-      votesProcessed.inc({ status: "success" });
-      log("info", "vote_success", {
-        txHash: sendResult.hash,
-        daoId,
-        proposalId,
-      });
-      res.json({
-        success: true,
-        txHash: sendResult.hash,
-        status: result.status,
-      });
-    } else {
-      if (nullifier && sendResult.hash) {
-        updateTransactionLogStatus(nullifier, "FAILED", sendResult.hash);
-      }
-      votesProcessed.inc({ status: "failed" });
-      log("error", "vote_failed", {
-        txHash: sendResult.hash,
-        status: result.status,
-      });
-      res.status(500).json({
-        error: "Transaction failed",
-        txHash: sendResult.hash,
-        status: result.status,
-      });
-    }
+    return respondToVoteExecution(
+      res,
+      { sendResult, result },
+      nullifier,
+      daoId,
+      proposalId,
+    );
   } catch (err) {
     if (nullifier) {
       updateTransactionLogStatus(nullifier, "FAILED");

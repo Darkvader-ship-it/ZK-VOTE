@@ -140,6 +140,16 @@ export const config = {
   archivalAgeDays: Number(process.env.ARCHIVAL_AGE_DAYS || 90),
   archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
 
+  // Audit log rotation and archival
+  auditLogRetentionDays: Number(
+    process.env.AUDIT_LOG_RETENTION_DAYS || 90,
+  ),
+  auditLogRotationIntervalMs: Number(
+    process.env.AUDIT_LOG_ROTATION_INTERVAL_MS || 86_400_000,
+  ),
+  auditLogArchiveDir:
+    process.env.AUDIT_LOG_ARCHIVE_DIR || "./data/audit-archive",
+
   // Circuit Breakers
   circuitBreakerRpcFailureThreshold: Number(
     process.env.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD || 5,

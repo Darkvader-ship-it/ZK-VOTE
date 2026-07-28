@@ -41,6 +41,7 @@ import {
   requestLogger,
   errorHandler,
   graduatedSlowDown,
+  metricsMiddleware,
 } from "./middleware/index.js";
 
 // Routes
@@ -56,6 +57,8 @@ import {
   bridgeRoutes,
   circuitRoutes,
   adminRoutes,
+  metricsRoutes,
+  remediationRoutes,
 } from "./routes/index.js";
 
 // ============================================

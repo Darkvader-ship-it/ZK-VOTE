@@ -728,7 +728,8 @@ export function initDb(dbPath?: string): DatabaseType {
     });
   }
 
-  // Populate knownPartitions from the registry
+  // Populate knownPartitions from the active database registry.
+  knownPartitions.clear();
   const rows = database
     .prepare("SELECT dao_id FROM partition_registry")
     .all() as Array<{ dao_id: number }>;
@@ -767,9 +768,7 @@ export function initDb(dbPath?: string): DatabaseType {
     }
   }
 
-  if (!dbPath) {
-    db = database;
-  }
+  db = database;
 
   log("info", "db_initialized", {
     path: dbFile,
@@ -780,12 +779,7 @@ export function initDb(dbPath?: string): DatabaseType {
 }
 
 /**
- * Return the initialized database instance (initializing it if needed).
- * archival.ts and backup.ts import this; it was missing from this module's
- * exports, which broke every route that transitively imports either of them
- * (e.g. GET /health -> services/backup.ts) at startup. Unrelated to
- * #193/#195/#194/#201, but fixed here since it otherwise blocks the backend
- * from booting at all, including for verifying the changes in this PR.
+ * Return the initialized database instance, initializing it if needed.
  */
 export function getDb(): DatabaseType {
   return initDb();
@@ -1111,6 +1105,15 @@ export function addPendingEvent(
  * SECURITY: Uses parameterized queries and validates inputs.
  */
 export function verifyEvent(txHash: string, ledger: number): void {
+  if (
+    typeof txHash !== "string" ||
+    txHash.length === 0 ||
+    txHash.length > 128 ||
+    !/^[A-Za-z0-9_-]+$/.test(txHash)
+  ) {
+    throw new Error("Invalid transaction hash");
+  }
+
   // SECURITY: Basic input validation
   if (typeof txHash !== 'string' || txHash.length === 0 || txHash.length > 128) {
     throw new Error(`Invalid txHash: ${txHash}`);
@@ -1799,10 +1802,16 @@ export function migrateFromJson(jsonPath: string): number {
 
             // SECURITY: Validate timestamp format if provided
             const timestamp = event.timestamp ?? new Date().toISOString();
-            if (event.timestamp && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp)) {
-              log("warn", "json_migration_invalid_timestamp", { 
-                timestamp: event.timestamp, 
-                daoId 
+            if (
+              event.timestamp &&
+              (
+                !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp) ||
+                Number.isNaN(Date.parse(event.timestamp))
+              )
+            ) {
+              log("warn", "json_migration_invalid_timestamp", {
+                timestamp: event.timestamp,
+                daoId,
               });
               continue;
             }

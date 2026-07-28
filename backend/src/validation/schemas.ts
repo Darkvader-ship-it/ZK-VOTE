@@ -110,8 +110,8 @@ const positiveInteger = z.string().pipe(
  */
 const ipfsCid = z.string().refine(
   (val) => {
-    // CIDv0: Qm... (46 chars)
-    if (val.startsWith("Qm") && val.length >= 46) return true;
+    // CIDv0: exact-length Bitcoin base58 encoding.
+    if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(val)) return true;
     // CIDv1: bafy... or bafk... (59+ chars)
     if ((val.startsWith("bafy") || val.startsWith("bafk")) && val.length >= 59)
       return true;
