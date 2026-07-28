@@ -29,6 +29,14 @@ primary_region = "sjc"
   method = "GET"
   path = "/health"
 
+# Prometheus metrics endpoint check
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/metrics"
+
 [mounts]
   source = "zkvote_data"
   destination = "/app/data"

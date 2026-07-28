@@ -44,6 +44,7 @@ import {
   flagComment,
   getHiddenCommentIds,
 } from "../services/anti-spam.js";
+import { commentsSubmitted } from "../services/metrics.js";
 
 const router = Router();
 
@@ -279,6 +280,7 @@ router.post(
       );
 
       if (result.status === "SUCCESS") {
+        commentsSubmitted.inc({ status: "success" });
         log("info", "comment_anonymous_success", {
           daoId,
           proposalId,
@@ -296,6 +298,7 @@ router.post(
 
         res.json({ success: true, commentId, txHash: sendResult.hash });
       } else {
+        commentsSubmitted.inc({ status: "failed" });
         // Log the actual failure reason
         const resultXdr = "resultXdr" in result ? result.resultXdr : undefined;
         log("error", "comment_anonymous_tx_failed", {
