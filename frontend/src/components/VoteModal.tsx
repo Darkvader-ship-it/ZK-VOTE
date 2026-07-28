@@ -19,6 +19,7 @@ import {
 } from "../lib/zkproof";
 import { fetchWithProgress } from "../lib/fetchWithProgress";
 import { getMerklePath } from "../lib/merkletree";
+import { useOptimisticVote } from "../queries/proposalQueries";
 import {
   generateDeterministicZKCredentials,
   getZKCredentials,
@@ -54,6 +55,7 @@ export default function VoteModal({
   const [step, setStep] = useState<VoteStep>("select");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const { setOptimisticVote, clearPendingVote } = useOptimisticVote();
 
   const handleVote = async (choice: boolean) => {
     setStep("generating");
@@ -223,53 +225,64 @@ export default function VoteModal({
         return bigInt.toString(16).padStart(64, "0");
       };
 
-      // Submit to relay server (provides anonymity by hiding voter's public key)
-      // Note: commitment is NOT sent - it's now a private circuit input for improved privacy
-      const response = await relayerFetch("/vote", {
+      const requestBody = JSON.stringify({
+        daoId: Number(daoId),
+        proposalId: Number(proposalId),
+        choice: choice,
+        nullifier: toHexBE(nullifier),
+        root: toHexBE(root),
+        proof: {
+          a: proof_a,
+          b: proof_b,
+          c: proof_c,
+        },
+      });
+
+      // Optimistic update
+      const revertOptimisticUpdate = setOptimisticVote(daoId, proposalId, choice);
+      
+      // Close the modal immediately to show optimistic UI state
+      setStep("success");
+      onComplete();
+
+      // Submit to relay server asynchronously in background
+      relayerFetch("/vote", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          daoId: Number(daoId),
-          proposalId: Number(proposalId),
-          choice: choice,
-          nullifier: toHexBE(nullifier),
-          root: toHexBE(root),
-          proof: {
-            a: proof_a,
-            b: proof_b,
-            c: proof_c,
-          },
-        }),
-      });
+        body: requestBody,
+      })
+      .then(async (response) => {
+        if (!response.ok) {
+          const errorData = await response.json();
+          const errorMsg =
+            errorData.error || "Failed to submit vote through relay";
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        const errorMsg =
-          errorData.error || "Failed to submit vote through relay";
-
-        // Detect double-vote error
-        if (
-          errorMsg.includes("already voted") ||
-          errorMsg.includes("UnreachableCodeReached")
-        ) {
-          throw new Error(
-            "You have already voted on this proposal. Each member can only vote once per proposal.",
-          );
+          // Detect double-vote error
+          if (
+            errorMsg.includes("already voted") ||
+            errorMsg.includes("UnreachableCodeReached")
+          ) {
+            alert("You have already voted on this proposal. Each member can only vote once per proposal.");
+          } else {
+            alert(errorMsg);
+          }
+          revertOptimisticUpdate();
+          return;
         }
 
-        throw new Error(errorMsg);
-      }
-
-      const result = await response.json();
-      if (import.meta.env.DEV)
-        console.log("Vote submitted successfully:", result);
-
-      setStep("success");
-      setTimeout(() => {
-        onComplete();
-      }, 2000);
+        const result = await response.json();
+        if (import.meta.env.DEV)
+          console.log("Vote submitted successfully:", result);
+          
+        clearPendingVote(daoId, proposalId);
+      })
+      .catch((err) => {
+        console.error("Vote submission background failure:", err);
+        alert("Background vote submission failed: " + (err instanceof Error ? err.message : "Network error"));
+        revertOptimisticUpdate();
+      });
     } catch (err) {
       setStep("error");
       let errorMsg =
