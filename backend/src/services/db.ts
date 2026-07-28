@@ -11,6 +11,7 @@
  */
 
 import Database, { type Database as DatabaseType } from "better-sqlite3";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -619,6 +620,55 @@ export function initDb(dbPath?: string): DatabaseType {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Append-only, tamper-evident audit trail for privileged/administrative
+    -- actions. Each row's hash covers its own fields plus the previous row's
+    -- hash (hash chain), so any edit or reordering breaks verifyAuditChain().
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      action TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      auth_token_id TEXT,
+      ip_hash TEXT,
+      request_id TEXT,
+      params TEXT,
+      status_code INTEGER,
+      prev_hash TEXT,
+      hash TEXT NOT NULL,
+      archived_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_archived ON audit_log(archived_at);
+
+    -- Core fields are immutable once written; only archived_at (set by the
+    -- rotation job after export) may be updated.
+    CREATE TRIGGER IF NOT EXISTS audit_log_immutable_core
+    BEFORE UPDATE ON audit_log
+    WHEN NEW.id IS NOT OLD.id
+      OR NEW.timestamp IS NOT OLD.timestamp
+      OR NEW.action IS NOT OLD.action
+      OR NEW.endpoint IS NOT OLD.endpoint
+      OR NEW.auth_token_id IS NOT OLD.auth_token_id
+      OR NEW.ip_hash IS NOT OLD.ip_hash
+      OR NEW.request_id IS NOT OLD.request_id
+      OR NEW.params IS NOT OLD.params
+      OR NEW.status_code IS NOT OLD.status_code
+      OR NEW.prev_hash IS NOT OLD.prev_hash
+      OR NEW.hash IS NOT OLD.hash
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_log: core fields are immutable');
+    END;
+
+    -- Rows may only be deleted after being archived (exported to cold storage).
+    CREATE TRIGGER IF NOT EXISTS audit_log_no_unarchived_delete
+    BEFORE DELETE ON audit_log
+    WHEN OLD.archived_at IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_log: entry must be archived before deletion');
+    END;
+
     -- Keep the old events table temporarily during migration,
     -- then drop it once migration completes.
     CREATE TABLE IF NOT EXISTS events (
@@ -727,6 +777,18 @@ export function initDb(dbPath?: string): DatabaseType {
   });
   // feat: events partitioning, db monitoring, migration framework, and data integrity constraints
   return database;
+}
+
+/**
+ * Return the initialized database instance (initializing it if needed).
+ * archival.ts and backup.ts import this; it was missing from this module's
+ * exports, which broke every route that transitively imports either of them
+ * (e.g. GET /health -> services/backup.ts) at startup. Unrelated to
+ * #193/#195/#194/#201, but fixed here since it otherwise blocks the backend
+ * from booting at all, including for verifying the changes in this PR.
+ */
+export function getDb(): DatabaseType {
+  return initDb();
 }
 
 /**
@@ -1322,6 +1384,200 @@ export function cleanupTransactionLog(maxAgeMs = 86400000): number {
     .prepare("DELETE FROM transaction_log WHERE updated_at < ?")
     .run(cutoff);
   return result.changes;
+}
+
+// ============================================
+// AUDIT LOG (append-only, hash-chained)
+// ============================================
+
+export interface AuditLogInput {
+  timestamp: string;
+  action: string;
+  endpoint: string;
+  authTokenId: string | null;
+  ipHash: string | null;
+  requestId: string | null;
+  params: string | null;
+  statusCode: number | null;
+}
+
+export interface AuditLogRow {
+  id: number;
+  timestamp: string;
+  action: string;
+  endpoint: string;
+  auth_token_id: string | null;
+  ip_hash: string | null;
+  request_id: string | null;
+  params: string | null;
+  status_code: number | null;
+  prev_hash: string | null;
+  hash: string;
+  archived_at: string | null;
+}
+
+export interface AuditLogQueryOptions {
+  limit?: number;
+  offset?: number;
+  action?: string;
+}
+
+/**
+ * Insert an audit log entry, chaining its hash to the previous entry's hash.
+ * Read-then-write happens inside a single better-sqlite3 transaction (and,
+ * since better-sqlite3 calls are synchronous, without any await in between),
+ * so concurrent inserts can't interleave and desync the chain.
+ */
+export function insertAuditLog(entry: AuditLogInput): AuditLogRow {
+  const database = initDb();
+
+  const insert = database.transaction((e: AuditLogInput): AuditLogRow => {
+    const last = database
+      .prepare("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1")
+      .get() as { hash: string } | undefined;
+    const prevHash = last?.hash ?? "genesis";
+
+    const hash = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify({
+          timestamp: e.timestamp,
+          action: e.action,
+          endpoint: e.endpoint,
+          authTokenId: e.authTokenId,
+          ipHash: e.ipHash,
+          requestId: e.requestId,
+          params: e.params,
+          statusCode: e.statusCode,
+          prevHash,
+        }),
+      )
+      .digest("hex");
+
+    const result = database
+      .prepare(
+        `INSERT INTO audit_log
+          (timestamp, action, endpoint, auth_token_id, ip_hash, request_id, params, status_code, prev_hash, hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        e.timestamp,
+        e.action,
+        e.endpoint,
+        e.authTokenId,
+        e.ipHash,
+        e.requestId,
+        e.params,
+        e.statusCode,
+        prevHash,
+        hash,
+      );
+
+    return {
+      id: result.lastInsertRowid as number,
+      timestamp: e.timestamp,
+      action: e.action,
+      endpoint: e.endpoint,
+      auth_token_id: e.authTokenId,
+      ip_hash: e.ipHash,
+      request_id: e.requestId,
+      params: e.params,
+      status_code: e.statusCode,
+      prev_hash: prevHash,
+      hash,
+      archived_at: null,
+    };
+  });
+
+  return insert(entry);
+}
+
+/**
+ * Paginated audit log query (newest first), optionally filtered by action.
+ */
+export function getAuditLogs(
+  options: AuditLogQueryOptions = {},
+): { logs: AuditLogRow[]; total: number } {
+  const database = initDb();
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
+  const offset = Math.max(0, options.offset ?? 0);
+
+  let where = "";
+  const params: unknown[] = [];
+  if (options.action) {
+    where = " WHERE action = ?";
+    params.push(options.action);
+  }
+
+  const logs = database
+    .prepare(
+      `SELECT * FROM audit_log${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as AuditLogRow[];
+
+  const total = (
+    database
+      .prepare(`SELECT COUNT(*) as total FROM audit_log${where}`)
+      .get(...params) as { total: number }
+  ).total;
+
+  return { logs, total };
+}
+
+/**
+ * All audit log rows in insertion order, for hash-chain verification.
+ */
+export function getAllAuditLogsOrdered(): AuditLogRow[] {
+  const database = initDb();
+  return database
+    .prepare("SELECT * FROM audit_log ORDER BY id ASC")
+    .all() as AuditLogRow[];
+}
+
+/**
+ * Unarchived rows older than the given ISO cutoff — candidates for rotation.
+ */
+export function getUnarchivedAuditLogsOlderThan(
+  cutoffIso: string,
+): AuditLogRow[] {
+  const database = initDb();
+  return database
+    .prepare(
+      "SELECT * FROM audit_log WHERE archived_at IS NULL AND timestamp < ? ORDER BY id ASC",
+    )
+    .all(cutoffIso) as AuditLogRow[];
+}
+
+/**
+ * Mark rows as archived (allowed by the immutable-core trigger, which only
+ * blocks changes to fields other than archived_at).
+ */
+export function markAuditLogsArchived(ids: number[], archivedAt: string): void {
+  if (ids.length === 0) return;
+  const database = initDb();
+  const stmt = database.prepare(
+    "UPDATE audit_log SET archived_at = ? WHERE id = ?",
+  );
+  const run = database.transaction((rowIds: number[]) => {
+    for (const id of rowIds) stmt.run(archivedAt, id);
+  });
+  run(ids);
+}
+
+/**
+ * Delete rows from the hot table. Only succeeds for rows already marked
+ * archived_at — enforced by the audit_log_no_unarchived_delete trigger.
+ */
+export function deleteAuditLogs(ids: number[]): number {
+  if (ids.length === 0) return 0;
+  const database = initDb();
+  const stmt = database.prepare("DELETE FROM audit_log WHERE id = ?");
+  const run = database.transaction((rowIds: number[]) => {
+    let deleted = 0;
+    for (const id of rowIds) deleted += stmt.run(id).changes;
+    return deleted;
+  });
+  return run(ids);
 }
 
 /**

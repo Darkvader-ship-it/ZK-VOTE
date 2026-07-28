@@ -10,7 +10,7 @@ import { queryLimiter, validateParams } from "../middleware/index.js";
 import { z } from "zod";
 
 // Circuit parameters schema
-const circuitParamsSchema = z.object({
+export const circuitParamsSchema = z.object({
   dao: z.string().pipe(
     z.coerce.number()
       .positive("Must be a positive integer")

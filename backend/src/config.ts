@@ -138,6 +138,14 @@ export const config = {
   archivalAgeDays: Number(process.env.ARCHIVAL_AGE_DAYS || 90),
   archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
 
+  // Audit Log (append-only, hash-chained trail for privileged actions)
+  auditLogRetentionDays: Number(process.env.AUDIT_LOG_RETENTION_DAYS || 90),
+  auditLogRotationIntervalMs: Number(
+    process.env.AUDIT_LOG_ROTATION_INTERVAL_MS || 86_400_000, // 24 hours
+  ),
+  auditLogArchiveDir:
+    process.env.AUDIT_LOG_ARCHIVE_DIR || "./data/audit-archive",
+
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
 } as const;
