@@ -108,14 +108,15 @@ const positiveInteger = z.string().pipe(
 /**
  * IPFS CID validator (CIDv0 or CIDv1)
  */
+const CIDV0_REGEX = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
+const CIDV1_REGEX = /^baf[a-z2-7]{46,120}$/i;
+
 const ipfsCid = z.string().refine(
   (val) => {
-    // CIDv0: Qm... (46 chars)
-    if (val.startsWith("Qm") && val.length >= 46) return true;
-    // CIDv1: bafy... or bafk... (59+ chars)
-    if ((val.startsWith("bafy") || val.startsWith("bafk")) && val.length >= 59)
-      return true;
-    return false;
+    if (!val || typeof val !== "string") return false;
+    const trimmed = val.trim();
+    if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) return false;
+    return CIDV0_REGEX.test(trimmed) || CIDV1_REGEX.test(trimmed);
   },
   { message: "Invalid IPFS CID format" },
 );
