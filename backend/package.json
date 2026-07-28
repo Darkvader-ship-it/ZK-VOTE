@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\"",
+    "validate-profiles": "tsx scripts/validate-profiles.ts",
     "test": "RELAYER_TEST_MODE=true tsx --test test/*.test.js",
     "test:coverage": "RELAYER_TEST_MODE=true node --import tsx --test --experimental-test-coverage test/*.test.js",
     "migrate:up": "tsx src/services/migrate.ts up",
