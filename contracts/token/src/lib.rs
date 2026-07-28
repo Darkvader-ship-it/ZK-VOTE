@@ -2,11 +2,12 @@
 
 mod allowance;
 
-use allowance::{read_allowance, read_allowance_amount, write_allowance};
+use allowance::{is_allowance_expired, read_allowance, read_allowance_amount, write_allowance};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    Env, String,
+    Bytes, BytesN, Env, String, Vec,
 };
+use soroban_sdk::xdr;
 
 const ADMIN_KEY: soroban_sdk::Symbol = symbol_short!("admin");
 const NAME_KEY: soroban_sdk::Symbol = symbol_short!("name");
@@ -20,6 +21,9 @@ const INSTANCE_TTL_EXTEND: u32 = 535_680;
 const PERSISTENT_TTL_THRESHOLD: u32 = 120_960;
 const PERSISTENT_TTL_EXTEND: u32 = 535_680;
 
+const CLAWBACK_DELAY_LEDGERS: u32 = 34_560;
+const CLAWBACK_PERIOD_LEDGERS: u32 = 5_184_000;
+
 #[contracterror]
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum TokenError {
@@ -32,12 +36,37 @@ pub enum TokenError {
     AllowanceRaceRejected = 7,
     NotAdmin = 8,
     NegativeAllowance = 9,
+    ClawbackNotGovernor = 10,
+    ClawbackInsufficientApprovals = 11,
+    ClawbackAlreadyApproved = 12,
+    ClawbackNotReady = 13,
+    ClawbackAlreadyExecuted = 14,
+    ClawbackPeriodLimitExceeded = 15,
+    ClawbackNotFound = 16,
+    InvalidSignature = 17,
+    PermitExpired = 18,
+    PermitReplay = 19,
 }
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Balance(Address),
+    TotalSupply,
+    TotalMinted,
+    TotalBurned,
+    BurnHistoryCount,
+    BurnRecord(u32),
+    Governors,
+    RequiredApprovals,
+    ClawbackProposalCount,
+    ClawbackProposal(u32),
+    ClawbackHistoryCount,
+    ClawbackRecord(u32),
+    ClawbackPeriodTotal,
+    ClawbackPeriodStart,
+    ClawbackPeriodLimit,
+    Nonce(Address),
 }
 
 #[soroban_sdk::contractevent]
@@ -75,6 +104,17 @@ pub struct BurnEvent {
     #[topic]
     pub from: Address,
     pub amount: i128,
+    pub new_supply: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BurnRecord {
+    pub id: u32,
+    pub from: Address,
+    pub amount: i128,
+    pub new_supply: i128,
+    pub ledger: u32,
 }
 
 #[soroban_sdk::contractevent]
@@ -82,6 +122,42 @@ pub struct BurnEvent {
 pub struct ContractUpgraded {
     pub from: u32,
     pub to: u32,
+}
+
+// ── Clawback types (Issue #102) ────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClawbackProposal {
+    pub id: u32,
+    pub target: Address,
+    pub amount: i128,
+    pub reason: String,
+    pub proposer: Address,
+    pub approvals: Vec<Address>,
+    pub created_ledger: u32,
+    pub executed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClawbackRecord {
+    pub target: Address,
+    pub amount: i128,
+    pub reason: String,
+    pub executor: Address,
+    pub ledger: u32,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClawbackExecuted {
+    #[topic]
+    pub target: Address,
+    pub amount: i128,
+    pub reason: String,
+    pub executor: Address,
+    pub new_supply: i128,
 }
 
 #[contract]
@@ -205,6 +281,103 @@ impl Token {
         Self::receive_balance(env, to, amount);
     }
 
+    // ── Supply tracking helpers (Issue #103) ────────────────────────────────
+
+    fn get_supply(env: &Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalSupply)
+            .unwrap_or(0)
+    }
+
+    fn set_supply(env: &Env, value: i128) {
+        let key = DataKey::TotalSupply;
+        env.storage().persistent().set(&key, &value);
+        Self::bump_persistent(env, &key);
+    }
+
+    fn get_total_minted(env: &Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalMinted)
+            .unwrap_or(0)
+    }
+
+    fn set_total_minted(env: &Env, value: i128) {
+        let key = DataKey::TotalMinted;
+        env.storage().persistent().set(&key, &value);
+        Self::bump_persistent(env, &key);
+    }
+
+    fn get_total_burned(env: &Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalBurned)
+            .unwrap_or(0)
+    }
+
+    fn set_total_burned(env: &Env, value: i128) {
+        let key = DataKey::TotalBurned;
+        env.storage().persistent().set(&key, &value);
+        Self::bump_persistent(env, &key);
+    }
+
+    fn increment_supply(env: &Env, amount: i128) -> i128 {
+        let current = Self::get_supply(env);
+        let new = current.checked_add(amount).unwrap_or_else(|| {
+            panic_with_error!(env, TokenError::Overflow);
+        });
+        Self::set_supply(env, new);
+
+        let total_minted = Self::get_total_minted(env);
+        let new_minted = total_minted.checked_add(amount).unwrap_or_else(|| {
+            panic_with_error!(env, TokenError::Overflow);
+        });
+        Self::set_total_minted(env, new_minted);
+
+        new
+    }
+
+    fn decrement_supply(env: &Env, amount: i128) -> i128 {
+        let current = Self::get_supply(env);
+        if current < amount {
+            panic_with_error!(env, TokenError::Overflow);
+        }
+        let new = current - amount;
+        Self::set_supply(env, new);
+
+        let total_burned = Self::get_total_burned(env);
+        let new_burned = total_burned.checked_add(amount).unwrap_or_else(|| {
+            panic_with_error!(env, TokenError::Overflow);
+        });
+        Self::set_total_burned(env, new_burned);
+
+        new
+    }
+
+    fn store_burn_record(env: &Env, from: &Address, amount: i128, new_supply: i128) {
+        let count_key = DataKey::BurnHistoryCount;
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let new_count = count.checked_add(1).unwrap_or_else(|| {
+            panic_with_error!(env, TokenError::Overflow);
+        });
+
+        let record = BurnRecord {
+            id: new_count,
+            from: from.clone(),
+            amount,
+            new_supply,
+            ledger: env.ledger().sequence(),
+        };
+
+        let record_key = DataKey::BurnRecord(new_count);
+        env.storage().persistent().set(&record_key, &record);
+        Self::bump_persistent(env, &record_key);
+
+        env.storage().persistent().set(&count_key, &new_count);
+        Self::bump_persistent(env, &count_key);
+    }
+
     fn spend_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
         let (current_allowance, expiration_ledger) =
             read_allowance(env, from.clone(), spender.clone());
@@ -228,23 +401,11 @@ impl Token {
         read_allowance_amount(&env, from, spender)
     }
 
-    /// Approve spender to transfer `amount` from `from`'s balance.
-    ///
-    /// ## Race-condition mitigation
-    ///
-    /// This function REJECTS any call that would change a non-zero allowance to
-    /// a *different* non-zero value.  Only the following transitions are
-    /// allowed:
-    ///
-    /// | Current allowance | Requested amount | Result               |
-    /// |-------------------|------------------|----------------------|
-    /// | 0                 | any              | allowed (set)        |
-    /// | non-zero          | 0                | allowed (clear)      |
-    /// | non-zero          | same non-zero    | allowed (no‑op)      |
-    /// | non-zero          | different non‑zero| **REJECTED**        |
-    ///
-    /// To safely change an existing non-zero allowance, callers MUST use
-    /// [`increase_allowance`] or [`decrease_allowance`] instead.
+    pub fn is_allowance_expired(env: Env, from: Address, spender: Address) -> bool {
+        Self::bump_instance(&env);
+        is_allowance_expired(&env, from, spender)
+    }
+
     pub fn approve(
         env: Env,
         from: Address,
@@ -280,14 +441,6 @@ impl Token {
         .publish(&env);
     }
 
-    /// Increase the allowance for `spender` by `add_amount`.
-    ///
-    /// Reads the current allowance, adds `add_amount` (with overflow check),
-    /// and writes the new total with the given `expiration_ledger`.
-    ///
-    /// This is the safe alternative to `approve` for adjusting an existing
-    /// non-zero allowance — it cannot be front-run the way a direct
-    /// `approve(from, spender, new_amount, …)` call can.
     pub fn increase_allowance(
         env: Env,
         from: Address,
@@ -318,14 +471,6 @@ impl Token {
         .publish(&env);
     }
 
-    /// Decrease the allowance for `spender` by `sub_amount`.
-    ///
-    /// Reads the current allowance and subtracts `sub_amount`.  If
-    /// `sub_amount` is greater than or equal to the current allowance, the
-    /// allowance is set to 0 (floor-at-zero semantics).
-    ///
-    /// This is the safe alternative to `approve` for reducing an existing
-    /// non-zero allowance.
     pub fn decrease_allowance(
         env: Env,
         from: Address,
@@ -387,7 +532,7 @@ impl Token {
         TransferEvent { from, to, amount }.publish(&env);
     }
 
-    // ── Token Interface: Burn ───────────────────────────────────────────────
+    // ── Token Interface: Burn (Issue #103) ─────────────────────────────────
 
     pub fn burn(env: Env, from: Address, amount: i128) {
         from.require_auth();
@@ -398,8 +543,15 @@ impl Token {
         }
 
         Self::spend_balance(&env, &from, amount);
+        let new_supply = Self::decrement_supply(&env, amount);
+        Self::store_burn_record(&env, &from, amount, new_supply);
 
-        BurnEvent { from, amount }.publish(&env);
+        BurnEvent {
+            from,
+            amount,
+            new_supply,
+        }
+        .publish(&env);
     }
 
     pub fn burn_from(env: Env, spender: Address, from: Address, amount: i128) {
@@ -412,8 +564,15 @@ impl Token {
 
         Self::spend_allowance(&env, &from, &spender, amount);
         Self::spend_balance(&env, &from, amount);
+        let new_supply = Self::decrement_supply(&env, amount);
+        Self::store_burn_record(&env, &from, amount, new_supply);
 
-        BurnEvent { from, amount }.publish(&env);
+        BurnEvent {
+            from,
+            amount,
+            new_supply,
+        }
+        .publish(&env);
     }
 
     // ── Admin: Mint ─────────────────────────────────────────────────────────
@@ -428,6 +587,7 @@ impl Token {
         }
 
         Self::receive_balance(&env, &to, amount);
+        Self::increment_supply(&env, amount);
 
         MintEvent { to, amount }.publish(&env);
     }
@@ -438,6 +598,480 @@ impl Token {
             .instance()
             .get(&VERSION_KEY)
             .unwrap_or(VERSION)
+    }
+
+    // ── Supply queries (Issue #103) ─────────────────────────────────────────
+
+    pub fn total_supply(env: Env) -> i128 {
+        Self::bump_instance(&env);
+        Self::get_supply(&env)
+    }
+
+    pub fn total_minted(env: Env) -> i128 {
+        Self::bump_instance(&env);
+        Self::get_total_minted(&env)
+    }
+
+    pub fn total_burned(env: Env) -> i128 {
+        Self::bump_instance(&env);
+        Self::get_total_burned(&env)
+    }
+
+    pub fn burn_history(env: Env, count: u32) -> Vec<BurnRecord> {
+        Self::bump_instance(&env);
+        let total: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BurnHistoryCount)
+            .unwrap_or(0);
+        let mut records = Vec::new(&env);
+        let start = if count >= total { 0 } else { total - count };
+        for i in (start + 1)..=total {
+            let key = DataKey::BurnRecord(i);
+            if let Some(record) = env.storage().persistent().get::<_, BurnRecord>(&key) {
+                records.push_back(record);
+            }
+        }
+        records
+    }
+
+    // ── Clawback Governance (Issue #102) ────────────────────────────────────
+
+    fn get_governors(env: &Env) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Governors)
+            .unwrap_or_else(|| Vec::new(env))
+    }
+
+    fn get_required_approvals(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RequiredApprovals)
+            .unwrap_or(0)
+    }
+
+    fn is_governor(env: &Env, addr: &Address) -> bool {
+        let governors = Self::get_governors(env);
+        for g in governors.iter() {
+            if g == *addr {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn set_governors(env: Env, governors: Vec<Address>, required_approvals: u32) {
+        let admin = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        let count = governors.len();
+        if required_approvals == 0 || required_approvals > count {
+            panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        let key = DataKey::Governors;
+        env.storage().persistent().set(&key, &governors);
+        Self::bump_persistent(&env, &key);
+
+        let req_key = DataKey::RequiredApprovals;
+        env.storage().persistent().set(&req_key, &required_approvals);
+        Self::bump_persistent(&env, &req_key);
+    }
+
+    pub fn get_governors_list(env: Env) -> Vec<Address> {
+        Self::bump_instance(&env);
+        Self::get_governors(&env)
+    }
+
+    pub fn propose_clawback(
+        env: Env,
+        target: Address,
+        amount: i128,
+        reason: String,
+    ) -> u32 {
+        let proposer = Self::admin(env.clone());
+        proposer.require_auth();
+        Self::bump_instance(&env);
+
+        if amount <= 0 {
+            panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        let count_key = DataKey::ClawbackProposalCount;
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let new_count = count.checked_add(1).unwrap_or_else(|| {
+            panic_with_error!(&env, TokenError::Overflow);
+        });
+
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(proposer.clone());
+
+        let proposal = ClawbackProposal {
+            id: new_count,
+            target: target.clone(),
+            amount,
+            reason: reason.clone(),
+            proposer: proposer,
+            approvals,
+            created_ledger: env.ledger().sequence(),
+            executed: false,
+        };
+
+        let prop_key = DataKey::ClawbackProposal(new_count);
+        env.storage().persistent().set(&prop_key, &proposal);
+        Self::bump_persistent(&env, &prop_key);
+
+        env.storage().persistent().set(&count_key, &new_count);
+        Self::bump_persistent(&env, &count_key);
+
+        new_count
+    }
+
+    pub fn approve_clawback(env: Env, proposal_id: u32) {
+        let governor = Self::admin(env.clone());
+        governor.require_auth();
+        Self::bump_instance(&env);
+
+        let prop_key = DataKey::ClawbackProposal(proposal_id);
+        let mut proposal: ClawbackProposal = env
+            .storage()
+            .persistent()
+            .get(&prop_key)
+            .unwrap_or_else(|| panic_with_error!(&env, TokenError::ClawbackNotFound));
+
+        if proposal.executed {
+            panic_with_error!(&env, TokenError::ClawbackAlreadyExecuted);
+        }
+
+        if !Self::is_governor(&env, &governor) {
+            panic_with_error!(&env, TokenError::ClawbackNotGovernor);
+        }
+
+        for a in proposal.approvals.iter() {
+            if a == governor {
+                panic_with_error!(&env, TokenError::ClawbackAlreadyApproved);
+            }
+        }
+
+        proposal.approvals.push_back(governor);
+
+        env.storage().persistent().set(&prop_key, &proposal);
+        Self::bump_persistent(&env, &prop_key);
+    }
+
+    pub fn execute_clawback(env: Env, proposal_id: u32) {
+        let executor = Self::admin(env.clone());
+        executor.require_auth();
+        Self::bump_instance(&env);
+
+        let prop_key = DataKey::ClawbackProposal(proposal_id);
+        let mut proposal: ClawbackProposal = env
+            .storage()
+            .persistent()
+            .get(&prop_key)
+            .unwrap_or_else(|| panic_with_error!(&env, TokenError::ClawbackNotFound));
+
+        if proposal.executed {
+            panic_with_error!(&env, TokenError::ClawbackAlreadyExecuted);
+        }
+
+        let required = Self::get_required_approvals(&env);
+        if proposal.approvals.len() < required {
+            panic_with_error!(&env, TokenError::ClawbackInsufficientApprovals);
+        }
+
+        let elapsed = env
+            .ledger()
+            .sequence()
+            .checked_sub(proposal.created_ledger)
+            .unwrap_or(0);
+        if elapsed < CLAWBACK_DELAY_LEDGERS {
+            panic_with_error!(&env, TokenError::ClawbackNotReady);
+        }
+
+        let period_total = Self::get_clawback_period_total(&env);
+        let new_total = period_total
+            .checked_add(proposal.amount)
+            .unwrap_or_else(|| {
+                panic_with_error!(&env, TokenError::Overflow);
+            });
+
+        let period_limit: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ClawbackPeriodLimit)
+            .unwrap_or(i128::MAX);
+        if new_total > period_limit {
+            panic_with_error!(&env, TokenError::ClawbackPeriodLimitExceeded);
+        }
+
+        Self::set_clawback_period_total(&env, new_total);
+
+        Self::spend_balance(&env, &proposal.target, proposal.amount);
+        let new_supply = Self::decrement_supply(&env, proposal.amount);
+
+        proposal.executed = true;
+        env.storage().persistent().set(&prop_key, &proposal);
+        Self::bump_persistent(&env, &prop_key);
+
+        Self::store_clawback_record(
+            &env,
+            &proposal.target,
+            proposal.amount,
+            &proposal.reason,
+            &executor,
+        );
+
+        ClawbackExecuted {
+            target: proposal.target,
+            amount: proposal.amount,
+            reason: proposal.reason,
+            executor,
+            new_supply,
+        }
+        .publish(&env);
+    }
+
+    fn get_clawback_period_total(env: &Env) -> i128 {
+        let start_key = DataKey::ClawbackPeriodStart;
+        let period_start: u32 = env
+            .storage()
+            .persistent()
+            .get(&start_key)
+            .unwrap_or(0);
+
+        let current = env.ledger().sequence();
+        if current >= period_start
+            && (current - period_start) > CLAWBACK_PERIOD_LEDGERS
+        {
+            let total_key = DataKey::ClawbackPeriodTotal;
+            env.storage().persistent().remove(&total_key);
+            env.storage().persistent().remove(&start_key);
+            0
+        } else {
+            let total_key = DataKey::ClawbackPeriodTotal;
+            env.storage().persistent().get(&total_key).unwrap_or(0)
+        }
+    }
+
+    fn set_clawback_period_total(env: &Env, total: i128) {
+        let total_key = DataKey::ClawbackPeriodTotal;
+        env.storage().persistent().set(&total_key, &total);
+        Self::bump_persistent(env, &total_key);
+
+        let start_key = DataKey::ClawbackPeriodStart;
+        if !env.storage().persistent().has(&start_key) {
+            env.storage()
+                .persistent()
+                .set(&start_key, &env.ledger().sequence());
+            Self::bump_persistent(env, &start_key);
+        }
+    }
+
+    fn store_clawback_record(
+        env: &Env,
+        target: &Address,
+        amount: i128,
+        reason: &String,
+        executor: &Address,
+    ) {
+        let count_key = DataKey::ClawbackHistoryCount;
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let new_count = count.checked_add(1).unwrap_or_else(|| {
+            panic_with_error!(env, TokenError::Overflow);
+        });
+
+        let record = ClawbackRecord {
+            target: target.clone(),
+            amount,
+            reason: reason.clone(),
+            executor: executor.clone(),
+            ledger: env.ledger().sequence(),
+        };
+
+        let record_key = DataKey::ClawbackRecord(new_count);
+        env.storage().persistent().set(&record_key, &record);
+        Self::bump_persistent(env, &record_key);
+
+        env.storage().persistent().set(&count_key, &new_count);
+        Self::bump_persistent(env, &count_key);
+    }
+
+    pub fn get_clawback_history(env: Env, count: u32) -> Vec<ClawbackRecord> {
+        Self::bump_instance(&env);
+        let total: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ClawbackHistoryCount)
+            .unwrap_or(0);
+        let mut records = Vec::new(&env);
+        let start = if count >= total { 0 } else { total - count };
+        for i in (start + 1)..=total {
+            let key = DataKey::ClawbackRecord(i);
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get::<_, ClawbackRecord>(&key)
+            {
+                records.push_back(record);
+            }
+        }
+        records
+    }
+
+    pub fn get_clawback_proposal(env: Env, proposal_id: u32) -> ClawbackProposal {
+        Self::bump_instance(&env);
+        let prop_key = DataKey::ClawbackProposal(proposal_id);
+        env.storage()
+            .persistent()
+            .get(&prop_key)
+            .unwrap_or_else(|| panic_with_error!(&env, TokenError::ClawbackNotFound))
+    }
+
+    pub fn set_clawback_period_limit(env: Env, limit: i128) {
+        let admin = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        let key = DataKey::ClawbackPeriodLimit;
+        env.storage().persistent().set(&key, &limit);
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn get_clawback_period_limit(env: Env) -> i128 {
+        Self::bump_instance(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::ClawbackPeriodLimit)
+            .unwrap_or(i128::MAX)
+    }
+
+    // ── Token Permit (Issue #105) ───────────────────────────────────────────
+
+    fn get_nonce(env: &Env, owner: &Address) -> u32 {
+        let key = DataKey::Nonce(owner.clone());
+        env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    fn increment_nonce(env: &Env, owner: &Address) -> u32 {
+        let current = Self::get_nonce(env, owner);
+        let new = current.checked_add(1).unwrap_or_else(|| {
+            panic_with_error!(env, TokenError::Overflow);
+        });
+        let key = DataKey::Nonce(owner.clone());
+        env.storage().persistent().set(&key, &new);
+        Self::bump_persistent(env, &key);
+        new
+    }
+
+    fn address_to_32bytes(address: &Address) -> [u8; 32] {
+        let sc_addr: xdr::ScAddress = address.clone().into();
+        match sc_addr {
+            xdr::ScAddress::Account(xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
+                xdr::Uint256(bytes),
+            ))) => bytes,
+            xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(bytes))) => bytes,
+            _ => panic!("unsupported address type"),
+        }
+    }
+
+    fn build_permit_digest(
+        env: &Env,
+        owner: &Address,
+        spender: &Address,
+        amount: i128,
+        nonce: u32,
+        deadline: u64,
+    ) -> Bytes {
+        let contract_key = Self::address_to_32bytes(&env.current_contract_address());
+        let owner_key = Self::address_to_32bytes(owner);
+        let spender_key = Self::address_to_32bytes(spender);
+
+        let mut data = Bytes::new(env);
+        data.extend_from_slice(&contract_key);
+        data.extend_from_slice(&owner_key);
+        data.extend_from_slice(&spender_key);
+        let amount_bytes = amount.to_be_bytes();
+        data.extend_from_slice(&amount_bytes);
+        let nonce_bytes = nonce.to_be_bytes();
+        data.extend_from_slice(&nonce_bytes);
+        let deadline_bytes = deadline.to_be_bytes();
+        data.extend_from_slice(&deadline_bytes);
+        data
+    }
+
+    pub fn nonces(env: Env, owner: Address) -> u32 {
+        Self::bump_instance(&env);
+        Self::get_nonce(&env, &owner)
+    }
+
+    pub fn permit(
+        env: Env,
+        owner: Address,
+        spender: Address,
+        amount: i128,
+        deadline: u64,
+        signature: BytesN<64>,
+    ) {
+        Self::bump_instance(&env);
+
+        if amount < 0 {
+            panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        if env.ledger().timestamp() > deadline {
+            panic_with_error!(&env, TokenError::PermitExpired);
+        }
+
+        let nonce = Self::get_nonce(&env, &owner);
+        let digest = Self::build_permit_digest(&env, &owner, &spender, amount, nonce, deadline);
+
+        let owner_key_bytes = Self::address_to_32bytes(&owner);
+        let pk = BytesN::from_array(&env, &owner_key_bytes);
+
+        env.crypto()
+            .ed25519_verify(&pk, &digest, &signature);
+
+        Self::increment_nonce(&env, &owner);
+
+        let current = read_allowance_amount(&env, owner.clone(), spender.clone());
+        if current != 0 && amount != 0 && current != amount {
+            panic_with_error!(&env, TokenError::AllowanceRaceRejected);
+        }
+
+        write_allowance(&env, owner.clone(), spender.clone(), amount, 0);
+
+        ApproveEvent {
+            from: owner,
+            spender,
+            amount,
+            expiration_ledger: 0,
+        }
+        .publish(&env);
+    }
+
+    pub fn transfer_with_permit(
+        env: Env,
+        owner: Address,
+        spender: Address,
+        to: Address,
+        amount: i128,
+        deadline: u64,
+        signature: BytesN<64>,
+    ) {
+        Self::permit(env.clone(), owner.clone(), spender.clone(), amount, deadline, signature);
+
+        Self::spend_allowance(&env, &owner, &spender, amount);
+        Self::xfer(&env, &owner, &to, amount);
+
+        TransferEvent {
+            from: owner,
+            to,
+            amount,
+        }
+        .publish(&env);
     }
 }
 
