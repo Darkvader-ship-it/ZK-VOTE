@@ -77,6 +77,9 @@ export function sanitizeState<T extends Record<string, unknown>>(state: T): Part
 
   for (const [key, value] of Object.entries(state)) {
     const lowerKey = key.toLowerCase();
+    if (lowerKey === "__proto__" || lowerKey === "constructor" || lowerKey === "prototype" || lowerKey.startsWith("__")) {
+      continue;
+    }
     if (SENSITIVE_KEYS.some((s) => lowerKey.includes(s))) {
       sanitized[key] = "[REDACTED]";
     } else if (value && typeof value === "object" && !Array.isArray(value)) {

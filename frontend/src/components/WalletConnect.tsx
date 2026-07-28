@@ -73,12 +73,12 @@ export default function WalletConnect({
           </Banner>
         )}
         <Banner variant="success">
-          <div className="flex items-center justify-between w-full">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-2">
             <div>
               <h3 className="text-lg font-semibold mb-1">Wallet Connected</h3>
-              <p className="font-mono text-sm">{truncateAddress(publicKey)}</p>
+              <p className="font-mono text-sm break-all">{truncateAddress(publicKey)}</p>
             </div>
-            <Button variant="destructive" size="md" onClick={handleDisconnect}>
+            <Button variant="destructive" size="md" onClick={handleDisconnect} className="w-full sm:w-auto">
               Disconnect
             </Button>
           </div>

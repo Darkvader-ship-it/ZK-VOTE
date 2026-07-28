@@ -1,0 +1,21 @@
+{
+  "nav.browse": "Browse DAOs",
+  "nav.publicVotes": "Public Votes",
+  "nav.docs": "Docs",
+  "nav.connectWallet": "Connect Wallet",
+  "nav.connecting": "Connecting...",
+  "nav.disconnect": "Disconnect",
+  "vote.button": "Vote Now",
+  "vote.cast": "Cast Anonymous Vote",
+  "vote.yes": "Vote Yes",
+  "vote.no": "Vote No",
+  "vote.submitting": "Submitting Vote...",
+  "vote.generating": "Generating Proof...",
+  "vote.success": "Vote Submitted!",
+  "common.loading": "Loading...",
+  "common.error": "Error",
+  "common.close": "Close",
+  "common.save": "Save",
+  "common.cancel": "Cancel",
+  "language.select": "Select Language"
+}
