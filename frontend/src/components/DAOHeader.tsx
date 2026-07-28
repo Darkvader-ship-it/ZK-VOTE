@@ -22,6 +22,7 @@ import {
   Globe,
   ChevronDown,
   ChevronUp,
+  Key,
 } from "lucide-react";
 
 // Custom social icons
@@ -48,7 +49,8 @@ export type DAOTab =
   | "proposals"
   | "members"
   | "create-proposal"
-  | "settings";
+  | "settings"
+  | "threshold";
 
 export interface DAOInfo {
   id: number;
@@ -326,6 +328,17 @@ function NavButtons({
             Add Proposal
           </Button>
         )}
+      {dao.isAdmin && (
+        <Button
+          variant={activeTab === "threshold" ? "secondary" : "outline"}
+          size="sm"
+          onClick={() => navigateToTab("threshold")}
+          className="gap-2"
+        >
+          <Lock className="w-4 h-4" />
+          Tally Auth
+        </Button>
+      )}
     </>
   );
 }

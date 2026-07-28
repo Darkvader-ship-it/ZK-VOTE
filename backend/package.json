@@ -41,6 +41,8 @@
     "express-rate-limit": "^8.3.2",
     "express-slow-down": "^2.1.0",
     "helmet": "^8.2.0",
+    "@noble/curves": "^1.8.0",
+    "@noble/hashes": "^1.7.0",
     "multer": "^2.1.1",
     "pinata": "^2.5.1",
     "swagger-ui-express": "^5.0.1",

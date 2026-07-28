@@ -56,6 +56,7 @@ import {
   bridgeRoutes,
   circuitRoutes,
   adminRoutes,
+  thresholdRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -118,6 +119,7 @@ app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
 app.use(adminRoutes);
+app.use(thresholdRoutes);
 
 // OpenAPI spec + interactive docs
 const openApiDocument = buildOpenApiDocument();
