@@ -54,6 +54,42 @@ The frontend's `relayerFetch` (`frontend/src/lib/api.ts`) already reads the `Ret
 
 Per-limiter request/block counters are available to authenticated callers via `GET /health` (`rateLimits` field).
 
+## Errors
+
+All endpoints return a structured error response when a request fails.
+
+```json
+{
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable error message",
+    "details": { "optional": "additional context" },
+    "requestId": "abc123456789",
+    "timestamp": "2026-07-28T13:38:09.690Z"
+  }
+}
+```
+
+When the `RELAYER_GENERIC_ERRORS` environment variable is set to `true`, the `details` field is omitted to prevent leaking sensitive information.
+
+### Error Codes
+
+| Code | Description |
+|------|-------------|
+| `VOTE_ALREADY_CAST` | The voter has already cast a vote on the given proposal. |
+| `VOTING_PERIOD_CLOSED` | The proposal is no longer accepting votes. |
+| `INVALID_PROOF` | The ZK proof is invalid or malformed. |
+| `NOT_ELIGIBLE` | The voter's root does not match the DAO's state, meaning they are not eligible to vote. |
+| `PROPOSAL_NOT_FOUND` | The specified proposal does not exist. |
+| `DAO_NOT_FOUND` | The specified DAO does not exist. |
+| `RATE_LIMITED` | The client has exceeded the rate limit. |
+| `UNAUTHORIZED` | The request lacks a valid authentication token. |
+| `VALIDATION_ERROR` | The request payload or parameters are invalid. |
+| `SERVICE_UNAVAILABLE` | An external dependency (e.g., Soroban RPC) is unreachable. |
+| `TIMEOUT` | The request took too long to complete. |
+| `NOT_FOUND` | The requested resource does not exist. |
+| `INTERNAL_ERROR` | An unexpected server error occurred. |
+
 ## CORS
 
 Allowed methods: `GET`, `POST`
