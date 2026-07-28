@@ -48,6 +48,7 @@ import {
   bridgeRoutes,
   circuitRoutes,
   metricsRoutes,
+  remediationRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -98,6 +99,7 @@ initIndexerRoutes(triggerDaoMembershipSync);
 // Mount route handlers (metrics first, before CSRF/auth middleware)
 app.use(metricsRoutes);
 app.use(healthRoutes);
+app.use(remediationRoutes);
 app.use(votingRoutes);
 app.use(daoRoutes);
 app.use(ipfsRoutes);
