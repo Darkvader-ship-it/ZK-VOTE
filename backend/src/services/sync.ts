@@ -557,3 +557,184 @@ export async function triggerDaoMembershipSync(daoId: number): Promise<void> {
   log("info", "triggered_membership_sync", { daoId });
   await syncDaoMembership(daoId);
 }
+
+// ============================================
+// REAL-TIME MEMBERSHIP VERIFICATION
+//
+// daoMembersCache (above) is refreshed on a periodic interval and is fine for
+// non-critical reads (e.g. displaying a user's role). For security-critical
+// writes, a stale cache creates a window where a just-revoked member is still
+// treated as a member. verifyMembership() closes that window by reading the
+// SBT contract's `has()` directly, with a short-TTL result cache so bursts of
+// writes from the same caller don't each pay a full RPC round trip.
+// ============================================
+
+const MEMBERSHIP_VERIFICATION_TTL_MS = 30_000;
+
+interface MembershipVerificationEntry {
+  result: boolean;
+  expiresAt: number;
+}
+
+const membershipVerificationCache = new Map<string, MembershipVerificationEntry>();
+
+interface MembershipVerificationMetrics {
+  checks: number;
+  chainCalls: number;
+  cacheHits: number;
+  mismatches: number;
+  errors: number;
+  totalLatencyMs: number;
+  maxLatencyMs: number;
+}
+
+const membershipVerificationMetrics: MembershipVerificationMetrics = {
+  checks: 0,
+  chainCalls: 0,
+  cacheHits: 0,
+  mismatches: 0,
+  errors: 0,
+  totalLatencyMs: 0,
+  maxLatencyMs: 0,
+};
+
+/**
+ * Latency/hit-rate/mismatch metrics for verifyMembership(), for monitoring.
+ */
+export function getMembershipVerificationMetrics(): {
+  checks: number;
+  chainCalls: number;
+  cacheHits: number;
+  mismatches: number;
+  errors: number;
+  avgLatencyMs: number;
+  maxLatencyMs: number;
+} {
+  const { checks, chainCalls, cacheHits, mismatches, errors, totalLatencyMs, maxLatencyMs } =
+    membershipVerificationMetrics;
+  return {
+    checks,
+    chainCalls,
+    cacheHits,
+    mismatches,
+    errors,
+    avgLatencyMs:
+      chainCalls > 0 ? Math.round((totalLatencyMs / chainCalls) * 100) / 100 : 0,
+    maxLatencyMs,
+  };
+}
+
+function membershipCacheKey(daoId: number, address: string): string {
+  return `${daoId}:${address}`;
+}
+
+/** Test/ops hook: clear the short-TTL verification cache. */
+export function clearMembershipVerificationCache(): void {
+  membershipVerificationCache.clear();
+}
+
+/**
+ * Real-time on-chain membership check via the Membership SBT contract's
+ * `has(dao_id, of)` read entrypoint — the source of truth for write-path
+ * authorization. Results are cached for MEMBERSHIP_VERIFICATION_TTL_MS (30s)
+ * to bound RPC load; a cache miss/mismatch against the periodic daoMembersCache
+ * is logged for monitoring. Throws if the on-chain check itself cannot be
+ * completed (RPC error) — callers should fail closed (reject the write)
+ * rather than silently falling back to the periodic cache.
+ */
+export async function verifyMembership(
+  daoId: number,
+  address: string,
+): Promise<boolean> {
+  membershipVerificationMetrics.checks++;
+
+  const key = membershipCacheKey(daoId, address);
+  const cached = membershipVerificationCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    membershipVerificationMetrics.cacheHits++;
+    return cached.result;
+  }
+
+  if (
+    !config.membershipSbtContractId ||
+    !isValidContractId(config.membershipSbtContractId)
+  ) {
+    throw new Error(
+      "Membership verification unavailable: MEMBERSHIP_SBT_CONTRACT_ID not configured",
+    );
+  }
+
+  const start = Date.now();
+  try {
+    const sbtContract = new StellarSdk.Contract(config.membershipSbtContractId);
+    const account = await (server as StellarSdk.rpc.Server).getAccount(
+      relayerKeypair.publicKey(),
+    );
+    const operation = sbtContract.call(
+      "has",
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.xdr.ScVal.scvAddress(
+        StellarSdk.Address.fromString(address).toScAddress(),
+      ),
+    );
+    const tx = new StellarSdk.TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await callWithTimeout(
+      () =>
+        simulateWithBackoff(() =>
+          (server as StellarSdk.rpc.Server).simulateTransaction(tx),
+        ),
+      `simulate_verify_membership_${daoId}`,
+    );
+
+    if (
+      !StellarSdk.rpc.Api.isSimulationSuccess(simResult) ||
+      !simResult.result?.retval
+    ) {
+      throw new Error("Membership verification simulation failed");
+    }
+
+    const isMember = Boolean(
+      StellarSdk.scValToNative(simResult.result.retval),
+    );
+    const latencyMs = Date.now() - start;
+    membershipVerificationMetrics.chainCalls++;
+    membershipVerificationMetrics.totalLatencyMs += latencyMs;
+    membershipVerificationMetrics.maxLatencyMs = Math.max(
+      membershipVerificationMetrics.maxLatencyMs,
+      latencyMs,
+    );
+
+    const cachedMembers = getDaoMembersFromCache(daoId);
+    const cachedSaysMember = cachedMembers?.has(address) ?? false;
+    if (cachedSaysMember !== isMember) {
+      membershipVerificationMetrics.mismatches++;
+      log("warn", "membership_cache_mismatch", {
+        daoId,
+        cachedMember: cachedSaysMember,
+        onChainMember: isMember,
+      });
+    }
+
+    membershipVerificationCache.set(key, {
+      result: isMember,
+      expiresAt: Date.now() + MEMBERSHIP_VERIFICATION_TTL_MS,
+    });
+
+    log("debug", "membership_verified_realtime", { daoId, isMember, latencyMs });
+    return isMember;
+  } catch (err) {
+    membershipVerificationMetrics.errors++;
+    log("error", "membership_verify_failed", {
+      daoId,
+      error: (err as Error).message,
+    });
+    throw err;
+  }
+}

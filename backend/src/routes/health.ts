@@ -8,6 +8,8 @@ import { Router, Request, Response } from "express";
 import type * as StellarSdk from "@stellar/stellar-sdk";
 import { config } from "../config.js";
 import { extractAuthToken } from "../middleware/auth.js";
+import { getRateLimitMetrics } from "../middleware/rateLimit.js";
+import { getMembershipVerificationMetrics } from "../services/sync.js";
 import { log } from "../services/logger.js";
 import { getDbDiagnostics, getDbStatus } from "../services/db.js";
 import { getBackupStatus } from "../services/backup.js";
@@ -77,6 +79,8 @@ router.get("/health", async (req: Request, res: Response) => {
       base.votingContract = config.votingContractId;
       base.treeContract = config.treeContractId;
       base.vkVersion = config.staticVkVersion;
+      base.rateLimits = getRateLimitMetrics();
+      base.membershipVerification = getMembershipVerificationMetrics();
     }
   }
 

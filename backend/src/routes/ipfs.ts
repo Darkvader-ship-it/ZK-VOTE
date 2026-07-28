@@ -12,6 +12,7 @@ import { log } from "../services/logger.js";
 import * as ipfsService from "../services/ipfs.js";
 import {
   authGuard,
+  auditLog,
   queryLimiter,
   ipfsUploadLimiter,
   ipfsReadLimiter,
@@ -154,6 +155,7 @@ router.post(
   // the token is shipped in the public frontend bundle — keeps random
   // internet attackers off the multer parser + Pinata bill.
   authGuard,
+  auditLog("ipfs_upload_image"),
   ipfsUploadLimiter,
   (req, res, next) => {
     upload.single("image")(req, res, (err: any) => {
@@ -221,7 +223,7 @@ router.post(
  * POST /ipfs/metadata - Upload JSON metadata to IPFS
  */
 // N1 hardening: was unauthenticated — see /ipfs/image rationale.
-router.post("/ipfs/metadata", authGuard, ipfsUploadLimiter, (async (
+router.post("/ipfs/metadata", authGuard, auditLog("ipfs_upload_metadata"), ipfsUploadLimiter, (async (
   req: Request,
   res: Response,
 ) => {
