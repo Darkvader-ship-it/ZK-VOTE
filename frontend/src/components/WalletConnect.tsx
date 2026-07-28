@@ -66,13 +66,26 @@ export default function WalletConnect({
 
   if (isConnected && publicKey) {
     return (
-      <div className="space-y-2">
+      <div className="space-y-2 w-full max-w-full overflow-hidden">
         {networkWarning && (
           <Banner variant="warning">
-            <p className="text-sm font-medium">{networkWarning}</p>
+            <p className="text-sm font-medium break-words">{networkWarning}</p>
           </Banner>
         )}
         <Banner variant="success">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 w-full">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-lg font-semibold mb-0.5">Wallet Connected</h3>
+              <p className="font-mono text-xs sm:text-sm text-muted-foreground break-words-all">
+                {publicKey}
+              </p>
+            </div>
+            <Button
+              variant="destructive"
+              size="md"
+              onClick={handleDisconnect}
+              className="w-full sm:w-auto min-h-[48px] sm:min-h-0"
+            >
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-2">
             <div>
               <h3 className="text-lg font-semibold mb-1">Wallet Connected</h3>
@@ -88,9 +101,9 @@ export default function WalletConnect({
   }
 
   return (
-    <Card variant="primary">
+    <Card variant="primary" className="w-full max-w-full overflow-hidden p-4 sm:p-6">
       <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
-      <p className="text-muted-foreground mb-4">
+      <p className="text-sm text-muted-foreground mb-4">
         Connect your Stellar wallet (Freighter, xBull, Albedo, etc.) to interact
         with the DAO.
       </p>
@@ -103,7 +116,7 @@ export default function WalletConnect({
             href={FREIGHTER_INSTALL_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-block text-xs font-semibold text-primary underline hover:text-primary/80"
+            className="inline-flex items-center min-h-[48px] text-xs font-semibold text-primary underline hover:text-primary/80"
           >
             Install Freighter Extension &rarr;
           </a>
@@ -121,6 +134,7 @@ export default function WalletConnect({
         onClick={handleConnect}
         disabled={connecting}
         isLoading={connecting}
+        className="min-h-[48px] text-base sm:text-sm font-medium"
       >
         {connecting ? "Connecting..." : "Connect Wallet"}
       </Button>
