@@ -928,3 +928,74 @@ fn test_transfer_with_permit() {
     assert_eq!(client.balance(&charlie), 100);
     assert_eq!(client.nonces(&alice), 1);
 }
+
+// ── Supply cap (Issue #98) ────────────────────────────────────────────────────
+
+#[test]
+fn test_get_max_supply_returns_none_when_unset() {
+    let (_env, _admin, client) = setup_token();
+    assert_eq!(client.get_max_supply(), None);
+}
+
+#[test]
+fn test_set_and_get_max_supply() {
+    let (_env, _admin, client) = setup_token();
+    client.set_max_supply(&1_000_000i128);
+    assert_eq!(client.get_max_supply(), Some(1_000_000i128));
+}
+
+#[test]
+fn test_mint_below_cap_succeeds() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &500i128);
+    assert_eq!(client.balance(&alice), 500);
+    assert_eq!(client.total_supply(), 500);
+}
+
+#[test]
+fn test_mint_exactly_at_cap_succeeds() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &1_000i128);
+    assert_eq!(client.total_supply(), 1_000);
+}
+
+#[test]
+fn test_mint_multiple_times_up_to_cap() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &600i128);
+    client.mint(&alice, &400i128);
+    assert_eq!(client.total_supply(), 1_000);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_mint_beyond_cap_panics() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &1_001i128);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_mint_exceeds_cap_after_partial_mint() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &800i128);
+    client.mint(&alice, &201i128);
+}
+
+#[test]
+fn test_mint_without_cap_has_no_limit() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.mint(&alice, &i128::MAX / 2);
+    assert_eq!(client.total_supply(), i128::MAX / 2);
+}

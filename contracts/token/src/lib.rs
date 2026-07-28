@@ -46,6 +46,7 @@ pub enum TokenError {
     InvalidSignature = 17,
     PermitExpired = 18,
     PermitReplay = 19,
+    SupplyCapExceeded = 20,
 }
 
 #[contracttype]
@@ -67,6 +68,7 @@ pub enum DataKey {
     ClawbackPeriodStart,
     ClawbackPeriodLimit,
     Nonce(Address),
+    MaxSupply,
 }
 
 #[soroban_sdk::contractevent]
@@ -575,7 +577,32 @@ impl Token {
         .publish(&env);
     }
 
+    // ── Supply cap helpers (Issue #98) ──────────────────────────────────────
+
+    fn get_max_supply_storage(env: &Env) -> Option<i128> {
+        env.storage().persistent().get(&DataKey::MaxSupply)
+    }
+
     // ── Admin: Mint ─────────────────────────────────────────────────────────
+
+    pub fn set_max_supply(env: Env, max_supply: i128) {
+        let admin: Address = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        if max_supply < 0 {
+            panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        let key = DataKey::MaxSupply;
+        env.storage().persistent().set(&key, &max_supply);
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn get_max_supply(env: Env) -> Option<i128> {
+        Self::bump_instance(&env);
+        Self::get_max_supply_storage(&env)
+    }
 
     pub fn mint(env: Env, to: Address, amount: i128) {
         let admin: Address = Self::admin(env.clone());
@@ -584,6 +611,16 @@ impl Token {
 
         if amount < 0 {
             panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        if let Some(cap) = Self::get_max_supply_storage(&env) {
+            let current = Self::get_supply(&env);
+            let new_supply = current.checked_add(amount).unwrap_or_else(|| {
+                panic_with_error!(&env, TokenError::Overflow);
+            });
+            if new_supply > cap {
+                panic_with_error!(&env, TokenError::SupplyCapExceeded);
+            }
         }
 
         Self::receive_balance(&env, &to, amount);
