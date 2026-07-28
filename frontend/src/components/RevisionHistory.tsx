@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { X, Clock, Loader2, Trash2 } from "lucide-react";
 import { Button } from "./ui/Button";
+import { useMounted } from "../hooks/useMounted";
 import {
   type CommentWithContent,
   type CommentMetadata,
@@ -31,6 +32,7 @@ export default function RevisionHistory({
 }: RevisionHistoryProps) {
   const [revisions, setRevisions] = useState<RevisionEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const mounted = useMounted();
 
   useEffect(() => {
     // Build list of revisions (oldest first, current/deleted last)
@@ -139,11 +141,11 @@ export default function RevisionHistory({
                 </div>
                 {revision.isDeleted && revision.deletedAt ? (
                   <p className="text-xs text-muted-foreground mt-1">
-                    {new Date(revision.deletedAt * 1000).toLocaleString()}
+                    {mounted ? new Date(revision.deletedAt * 1000).toLocaleString() : ''}
                   </p>
                 ) : revision.content?.createdAt ? (
                   <p className="text-xs text-muted-foreground mt-1">
-                    {new Date(revision.content.createdAt).toLocaleString()}
+                    {mounted ? new Date(revision.content.createdAt).toLocaleString() : ''}
                   </p>
                 ) : null}
               </button>

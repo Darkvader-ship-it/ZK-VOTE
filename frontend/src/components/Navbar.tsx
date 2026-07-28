@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { truncateAddress } from "../lib/utils";
+import { useMounted } from "../hooks/useMounted";
 import { Button } from "./ui/Button";
 import { Moon, Sun, Wallet, LogOut, Menu, X } from "lucide-react";
 
@@ -31,6 +32,7 @@ export default function Navbar({
   relayerErrors = [],
 }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mounted = useMounted();
 
   const handleNavigate = (view: "home" | "browse" | "votes" | "docs") => {
     onNavigate(view);
@@ -132,7 +134,7 @@ export default function Navbar({
               <span className="sr-only">Toggle theme</span>
             </Button>
 
-            {isConnected && publicKey ? (
+            {mounted && (isConnected && publicKey ? (
               <div className="flex items-center gap-2">
                 <div className="hidden sm:flex items-center h-9 px-4 rounded-md border bg-muted/50 font-mono text-xs">
                   {truncateAddress(publicKey, 6, 4)}
@@ -157,7 +159,7 @@ export default function Navbar({
                 <Wallet className="mr-2 h-3.5 w-3.5" />
                 {connecting ? "Connecting..." : "Connect Wallet"}
               </Button>
-            )}
+            ))}
           </div>
         </div>
       </div>
