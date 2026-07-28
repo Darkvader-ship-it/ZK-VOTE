@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useMounted } from "../hooks/useMounted";
 import { Button, Card, Banner } from "@stellar/design-system";
+import { isFreighterInstalled, FREIGHTER_INSTALL_URL } from "../services/freighter";
 
 interface WalletConnectProps {
   onConnect: () => Promise<void>;
   onDisconnect: () => void;
   publicKey: string | null;
   isConnected: boolean;
+  networkWarning?: string | null;
 }
 
 export default function WalletConnect({
@@ -14,10 +16,12 @@ export default function WalletConnect({
   onDisconnect,
   publicKey,
   isConnected,
+  networkWarning,
 }: WalletConnectProps) {
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const mounted = useMounted();
+  const hasFreighter = typeof window !== "undefined" && isFreighterInstalled();
 
   const handleConnect = async () => {
     try {
@@ -62,17 +66,24 @@ export default function WalletConnect({
 
   if (isConnected && publicKey) {
     return (
-      <Banner variant="success">
-        <div className="flex items-center justify-between w-full">
-          <div>
-            <h3 className="text-lg font-semibold mb-1">Wallet Connected</h3>
-            <p className="font-mono text-sm">{truncateAddress(publicKey)}</p>
+      <div className="space-y-2">
+        {networkWarning && (
+          <Banner variant="warning">
+            <p className="text-sm font-medium">{networkWarning}</p>
+          </Banner>
+        )}
+        <Banner variant="success">
+          <div className="flex items-center justify-between w-full">
+            <div>
+              <h3 className="text-lg font-semibold mb-1">Wallet Connected</h3>
+              <p className="font-mono text-sm">{truncateAddress(publicKey)}</p>
+            </div>
+            <Button variant="destructive" size="md" onClick={handleDisconnect}>
+              Disconnect
+            </Button>
           </div>
-          <Button variant="destructive" size="md" onClick={handleDisconnect}>
-            Disconnect
-          </Button>
-        </div>
-      </Banner>
+        </Banner>
+      </div>
     );
   }
 
@@ -83,6 +94,21 @@ export default function WalletConnect({
         Connect your Stellar wallet (Freighter, xBull, Albedo, etc.) to interact
         with the DAO.
       </p>
+      {!hasFreighter && (
+        <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-md">
+          <p className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">
+            Freighter wallet not detected.
+          </p>
+          <a
+            href={FREIGHTER_INSTALL_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block text-xs font-semibold text-primary underline hover:text-primary/80"
+          >
+            Install Freighter Extension &rarr;
+          </a>
+        </div>
+      )}
       {error && (
         <div className="mb-4">
           <Banner variant="error">{error}</Banner>
