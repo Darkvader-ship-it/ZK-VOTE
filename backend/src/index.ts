@@ -251,6 +251,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       try {
         await startIndexer(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           server as any,
           contractIds,
           config.indexerPollIntervalMs,

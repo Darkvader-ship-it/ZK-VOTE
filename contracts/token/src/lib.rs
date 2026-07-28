@@ -625,7 +625,7 @@ impl Token {
             .get(&DataKey::BurnHistoryCount)
             .unwrap_or(0);
         let mut records = Vec::new(&env);
-        let start = if count >= total { 0 } else { total - count };
+        let start = total.saturating_sub(count);
         for i in (start + 1)..=total {
             let key = DataKey::BurnRecord(i);
             if let Some(record) = env.storage().persistent().get::<_, BurnRecord>(&key) {
@@ -710,7 +710,7 @@ impl Token {
             target: target.clone(),
             amount,
             reason: reason.clone(),
-            proposer: proposer,
+            proposer,
             approvals,
             created_ledger: env.ledger().sequence(),
             executed: false,
@@ -782,8 +782,7 @@ impl Token {
         let elapsed = env
             .ledger()
             .sequence()
-            .checked_sub(proposal.created_ledger)
-            .unwrap_or(0);
+            .saturating_sub(proposal.created_ledger);
         if elapsed < CLAWBACK_DELAY_LEDGERS {
             panic_with_error!(&env, TokenError::ClawbackNotReady);
         }
@@ -898,7 +897,7 @@ impl Token {
             .get(&DataKey::ClawbackHistoryCount)
             .unwrap_or(0);
         let mut records = Vec::new(&env);
-        let start = if count >= total { 0 } else { total - count };
+        let start = total.saturating_sub(count);
         for i in (start + 1)..=total {
             let key = DataKey::ClawbackRecord(i);
             if let Some(record) = env.storage().persistent().get::<_, ClawbackRecord>(&key) {

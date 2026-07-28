@@ -71,6 +71,7 @@ export function validateQuery<T>(schema: ZodSchema<T>) {
     }
 
     // Replace query with validated/transformed data
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req as any).validatedQuery = result.data;
     next();
   };
@@ -91,6 +92,7 @@ export function validateParams<T>(schema: ZodSchema<T>) {
       });
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req as any).validatedParams = result.data;
     next();
   };

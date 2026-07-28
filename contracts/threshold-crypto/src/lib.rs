@@ -32,7 +32,7 @@ pub enum ThresholdError {
     DecryptionShareAlreadySubmitted = 12,
     InsufficientShares = 13,
     InvalidPublicKey = 14,
-    InvalidCiphertext = 15,
+
     InvalidDecryptionShare = 16,
     TallyAlreadyDecrypted = 17,
     TallyNotDecrypted = 18,
@@ -64,13 +64,6 @@ pub struct Authority {
 
 #[contracttype]
 #[derive(Clone)]
-pub struct Ciphertext {
-    pub c1: BytesN<64>,
-    pub c2: BytesN<64>,
-}
-
-#[contracttype]
-#[derive(Clone)]
 pub struct ElectionCryptoConfig {
     pub dao_id: u64,
     pub proposal_id: u64,
@@ -78,7 +71,8 @@ pub struct ElectionCryptoConfig {
     pub threshold_t: u32,
     pub phase: DkgPhase,
     pub joint_public_key: Option<BytesN<64>>,
-    pub encrypted_tally: Option<Ciphertext>,
+    pub encrypted_tally_c1: Option<BytesN<64>>,
+    pub encrypted_tally_c2: Option<BytesN<64>>,
     pub decrypted_tally: Option<U256>,
     pub tally_proof: Option<BytesN<64>>,
     pub created_at: u64,
@@ -247,7 +241,8 @@ impl ThresholdCrypto {
             threshold_t,
             phase: DkgPhase::Registration,
             joint_public_key: None,
-            encrypted_tally: None,
+            encrypted_tally_c1: None,
+            encrypted_tally_c2: None,
             decrypted_tally: None,
             tally_proof: None,
             created_at: env.ledger().timestamp(),
@@ -549,22 +544,24 @@ impl ThresholdCrypto {
             panic_with_error!(&env, ThresholdError::DkgNotCompleted);
         }
 
-        let tally = match config.encrypted_tally {
-            Some(ref existing) => {
-                let new_c1 = Self::g1_add(&env, &existing.c1, &c1);
-                let new_c2 = Self::g1_add(&env, &existing.c2, &c2);
-                Ciphertext {
-                    c1: new_c1,
-                    c2: new_c2,
-                }
+        match config.encrypted_tally_c1 {
+            Some(ref existing_c1) => {
+                let new_c1 = Self::g1_add(&env, existing_c1, &c1);
+                config.encrypted_tally_c1 = Some(new_c1);
             }
-            None => Ciphertext {
-                c1: c1.clone(),
-                c2: c2.clone(),
-            },
-        };
-
-        config.encrypted_tally = Some(tally);
+            None => {
+                config.encrypted_tally_c1 = Some(c1.clone());
+            }
+        }
+        match config.encrypted_tally_c2 {
+            Some(ref existing_c2) => {
+                let new_c2 = Self::g1_add(&env, existing_c2, &c2);
+                config.encrypted_tally_c2 = Some(new_c2);
+            }
+            None => {
+                config.encrypted_tally_c2 = Some(c2.clone());
+            }
+        }
         Self::save_election_config(&env, &config);
 
         let count_key = DataKey::EncryptedVoteCount(dao_id, proposal_id);
@@ -586,10 +583,14 @@ impl ThresholdCrypto {
         env.storage().persistent().get(&count_key).unwrap_or(0)
     }
 
-    pub fn get_encrypted_tally(env: Env, dao_id: u64, proposal_id: u64) -> Option<Ciphertext> {
+    pub fn get_encrypted_tally(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> (Option<BytesN<64>>, Option<BytesN<64>>) {
         Self::bump_instance(&env);
         let config = Self::get_election_config_mut(&env, dao_id, proposal_id);
-        config.encrypted_tally
+        (config.encrypted_tally_c1, config.encrypted_tally_c2)
     }
 
     // ── Decryption ─────────────────────────────────────────────────────
@@ -722,7 +723,7 @@ impl ThresholdCrypto {
         if config.decrypted_tally.is_some() {
             panic_with_error!(&env, ThresholdError::TallyAlreadyDecrypted);
         }
-        if config.encrypted_tally.is_none() {
+        if config.encrypted_tally_c1.is_none() {
             panic_with_error!(&env, ThresholdError::VoteNotEncrypted);
         }
 
@@ -768,12 +769,12 @@ impl ThresholdCrypto {
 
     // ── G1 Operations (BN254) ──────────────────────────────────────────
 
-    fn g1_add(env: &Env, a: &BytesN<64>, b: &BytesN<64>) -> BytesN<64> {
+    fn g1_add(_env: &Env, a: &BytesN<64>, b: &BytesN<64>) -> BytesN<64> {
         use soroban_sdk::crypto::bn254::Bn254G1Affine;
         let p1 = Bn254G1Affine::from_bytes(a.clone());
         let p2 = Bn254G1Affine::from_bytes(b.clone());
         let sum = p1 + p2;
-        sum.to_array().into()
+        BytesN::from(sum)
     }
 
     // ── Verifier ID ────────────────────────────────────────────────────
