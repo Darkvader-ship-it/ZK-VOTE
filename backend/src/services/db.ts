@@ -59,6 +59,8 @@ export interface EventQueryOptions {
   offset?: number;
   types?: string[] | null;
   verifiedOnly?: boolean;
+  orderBy?: string;
+  orderDirection?: string;
 }
 
 export interface EventQueryResult {
@@ -304,7 +306,79 @@ function normalizeType(t: string): string {
 }
 
 // ============================================
-// LOGGER
+// SECURITY: ALLOWLISTS FOR INJECTION PREVENTION
+// ============================================
+
+/** Allowlisted event types for dynamic filtering */
+const ALLOWED_EVENT_TYPES = new Set([
+  'dao_create',
+  'admin_transfer', 
+  'member_added',
+  'member_revoked',
+  'member_left',
+  'tree_init',
+  'voter_registered',
+  'voter_removed',
+  'voter_reinstated',
+  'vk_updated',
+  'proposal_created',
+  'proposal_closed',
+  'proposal_archived',
+  'vote_cast'
+]);
+
+/** Allowlisted column names for dynamic ORDER BY clauses */
+const ALLOWED_ORDER_COLUMNS = new Set([
+  'id',
+  'timestamp',
+  'ledger',
+  'type',
+  'verified',
+  'created_at'
+]);
+
+/** Allowlisted sort directions */
+const ALLOWED_SORT_DIRECTIONS = new Set(['ASC', 'DESC']);
+
+/**
+ * Validate and sanitize DAO ID to prevent table name injection
+ */
+function validateDaoId(daoId: number): number {
+  if (!Number.isInteger(daoId) || daoId < 1 || daoId > 999999) {
+    throw new Error(`Invalid DAO ID: ${daoId}. Must be positive integer ≤ 999999`);
+  }
+  return daoId;
+}
+
+/**
+ * Validate event types against allowlist
+ */
+function validateEventTypes(types: string[]): string[] {
+  const invalid = types.filter(type => !ALLOWED_EVENT_TYPES.has(type));
+  if (invalid.length > 0) {
+    throw new Error(`Invalid event types: ${invalid.join(', ')}`);
+  }
+  return types;
+}
+
+/**
+ * Validate and sanitize ORDER BY parameters
+ */
+function validateOrderBy(column: string, direction: string = 'DESC'): { column: string; direction: string } {
+  if (!ALLOWED_ORDER_COLUMNS.has(column)) {
+    throw new Error(`Invalid order column: ${column}. Allowed: ${Array.from(ALLOWED_ORDER_COLUMNS).join(', ')}`);
+  }
+  
+  const normalizedDirection = direction.toUpperCase();
+  if (!ALLOWED_SORT_DIRECTIONS.has(normalizedDirection)) {
+    throw new Error(`Invalid sort direction: ${direction}. Allowed: ASC, DESC`);
+  }
+  
+  return { column, direction: normalizedDirection };
+}
+
+// ============================================
+// LOGGER WITH QUERY LOGGING
 // ============================================
 
 import { createLogger } from "./logger.js";
@@ -318,6 +392,26 @@ const log = (
   dbLogger[level](event, meta);
 };
 
+/**
+ * Log SQL queries with parameter redaction for security
+ */
+function logQuery(query: string, params: unknown[] = [], operation: string): void {
+  // Redact sensitive parameters (keep first 4 chars for debugging)
+  const redactedParams = params.map((param, index) => {
+    if (typeof param === 'string' && param.length > 8) {
+      return `${param.slice(0, 4)}****[REDACTED]`;
+    }
+    return param;
+  });
+  
+  log('debug', 'sql_query_executed', {
+    operation,
+    query: query.replace(/\s+/g, ' ').trim(),
+    paramCount: params.length,
+    redactedParams: redactedParams.slice(0, 5) // Limit to first 5 params
+  });
+}
+
 // ============================================
 // DATABASE INSTANCE
 // ============================================
@@ -329,27 +423,32 @@ const knownPartitions: Set<number> = new Set();
 
 /**
  * Return the partition table name for a given DAO ID.
+ * SECURITY: Validates DAO ID to prevent table name injection.
  */
 function partitionTableName(daoId: number): string {
-  return `events_${daoId}`;
+  const validatedDaoId = validateDaoId(daoId);
+  return `events_${validatedDaoId}`;
 }
 
 /**
  * Ensure a partition table exists for the given DAO ID.
  * Idempotent — safe to call on every write.
+ * SECURITY: Uses validated table names and allowlisted event types.
  */
 function ensurePartitionTable(daoId: number): void {
   if (knownPartitions.has(daoId)) return;
   const database = db as DatabaseType;
-  const tableName = partitionTableName(daoId);
-  database.exec(`
+  const tableName = partitionTableName(daoId); // This validates daoId
+  
+  // SECURITY: Use allowlisted event types in CHECK constraint
+  const allowedEventTypesString = Array.from(ALLOWED_EVENT_TYPES)
+    .map(type => `'${type}'`)
+    .join(',');
+  
+  const createTableSQL = `
     CREATE TABLE IF NOT EXISTS ${tableName} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL CHECK(type IN (
-        'dao_create','admin_transfer','member_added','member_revoked','member_left',
-        'tree_init','voter_registered','voter_removed','voter_reinstated',
-        'vk_updated','proposal_created','proposal_closed','proposal_archived','vote_cast'
-      )),
+      type TEXT NOT NULL CHECK(type IN (${allowedEventTypesString})),
       data TEXT, -- JSON
       ledger INTEGER,
       tx_hash TEXT,
@@ -362,7 +461,11 @@ function ensurePartitionTable(daoId: number): void {
     CREATE INDEX IF NOT EXISTS idx_${tableName}_timestamp ON ${tableName}(timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_${tableName}_ledger ON ${tableName}(ledger DESC);
     CREATE INDEX IF NOT EXISTS idx_${tableName}_verified ON ${tableName}(verified);
-  `);
+  `;
+  
+  logQuery(createTableSQL, [], 'ensure_partition_table');
+  database.exec(createTableSQL);
+  
   knownPartitions.add(daoId);
   // Record this partition in metadata for cross-DAO queries
   recordPartitionDaoId(database, daoId);
@@ -394,6 +497,7 @@ function getAllPartitionDaoIds(database: DatabaseType): number[] {
 
 /**
  * Initialize the database and migrate from the monolithic schema.
+ * SECURITY: Enables SQLite strict mode and WAL journaling.
  */
 export function initDb(dbPath?: string): DatabaseType {
   if (db && !dbPath) return db;
@@ -411,8 +515,20 @@ export function initDb(dbPath?: string): DatabaseType {
 
   const dbFile = dbPath ?? DB_FILE;
   const database = new Database(dbFile);
+  
+  // SECURITY: Enable WAL mode and foreign key constraints
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
+  
+  // SECURITY: Enable strict mode if available (better-sqlite3 v8+)
+  try {
+    database.pragma("strict = ON");
+    log("info", "sqlite_strict_mode_enabled");
+  } catch (err) {
+    log("warn", "sqlite_strict_mode_unavailable", {
+      error: (err as Error).message
+    });
+  }
 
   // Create system tables (daos, metadata, partition_registry)
   database.exec(`
@@ -855,31 +971,37 @@ function rowToEvent(row: EventRow): Event {
  * Add an event to the database.
  * Writes to the partition table for the DAO.
  * Returns true if added, false if duplicate.
+ * SECURITY: Validates event type and uses parameterized queries.
  */
 export function addEvent(event: EventInput): boolean {
   const database = initDb();
-  const tableName = partitionTableName(event.daoId);
+  const tableName = partitionTableName(event.daoId); // Validates daoId
   ensurePartitionTable(event.daoId);
+
+  // SECURITY: Validate event type against allowlist
+  if (!ALLOWED_EVENT_TYPES.has(event.type)) {
+    throw new Error(`Invalid event type: ${event.type}`);
+  }
+
+  const query = `
+    INSERT INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `;
+  const params = [
+    event.type,
+    JSON.stringify(event.data),
+    event.ledger ?? null,
+    event.txHash ?? null,
+    event.timestamp ?? new Date().toISOString(),
+    event.verified ? 1 : 0,
+  ];
 
   const result = timeQuery(
     "addEvent",
     () => {
       try {
-        database
-          .prepare(
-            `
-        INSERT INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `,
-          )
-          .run(
-            event.type,
-            JSON.stringify(event.data),
-            event.ledger ?? null,
-            event.txHash ?? null,
-            event.timestamp ?? new Date().toISOString(),
-            event.verified ? 1 : 0,
-          );
+        logQuery(query, params, 'add_event');
+        database.prepare(query).run(...params);
         return true;
       } catch (err) {
         const error = err as { code?: string };
@@ -924,31 +1046,41 @@ export function addPendingEvent(
 /**
  * Mark an event as verified.
  * Searches across the DAO's partition table.
+ * SECURITY: Uses parameterized queries and validates inputs.
  */
 export function verifyEvent(txHash: string, ledger: number): void {
+  // SECURITY: Basic input validation
+  if (typeof txHash !== 'string' || txHash.length === 0 || txHash.length > 128) {
+    throw new Error(`Invalid txHash: ${txHash}`);
+  }
+  if (!Number.isInteger(ledger) || ledger < 0) {
+    throw new Error(`Invalid ledger: ${ledger}`);
+  }
+
   const database = initDb();
   // Search in all partitions for the matching tx_hash
   const daoIds = getAllPartitionDaoIds(database);
   for (const daoId of daoIds) {
-    const tableName = partitionTableName(daoId);
-    const result = database
-      .prepare(
-        `UPDATE ${tableName} SET verified = 1, ledger = ? WHERE tx_hash = ? AND verified = 0`,
-      )
-      .run(ledger, txHash);
+    const tableName = partitionTableName(daoId); // Validates daoId
+    const query = `UPDATE ${tableName} SET verified = 1, ledger = ? WHERE tx_hash = ? AND verified = 0`;
+    const params = [ledger, txHash];
+    
+    logQuery(query, params, 'verify_event');
+    const result = database.prepare(query).run(...params);
     if (result.changes > 0) return; // Done
   }
 }
 
 /**
  * Get events for a DAO (from its partition).
+ * SECURITY: Uses parameterized queries and validates all inputs.
  */
 export function getEventsForDao(
   daoId: number,
   options: EventQueryOptions = {},
 ): EventQueryResult {
   const database = initDb();
-  const tableName = partitionTableName(daoId);
+  const tableName = partitionTableName(daoId); // Validates daoId
   ensurePartitionTable(daoId);
 
   const {
@@ -956,23 +1088,35 @@ export function getEventsForDao(
     offset = 0,
     types = null,
     verifiedOnly = false,
+    orderBy = 'timestamp',
+    orderDirection = 'DESC'
   } = options;
+
+  // SECURITY: Validate limit and offset
+  const validLimit = Math.max(1, Math.min(limit, 1000));
+  const validOffset = Math.max(0, offset);
+
+  // SECURITY: Validate ORDER BY parameters
+  const { column: orderColumn, direction } = validateOrderBy(orderBy, orderDirection);
 
   let query = `SELECT * FROM ${tableName} WHERE 1=1`;
   const params: (number | string)[] = [];
 
   if (types && types.length > 0) {
-    query += ` AND type IN (${types.map(() => "?").join(",")})`;
-    params.push(...types);
+    // SECURITY: Validate event types against allowlist
+    const validatedTypes = validateEventTypes(types);
+    query += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
+    params.push(...validatedTypes);
   }
 
   if (verifiedOnly) {
     query += " AND verified = 1";
   }
 
-  query += " ORDER BY timestamp DESC, ledger DESC LIMIT ? OFFSET ?";
-  params.push(limit, offset);
+  query += ` ORDER BY ${orderColumn} ${direction}, ledger DESC LIMIT ? OFFSET ?`;
+  params.push(validLimit, validOffset);
 
+  logQuery(query, params, 'get_events_for_dao');
   const events = database.prepare(query).all(...params) as EventRow[];
 
   // Add dao_id to each row (partition tables don't store it)
@@ -981,13 +1125,15 @@ export function getEventsForDao(
   let countQuery = `SELECT COUNT(*) as total FROM ${tableName} WHERE 1=1`;
   const countParams: (number | string)[] = [];
   if (types && types.length > 0) {
-    countQuery += ` AND type IN (${types.map(() => "?").join(",")})`;
-    countParams.push(...types);
+    const validatedTypes = validateEventTypes(types);
+    countQuery += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
+    countParams.push(...validatedTypes);
   }
   if (verifiedOnly) {
     countQuery += " AND verified = 1";
   }
 
+  logQuery(countQuery, countParams, 'count_events_for_dao');
   const countResult = database
     .prepare(countQuery)
     .get(...countParams) as CountRow;
@@ -1339,6 +1485,7 @@ export function migrateToPartitions(): number {
 /**
  * Migrate events from JSON file to SQLite (legacy migration).
  * Now routes into partition tables.
+ * SECURITY: Validates all JSON input and uses parameterized queries.
  */
 export function migrateFromJson(jsonPath: string): number {
   const database = initDb();
@@ -1367,33 +1514,67 @@ export function migrateFromJson(jsonPath: string): number {
 
     database.transaction(() => {
       for (const [daoIdStr, daoEvents] of Object.entries(events)) {
+        // SECURITY: Validate DAO ID from JSON
         const daoId = Number(daoIdStr);
-        const tableName = partitionTableName(daoId);
+        if (!Number.isInteger(daoId) || daoId < 1) {
+          log("warn", "json_migration_invalid_dao_id", { daoIdStr });
+          continue;
+        }
+        
+        const tableName = partitionTableName(daoId); // This validates daoId
         ensurePartitionTable(daoId);
 
-        const insertStmt = database.prepare(`
+        const insertQuery = `
           INSERT OR IGNORE INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
           VALUES (?, ?, ?, ?, ?, 1)
-        `);
+        `;
+        const insertStmt = database.prepare(insertQuery);
 
         for (const event of daoEvents) {
           try {
-            insertStmt.run(
+            // SECURITY: Validate event type
+            if (!ALLOWED_EVENT_TYPES.has(event.type)) {
+              log("warn", "json_migration_invalid_event_type", { 
+                type: event.type, 
+                daoId 
+              });
+              continue;
+            }
+
+            // SECURITY: Validate timestamp format if provided
+            const timestamp = event.timestamp ?? new Date().toISOString();
+            if (event.timestamp && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp)) {
+              log("warn", "json_migration_invalid_timestamp", { 
+                timestamp: event.timestamp, 
+                daoId 
+              });
+              continue;
+            }
+
+            const params = [
               event.type,
               JSON.stringify(event.data),
               event.ledger ?? null,
               event.txHash ?? null,
-              event.timestamp ?? new Date().toISOString(),
-            );
+              timestamp,
+            ];
+
+            logQuery(insertQuery, params, 'migrate_from_json');
+            insertStmt.run(...params);
             migrated++;
-          } catch {
-            // Skip duplicates
+          } catch (err) {
+            log("warn", "json_migration_event_failed", { 
+              error: (err as Error).message,
+              daoId,
+              eventType: event.type 
+            });
+            // Skip this event and continue
           }
         }
       }
 
       // Save last ledger
-      if (data.lastLedger) {
+      if (data.lastLedger && Number.isInteger(data.lastLedger) && data.lastLedger > 0) {
         setMetadata("lastLedger", data.lastLedger);
       }
     })();

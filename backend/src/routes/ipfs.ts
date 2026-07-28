@@ -15,7 +15,9 @@ import {
   queryLimiter,
   ipfsUploadLimiter,
   ipfsReadLimiter,
+  validateParams,
 } from "../middleware/index.js";
+import { cidParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 
 const router = Router();
@@ -281,7 +283,7 @@ router.post("/ipfs/metadata", authGuard, ipfsUploadLimiter, (async (
 /**
  * GET /ipfs/:cid - Fetch content from IPFS (JSON)
  */
-router.get("/ipfs/:cid", ipfsReadLimiter, (async (
+router.get("/ipfs/:cid", ipfsReadLimiter, validateParams(cidParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
@@ -289,11 +291,7 @@ router.get("/ipfs/:cid", ipfsReadLimiter, (async (
     return res.status(503).json({ error: "IPFS service not configured" });
   }
 
-  const { cid } = req.params;
-
-  if (!ipfsService.isValidCid(cid)) {
-    return res.status(400).json({ error: "Invalid CID format" });
-  }
+  const { cid } = (req as any).validatedParams;
 
   const cached = getCachedContent(cid);
   if (cached) {
@@ -324,7 +322,7 @@ router.get("/ipfs/:cid", ipfsReadLimiter, (async (
 /**
  * GET /ipfs/image/:cid - Fetch raw image from IPFS
  */
-router.get("/ipfs/image/:cid", ipfsReadLimiter, (async (
+router.get("/ipfs/image/:cid", ipfsReadLimiter, validateParams(cidParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
@@ -332,11 +330,7 @@ router.get("/ipfs/image/:cid", ipfsReadLimiter, (async (
     return res.status(503).json({ error: "IPFS service not configured" });
   }
 
-  const { cid } = req.params;
-
-  if (!ipfsService.isValidCid(cid)) {
-    return res.status(400).json({ error: "Invalid CID format" });
-  }
+  const { cid } = (req as any).validatedParams;
 
   try {
     log("info", "ipfs_fetch_image", { cid });

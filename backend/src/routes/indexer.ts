@@ -16,7 +16,8 @@ import {
 } from "../services/indexer.js";
 import { getArchiveIndex, readArchivedEvents } from "../services/archival.js";
 import { getPendingEventsCountForDao } from "../services/db.js";
-import { authGuard, queryLimiter } from "../middleware/index.js";
+import { authGuard, queryLimiter, validateParams } from "../middleware/index.js";
+import { daoParamsSchema, archiveParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 
 const router = Router();
@@ -53,10 +54,10 @@ router.get("/events/archived", queryLimiter, (req: Request, res: Response) => {
 /**
  * GET /events/archived/:archiveId - Retrieve historical archived events
  */
-router.get("/events/archived/:archiveId", queryLimiter, (req: Request, res: Response) => {
-  const { archiveId } = req.params;
+router.get("/events/archived/:archiveId", queryLimiter, validateParams(archiveParamsSchema), (req: Request, res: Response) => {
+  const { archiveId } = (req as any).validatedParams;
   try {
-    const events = readArchivedEvents(archiveId);
+    const events = readArchivedEvents(archiveId.toString());
     res.json({ archiveId, events, total: events.length });
   } catch (err) {
     log("error", "read_archived_events_failed", { archiveId, error: (err as Error).message });
@@ -67,8 +68,8 @@ router.get("/events/archived/:archiveId", queryLimiter, (req: Request, res: Resp
 /**
  * GET /events/:daoId - Get events for a DAO
  */
-router.get("/events/:daoId", queryLimiter, (req: Request, res: Response) => {
-  const { daoId } = req.params;
+router.get("/events/:daoId", queryLimiter, validateParams(daoParamsSchema), (req: Request, res: Response) => {
+  const { daoId } = (req as any).validatedParams;
   const { limit = "50", offset = "0", types } = req.query;
 
   try {
@@ -78,7 +79,7 @@ router.get("/events/:daoId", queryLimiter, (req: Request, res: Response) => {
       types: types ? (types as string).split(",") : null,
     };
 
-    const result = getEventsForDao(parseInt(daoId), options);
+    const result = getEventsForDao(daoId, options);
     res.json(result);
   } catch (err) {
     log("error", "get_events_failed", { daoId, error: (err as Error).message });

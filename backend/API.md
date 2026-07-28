@@ -425,11 +425,11 @@ Get a single comment by ID.
 
 #### Path Parameters
 
-| Parameter    | Type     | Description              |
-|--------------|----------|--------------------------|
-| `daoId`      | `string` | DAO identifier (integer) |
-| `proposalId` | `string` | Proposal identifier (integer) |
-| `commentId`  | `string` | Comment identifier (integer)  |
+| Parameter    | Type      | Description              | Format |
+|--------------|-----------|--------------------------|---------|
+| `daoId`      | `integer` | DAO identifier           | Positive integer (1+) |
+| `proposalId` | `integer` | Proposal identifier      | Positive integer (1+) |
+| `commentId`  | `integer` | Comment identifier       | Positive integer (1+) |
 
 #### Example Request
 
@@ -1180,6 +1180,92 @@ curl -X POST http://localhost:3001/events/notify \
 | 400    | `"daoId, type, and txHash are required"`  | Missing required fields  |
 | 400    | `"Invalid txHash format"`                 | Not 64 hex characters    |
 | 500    | `"Failed to notify event"`                | Internal error           |
+
+---
+
+## Route Parameter Validation
+
+All route parameters are validated using Zod schemas before processing. Invalid parameters return `400 Bad Request` with structured error details.
+
+### Parameter Types and Formats
+
+#### Integer Parameters (`:daoId`, `:proposalId`, `:commentId`, `:archiveId`)
+
+- **Format**: Positive integers only (1, 2, 3, ...)
+- **Range**: 1 to `Number.MAX_SAFE_INTEGER` (9,007,199,254,740,991)
+- **Conversion**: String route parameters are automatically converted to numbers
+- **Invalid values**: Negative numbers, zero, decimals, non-numeric strings
+
+**Examples:**
+- ✅ Valid: `/dao/123`, `/proposal/1/42`
+- ❌ Invalid: `/dao/0`, `/dao/-1`, `/dao/abc`, `/dao/123.45`
+
+#### IPFS CID Parameters (`:cid`)
+
+- **Format**: Valid IPFS Content Identifier
+- **CIDv0**: Starts with `Qm`, minimum 46 characters (Base58 encoded)
+- **CIDv1**: Starts with `bafy` or `bafk`, minimum 59 characters
+
+**Examples:**
+- ✅ Valid CIDv0: `QmYjtig7VJQ6XsnUjqqJvj7QaMcCAwtrgNdahSiFofrE7o`
+- ✅ Valid CIDv1: `bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku`
+- ❌ Invalid: `invalid-cid`, `Qm123` (too short), `QmInvalidChars0`
+
+#### Hex String Parameters (`:nullifier`, `:commitment`)
+
+**Nullifier (`:nullifier`)**:
+- **Format**: Hexadecimal string with optional `0x` prefix
+- **Length**: 1 to 64 hex characters (0.5 to 32 bytes)
+- **Character set**: `0-9`, `a-f`, `A-F`
+
+**Commitment (`:commitment`)**:
+- **Format**: Hexadecimal string with optional `0x` prefix  
+- **Length**: Exactly 64 hex characters (32 bytes)
+- **Character set**: `0-9`, `a-f`, `A-F`
+
+**Examples:**
+- ✅ Valid nullifier: `0x1234abcd`, `1234567890abcdef...` (up to 64 chars)
+- ✅ Valid commitment: `1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef`
+- ❌ Invalid: `GHIJ1234` (invalid hex), `123` (commitment too short)
+
+### Parameter Validation Error Format
+
+When route parameters fail validation, the response includes structured error details:
+
+```json
+{
+  "error": "Invalid URL parameters",
+  "details": [
+    {
+      "field": "daoId",
+      "message": "Must be a positive integer"
+    },
+    {
+      "field": "cid", 
+      "message": "Invalid IPFS CID format"
+    }
+  ]
+}
+```
+
+**Status:** `400 Bad Request`
+
+### Route Parameter Matrix
+
+| Route | Parameters | Validation Schema |
+|-------|------------|-------------------|
+| `GET /dao/:daoId` | `daoId` | Positive integer |
+| `GET /proposal/:daoId/:proposalId` | `daoId`, `proposalId` | Positive integers |
+| `GET /root/:daoId` | `daoId` | Positive integer |
+| `GET /comments/:daoId/:proposalId` | `daoId`, `proposalId` | Positive integers |
+| `GET /comment/:daoId/:proposalId/:commentId` | `daoId`, `proposalId`, `commentId` | Positive integers |
+| `GET /comments/:daoId/:proposalId/nonce` | `daoId`, `proposalId` | Positive integers |
+| `GET /comment/challenge/:commitment` | `commitment` | 64-char hex string |
+| `GET /ipfs/:cid` | `cid` | Valid IPFS CID |
+| `GET /ipfs/image/:cid` | `cid` | Valid IPFS CID |
+| `GET /bridge/nullifier/:daoId/:proposalId/:nullifier` | `daoId`, `proposalId`, `nullifier` | Integers + hex string |
+| `GET /events/:daoId` | `daoId` | Positive integer |
+| `GET /events/archived/:archiveId` | `archiveId` | Positive integer |
 
 ---
 
