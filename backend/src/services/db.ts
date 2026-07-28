@@ -16,12 +16,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
-  timeQuery,
-  invalidateCachePrefix,
-  getDbStats as getMonitorDbStats,
-  profileEventQueries,
-} from "./dbMonitor.js";
+import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
 import { migrateUp } from "./migrate.js";
+import { kysely } from "./kysely.js";
+import { sql } from "kysely";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -980,12 +978,17 @@ export function getMetadata<T>(key: string): T | null {
  */
 export function setMetadata<T>(key: string, value: T): void {
   const database = initDb();
+  const compiled = kysely
+    .insertInto("metadata")
+    .values({ key, value: JSON.stringify(value) })
+    .onConflict((oc) =>
+      oc.column("key").doUpdateSet({ value: JSON.stringify(value) }),
+    )
+    .compile();
+
   timeQuery(
     "setMetadata",
-    () =>
-      database
-        .prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)")
-        .run(key, JSON.stringify(value)),
+    () => database.prepare(compiled.sql).run(...compiled.parameters),
     { key },
   );
   // Invalidate any cached queries that depend on metadata
@@ -1045,25 +1048,24 @@ export function addEvent(event: EventInput): boolean {
     throw new Error(`Invalid event type: ${event.type}`);
   }
 
-  const query = `
-    INSERT INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `;
-  const params = [
-    event.type,
-    JSON.stringify(event.data),
-    event.ledger ?? null,
-    event.txHash ?? null,
-    event.timestamp ?? new Date().toISOString(),
-    event.verified ? 1 : 0,
-  ];
+  const queryObj = kysely
+    .insertInto(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .values({
+      type: event.type,
+      data: JSON.stringify(event.data),
+      ledger: event.ledger ?? null,
+      tx_hash: event.txHash ?? null,
+      timestamp: event.timestamp ?? new Date().toISOString(),
+      verified: event.verified ? 1 : 0,
+    });
+  const compiled = queryObj.compile();
 
   const result = timeQuery(
     "addEvent",
     () => {
       try {
-        logQuery(query, params, 'add_event');
-        database.prepare(query).run(...params);
+        logQuery(compiled.sql, compiled.parameters as any[], "add_event");
+        database.prepare(compiled.sql).run(...compiled.parameters);
         return true;
       } catch (err) {
         const error = err as { code?: string };
@@ -1161,44 +1163,49 @@ export function getEventsForDao(
   // SECURITY: Validate ORDER BY parameters
   const { column: orderColumn, direction } = validateOrderBy(orderBy, orderDirection);
 
-  let query = `SELECT * FROM ${tableName} WHERE 1=1`;
-  const params: (number | string)[] = [];
+  let query = kysely
+    .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .selectAll();
 
   if (types && types.length > 0) {
-    // SECURITY: Validate event types against allowlist
     const validatedTypes = validateEventTypes(types);
-    query += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
-    params.push(...validatedTypes);
+    query = query.where("type", "in", validatedTypes);
   }
 
   if (verifiedOnly) {
-    query += " AND verified = 1";
+    query = query.where("verified", "=", 1);
   }
 
-  query += ` ORDER BY ${orderColumn} ${direction}, ledger DESC LIMIT ? OFFSET ?`;
-  params.push(validLimit, validOffset);
+  query = query
+    .orderBy(orderColumn as any, direction.toLowerCase() as any)
+    .orderBy("ledger", "desc")
+    .limit(validLimit)
+    .offset(validOffset);
 
-  logQuery(query, params, 'get_events_for_dao');
-  const events = database.prepare(query).all(...params) as EventRow[];
+  const compiled = query.compile();
+
+  logQuery(compiled.sql, compiled.parameters as any[], "get_events_for_dao");
+  const events = database.prepare(compiled.sql).all(...compiled.parameters) as EventRow[];
 
   // Add dao_id to each row (partition tables don't store it)
   const enrichedEvents = events.map((e) => ({ ...e, dao_id: daoId }));
 
-  let countQuery = `SELECT COUNT(*) as total FROM ${tableName} WHERE 1=1`;
-  const countParams: (number | string)[] = [];
+  let countQuery = kysely
+    .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .select(sql<number>`COUNT(*)`.as("total"));
+    
   if (types && types.length > 0) {
-    const validatedTypes = validateEventTypes(types);
-    countQuery += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
-    countParams.push(...validatedTypes);
+    countQuery = countQuery.where("type", "in", validateEventTypes(types));
   }
   if (verifiedOnly) {
-    countQuery += " AND verified = 1";
+    countQuery = countQuery.where("verified", "=", 1);
   }
 
-  logQuery(countQuery, countParams, 'count_events_for_dao');
+  const countCompiled = countQuery.compile();
+  logQuery(countCompiled.sql, countCompiled.parameters as any[], "count_events_for_dao");
   const countResult = database
-    .prepare(countQuery)
-    .get(...countParams) as CountRow;
+    .prepare(countCompiled.sql)
+    .get(...countCompiled.parameters) as CountRow;
 
   return {
     events: enrichedEvents.map(rowToEvent),
