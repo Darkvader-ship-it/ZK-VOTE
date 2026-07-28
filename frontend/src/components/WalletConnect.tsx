@@ -45,15 +45,10 @@ export default function WalletConnect({
       <Card variant="primary">
         <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
         <p className="text-muted-foreground mb-4">
-          Connect your Stellar wallet (Freighter, xBull, Albedo, etc.) to interact
-          with the DAO.
+          Connect your Stellar wallet (Freighter, xBull, Albedo, etc.) to
+          interact with the DAO.
         </p>
-        <Button
-          variant="primary"
-          size="md"
-          isFullWidth
-          disabled
-        >
+        <Button variant="primary" size="md" isFullWidth disabled>
           Connect Wallet
         </Button>
       </Card>
