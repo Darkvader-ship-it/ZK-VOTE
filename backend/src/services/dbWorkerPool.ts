@@ -205,7 +205,9 @@ export class DbWorkerPool {
 
     try {
       crashedWorker.terminate();
-    } catch (_) {}
+    } catch (_) {
+      // worker already dead; nothing to recover
+    }
 
     // Reject and remove any requests that were in flight on the crashed
     // worker — otherwise their promises (and the map entries holding them)

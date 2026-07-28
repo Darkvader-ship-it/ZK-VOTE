@@ -3,11 +3,11 @@
 mod allowance;
 
 use allowance::{is_allowance_expired, read_allowance, read_allowance_amount, write_allowance};
+use soroban_sdk::xdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
     Bytes, BytesN, Env, String, Vec,
 };
-use soroban_sdk::xdr;
 
 const ADMIN_KEY: soroban_sdk::Symbol = symbol_short!("admin");
 const NAME_KEY: soroban_sdk::Symbol = symbol_short!("name");
@@ -676,7 +676,9 @@ impl Token {
         Self::bump_persistent(&env, &key);
 
         let req_key = DataKey::RequiredApprovals;
-        env.storage().persistent().set(&req_key, &required_approvals);
+        env.storage()
+            .persistent()
+            .set(&req_key, &required_approvals);
         Self::bump_persistent(&env, &req_key);
     }
 
@@ -685,12 +687,7 @@ impl Token {
         Self::get_governors(&env)
     }
 
-    pub fn propose_clawback(
-        env: Env,
-        target: Address,
-        amount: i128,
-        reason: String,
-    ) -> u32 {
+    pub fn propose_clawback(env: Env, target: Address, amount: i128, reason: String) -> u32 {
         let proposer = Self::admin(env.clone());
         proposer.require_auth();
         Self::bump_instance(&env);
@@ -836,16 +833,10 @@ impl Token {
 
     fn get_clawback_period_total(env: &Env) -> i128 {
         let start_key = DataKey::ClawbackPeriodStart;
-        let period_start: u32 = env
-            .storage()
-            .persistent()
-            .get(&start_key)
-            .unwrap_or(0);
+        let period_start: u32 = env.storage().persistent().get(&start_key).unwrap_or(0);
 
         let current = env.ledger().sequence();
-        if current >= period_start
-            && (current - period_start) > CLAWBACK_PERIOD_LEDGERS
-        {
+        if current >= period_start && (current - period_start) > CLAWBACK_PERIOD_LEDGERS {
             let total_key = DataKey::ClawbackPeriodTotal;
             env.storage().persistent().remove(&total_key);
             env.storage().persistent().remove(&start_key);
@@ -910,11 +901,7 @@ impl Token {
         let start = if count >= total { 0 } else { total - count };
         for i in (start + 1)..=total {
             let key = DataKey::ClawbackRecord(i);
-            if let Some(record) = env
-                .storage()
-                .persistent()
-                .get::<_, ClawbackRecord>(&key)
-            {
+            if let Some(record) = env.storage().persistent().get::<_, ClawbackRecord>(&key) {
                 records.push_back(record);
             }
         }
@@ -1031,8 +1018,7 @@ impl Token {
         let owner_key_bytes = Self::address_to_32bytes(&owner);
         let pk = BytesN::from_array(&env, &owner_key_bytes);
 
-        env.crypto()
-            .ed25519_verify(&pk, &digest, &signature);
+        env.crypto().ed25519_verify(&pk, &digest, &signature);
 
         Self::increment_nonce(&env, &owner);
 
@@ -1061,7 +1047,14 @@ impl Token {
         deadline: u64,
         signature: BytesN<64>,
     ) {
-        Self::permit(env.clone(), owner.clone(), spender.clone(), amount, deadline, signature);
+        Self::permit(
+            env.clone(),
+            owner.clone(),
+            spender.clone(),
+            amount,
+            deadline,
+            signature,
+        );
 
         Self::spend_allowance(&env, &owner, &spender, amount);
         Self::xfer(&env, &owner, &to, amount);
