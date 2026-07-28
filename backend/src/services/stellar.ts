@@ -16,6 +16,7 @@ import {
   rpcPoolTotalEndpoints,
   rpcEndpointLatency,
 } from "./metrics.js";
+import { registerCircuitBreaker, CircuitBreakerOpenError } from "./circuit-breaker.js";
 import type { Groth16Proof } from "../types/index.js";
 
 // ============================================
@@ -202,6 +203,14 @@ export class RpcPoolManager {
 
 export const rpcPoolManager = new RpcPoolManager(config.rpcUrls || [config.rpcUrl]);
 
+// Circuit breaker for Soroban RPC calls — trips when the RPC pool is
+// degraded across the board, so requests fail fast instead of each one
+// running its own retry/timeout against a service that is known to be down.
+export const sorobanRpcBreaker = registerCircuitBreaker("soroban_rpc", {
+  failureThreshold: config.circuitBreakerRpcFailureThreshold,
+  resetTimeoutMs: config.circuitBreakerRpcResetMs,
+});
+
 export const server: SorobanServer = config.testMode
   ? {
       getHealth: async () => ({ status: "online" }),
@@ -227,7 +236,9 @@ export const server: SorobanServer = config.testMode
             const method = String(prop);
             const start = process.hrtime.bigint();
             try {
-              const result = await value.apply(activeServer, args);
+              const result = await sorobanRpcBreaker.execute(() =>
+                value.apply(activeServer, args),
+              );
               const duration = Number(process.hrtime.bigint() - start) / 1e9;
               rpcCallsTotal.inc({ method, status: "success" });
               rpcCallDuration.observe({ method, status: "success" }, duration);
@@ -235,7 +246,11 @@ export const server: SorobanServer = config.testMode
             } catch (err) {
               const duration = Number(process.hrtime.bigint() - start) / 1e9;
               const errorType =
-                err instanceof Error ? err.constructor.name : "unknown";
+                err instanceof CircuitBreakerOpenError
+                  ? "CircuitBreakerOpen"
+                  : err instanceof Error
+                    ? err.constructor.name
+                    : "unknown";
               rpcCallsTotal.inc({ method, status: "error" });
               rpcCallDuration.observe({ method, status: "error" }, duration);
               rpcErrors.inc({ method, error_type: errorType });

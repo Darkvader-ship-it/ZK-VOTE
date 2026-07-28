@@ -7,7 +7,7 @@
 import { Router, type Request, type Response } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import { config } from "../config.js";
+import { config, isValidContractId } from "../config.js";
 import { log } from "../services/logger.js";
 import {
   server,
@@ -19,8 +19,10 @@ import {
   u256ToScVal,
   proofToScVal,
 } from "../services/stellar.js";
+import { verifyMembership } from "../services/sync.js";
 import {
   authGuard,
+  auditLog,
   commentLimiter,
   queryLimiter,
   validateBody,
@@ -29,7 +31,6 @@ import {
 import {
   anonymousCommentSchema,
   flagCommentSchema,
-  challengeQuerySchema,
   commentParamsSchema,
   proposalParamsSchema,
   commitmentParamsSchema,
@@ -46,6 +47,45 @@ import { commentsSubmitted } from "../services/metrics.js";
 
 const router = Router();
 
+/**
+ * Real-time membership gate for address-authenticated writes (edit/delete).
+ * Anonymous vote/comment paths already get a stronger, real-time guarantee
+ * from their ZK merkle-root proof verified on-chain, so this only applies to
+ * routes that identify the caller by address. No-op when the Membership SBT
+ * contract isn't configured (feature not deployed for this DAO/deployment).
+ */
+async function enforceCurrentMembership(
+  daoId: number,
+  address: string,
+  res: Response,
+  event: string,
+): Promise<boolean> {
+  if (
+    !config.membershipSbtContractId ||
+    !isValidContractId(config.membershipSbtContractId)
+  ) {
+    return true;
+  }
+  try {
+    const isMember = await verifyMembership(daoId, address);
+    if (!isMember) {
+      log("warn", `${event}_membership_denied`, { daoId });
+      res.status(403).json({ error: "Author is not a current DAO member" });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log("error", `${event}_membership_check_failed`, {
+      daoId,
+      error: (err as Error).message,
+    });
+    res
+      .status(503)
+      .json({ error: "Membership verification unavailable, please retry" });
+    return false;
+  }
+}
+
 // ============================================
 // PROOF-OF-WORK CHALLENGE
 // ============================================
@@ -57,6 +97,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commit
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { commitment } = (req as any).validatedParams;
 
   const challenge = generateChallenge(commitment, {
@@ -81,6 +122,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commit
 router.post(
   "/comment/anonymous",
   authGuard,
+  auditLog("comment_anonymous_relay"),
   commentLimiter,
   validateBody(anonymousCommentSchema),
   (async (req: Request, res: Response) => {
@@ -322,6 +364,7 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(pr
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { daoId, proposalId } = (req as any).validatedParams;
   const { commitment } = req.query;
 
@@ -577,6 +620,10 @@ router.post("/comment/edit", authGuard, commentLimiter, (async (
     return res.status(400).json({ error: "Missing required fields" });
   }
 
+  if (!(await enforceCurrentMembership(daoId, author, res, "comment_edit"))) {
+    return;
+  }
+
   try {
     log("info", "comment_edit_request", { daoId, proposalId, commentId });
 
@@ -681,6 +728,10 @@ router.post("/comment/delete", authGuard, commentLimiter, (async (
     !author
   ) {
     return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  if (!(await enforceCurrentMembership(daoId, author, res, "comment_delete"))) {
+    return;
   }
 
   try {

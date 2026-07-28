@@ -1,0 +1,21 @@
+{
+  "nav.browse": "Explorar DAOs",
+  "nav.publicVotes": "Votos Públicos",
+  "nav.docs": "Documentación",
+  "nav.connectWallet": "Conectar Billetera",
+  "nav.connecting": "Conectando...",
+  "nav.disconnect": "Desconectar",
+  "vote.button": "Votar Ahora",
+  "vote.cast": "Emitir Voto Anónimo",
+  "vote.yes": "Votar Sí",
+  "vote.no": "Votar No",
+  "vote.submitting": "Enviando Voto...",
+  "vote.generating": "Generando Prueba...",
+  "vote.success": "¡Voto Enviado!",
+  "common.loading": "Cargando...",
+  "common.error": "Error",
+  "common.close": "Cerrar",
+  "common.save": "Guardar",
+  "common.cancel": "Cancelar",
+  "language.select": "Seleccionar Idioma"
+}

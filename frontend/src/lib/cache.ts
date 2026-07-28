@@ -11,6 +11,7 @@
  */
 
 import { DEPLOY_VERSION, CONTRACTS, NETWORK_CONFIG } from "../config/contracts";
+import { safeJsonParse } from "./safeMerge";
 
 // Storage key for tracking the current deployment version
 const VERSION_KEY = "zkvote_deploy_version";
@@ -83,7 +84,7 @@ export function getCached<T>(key: string): T | null {
   try {
     const item = localStorage.getItem(key);
     if (!item) return null;
-    return JSON.parse(item) as T;
+    return safeJsonParse<T>(item);
   } catch {
     return null;
   }

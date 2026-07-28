@@ -13,6 +13,25 @@ primary_region = "sjc"
   # Non-sensitive config - secrets set via `fly secrets set`
   SOROBAN_RPC_URL = "https://rpc-futurenet.stellar.org"
   NETWORK_PASSPHRASE = "Test SDF Future Network ; October 2022"
+  # Matches [[vm]] memory below; used by the memory monitor to compute
+  # usage ratio and trigger a graceful restart before the container OOMs.
+  MEMORY_LIMIT_MB = "512"
+
+# SIGTERM is drained by index.ts's gracefulShutdown() (in-flight requests
+# finish, background services stop, then the process exits). kill_timeout
+# must exceed that internal drain timeout (25s) or Fly will SIGKILL first.
+kill_signal = "SIGTERM"
+kill_timeout = "35s"
+
+[deploy]
+  # Rolling deploy: the new machine must pass its health checks before the
+  # old one is stopped, so there's no window with zero healthy instances.
+  # Migrations are NOT run via release_command: the SQLite data volume can
+  # only be attached to one machine at a time, so a separate release
+  # machine couldn't mount it anyway. Migrations already run automatically
+  # on boot in db.ts's initDb() (idempotent, lock-guarded) — see
+  # DEPLOYMENT.md.
+  strategy = "rolling"
 
 [http_service]
   internal_port = 8080

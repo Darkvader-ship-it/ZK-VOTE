@@ -1267,8 +1267,7 @@ impl Voting {
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
-        if election_config.num_candidates > 0
-            && vote_choice_index >= election_config.num_candidates
+        if election_config.num_candidates > 0 && vote_choice_index >= election_config.num_candidates
         {
             panic_with_error!(&env, VotingError::InvalidCandidateIndex);
         }
@@ -1424,8 +1423,7 @@ impl Voting {
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
-        if election_config.num_candidates > 0
-            && vote_choice_index >= election_config.num_candidates
+        if election_config.num_candidates > 0 && vote_choice_index >= election_config.num_candidates
         {
             panic_with_error!(&env, VotingError::InvalidCandidateIndex);
         }
@@ -1941,8 +1939,7 @@ impl Voting {
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
-        if election_config.num_candidates > 0
-            && vote_choice_index >= election_config.num_candidates
+        if election_config.num_candidates > 0 && vote_choice_index >= election_config.num_candidates
         {
             panic_with_error!(&env, VotingError::InvalidCandidateIndex);
         }

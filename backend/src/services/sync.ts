@@ -28,6 +28,7 @@ import {
   daosSynced,
   membershipSyncsTotal,
 } from "./metrics.js";
+import { sharedSingleFlight } from "../utils/singleflight.js";
 
 // ============================================
 // IMMUTABLE CACHE SNAPSHOT & CONCURRENCY STATE
@@ -129,6 +130,24 @@ export function onCacheInvalidated(listener: (snapshot: CacheSnapshot) => void):
 }
 
 /**
+ * Evict the oldest entries (in Map insertion order) once a snapshot map
+ * exceeds the configured max size. Bounds memory growth of the DAO caches
+ * (see #191) — insertion-order (FIFO) eviction is used rather than
+ * access-order LRU because these maps are immutable copy-on-write
+ * snapshots, and reordering on read would defeat that concurrency design.
+ */
+export function evictOldestOverflow<K, V>(map: Map<K, V>, maxEntries: number): Map<K, V> {
+  if (map.size <= maxEntries) return map;
+  const trimmed = new Map(map);
+  while (trimmed.size > maxEntries) {
+    const oldestKey = trimmed.keys().next().value;
+    if (oldestKey === undefined) break;
+    trimmed.delete(oldestKey);
+  }
+  return trimmed;
+}
+
+/**
  * Atomically swap cache snapshot reference (Copy-on-Write)
  */
 function swapCacheSnapshot(
@@ -136,9 +155,11 @@ function swapCacheSnapshot(
   newAdmins: Map<number, string>
 ): CacheSnapshot {
   const nextVersion = currentSnapshot.version + 1;
+  const boundedMembers = evictOldestOverflow(newMembers, config.maxCachedDaos);
+  const boundedAdmins = evictOldestOverflow(newAdmins, config.maxCachedDaos);
   const nextSnapshot: CacheSnapshot = {
-    daoMembers: newMembers,
-    daoAdmins: newAdmins,
+    daoMembers: boundedMembers,
+    daoAdmins: boundedAdmins,
     version: nextVersion,
     updatedAt: new Date().toISOString(),
   };
@@ -220,136 +241,138 @@ export const daoAdminsCache = new Proxy(new Map<number, string>(), {
  * Sync all DAOs from the DAO Registry contract to local cache
  */
 export async function syncDaosFromContract(): Promise<number> {
-  if (
-    !config.daoRegistryContractId ||
-    !isValidContractId(config.daoRegistryContractId)
-  ) {
-    log("warn", "dao_sync_skipped", {
-      reason: "DAO_REGISTRY_CONTRACT_ID not configured",
-    });
-    return 0;
-  }
-
-  try {
-    log("info", "dao_sync_start");
-
-    const contract = new StellarSdk.Contract(config.daoRegistryContractId);
-    const account = await (server as StellarSdk.rpc.Server).getAccount(
-      relayerKeypair.publicKey(),
-    );
-
-    // Get DAO count
-    const countOp = contract.call("dao_count");
-    const countTx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100",
-      networkPassphrase: config.networkPassphrase,
-    })
-      .addOperation(countOp)
-      .setTimeout(30)
-      .build();
-
-    const countSimResult = await callWithTimeout(
-      () =>
-        simulateWithBackoff(() =>
-          (server as StellarSdk.rpc.Server).simulateTransaction(countTx),
-        ),
-      "simulate_dao_count",
-    );
-
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(countSimResult)) {
-      log("warn", "dao_count_failed", { error: countSimResult.error });
+  return sharedSingleFlight.do("daos", async () => {
+    if (
+      !config.daoRegistryContractId ||
+      !isValidContractId(config.daoRegistryContractId)
+    ) {
+      log("warn", "dao_sync_skipped", {
+        reason: "DAO_REGISTRY_CONTRACT_ID not configured",
+      });
       return 0;
     }
 
-    const daoCount = Number(
-      StellarSdk.scValToNative(countSimResult.result!.retval!),
-    );
-    log("info", "dao_count_fetched", { count: daoCount });
+    try {
+      log("info", "dao_sync_start");
 
-    if (daoCount === 0) {
-      dbService.setDaosSyncTime(new Date().toISOString());
-      return 0;
-    }
+      const contract = new StellarSdk.Contract(config.daoRegistryContractId);
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
 
-    // Fetch each DAO with bounded parallelism
-    const daos: Dao[] = [];
-    const daoIds = Array.from({ length: daoCount }, (_, i) => i + 1);
-    const DAO_CHUNK_SIZE = 5;
+      // Get DAO count
+      const countOp = contract.call("dao_count");
+      const countTx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(countOp)
+        .setTimeout(30)
+        .build();
 
-    const fetchDao = async (i: number): Promise<void> => {
-      try {
-        const daoAccount = await (server as StellarSdk.rpc.Server).getAccount(
-          relayerKeypair.publicKey(),
-        );
-        const getOp = contract.call(
-          "get_dao",
-          StellarSdk.nativeToScVal(i, { type: "u64" }),
-        );
-        const getTx = new StellarSdk.TransactionBuilder(daoAccount, {
-          fee: "100",
-          networkPassphrase: config.networkPassphrase,
-        })
-          .addOperation(getOp)
-          .setTimeout(30)
-          .build();
+      const countSimResult = await callWithTimeout(
+        () =>
+          simulateWithBackoff(() =>
+            (server as StellarSdk.rpc.Server).simulateTransaction(countTx),
+          ),
+        "simulate_dao_count",
+      );
 
-        const getSimResult = await callWithTimeout(
-          () =>
-            simulateWithBackoff(() =>
-              (server as StellarSdk.rpc.Server).simulateTransaction(getTx),
-            ),
-          `simulate_get_dao_${i}`,
-        );
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(countSimResult)) {
+        log("warn", "dao_count_failed", { error: countSimResult.error });
+        return 0;
+      }
 
-        if (
-          StellarSdk.rpc.Api.isSimulationSuccess(getSimResult) &&
-          getSimResult.result?.retval
-        ) {
-          const daoData = StellarSdk.scValToNative(getSimResult.result.retval);
-          daos.push({
-            id: i,
-            name: daoData.name || `DAO ${i}`,
-            creator: daoData.creator || "",
-            membership_open: daoData.membership_open !== false,
-            members_can_propose: daoData.members_can_propose === true,
-            metadata_cid: daoData.metadata_cid || null,
-            member_count: Number(daoData.member_count || 0),
+      const daoCount = Number(
+        StellarSdk.scValToNative(countSimResult.result!.retval!),
+      );
+      log("info", "dao_count_fetched", { count: daoCount });
+
+      if (daoCount === 0) {
+        dbService.setDaosSyncTime(new Date().toISOString());
+        return 0;
+      }
+
+      // Fetch each DAO with bounded parallelism
+      const daos: Dao[] = [];
+      const daoIds = Array.from({ length: daoCount }, (_, i) => i + 1);
+      const DAO_CHUNK_SIZE = 5;
+
+      const fetchDao = async (i: number): Promise<void> => {
+        try {
+          const daoAccount = await (server as StellarSdk.rpc.Server).getAccount(
+            relayerKeypair.publicKey(),
+          );
+          const getOp = contract.call(
+            "get_dao",
+            StellarSdk.nativeToScVal(i, { type: "u64" }),
+          );
+          const getTx = new StellarSdk.TransactionBuilder(daoAccount, {
+            fee: "100",
+            networkPassphrase: config.networkPassphrase,
+          })
+            .addOperation(getOp)
+            .setTimeout(30)
+            .build();
+
+          const getSimResult = await callWithTimeout(
+            () =>
+              simulateWithBackoff(() =>
+                (server as StellarSdk.rpc.Server).simulateTransaction(getTx),
+              ),
+            `simulate_get_dao_${i}`,
+          );
+
+          if (
+            StellarSdk.rpc.Api.isSimulationSuccess(getSimResult) &&
+            getSimResult.result?.retval
+          ) {
+            const daoData = StellarSdk.scValToNative(getSimResult.result.retval);
+            daos.push({
+              id: i,
+              name: daoData.name || `DAO ${i}`,
+              creator: daoData.creator || "",
+              membership_open: daoData.membership_open !== false,
+              members_can_propose: daoData.members_can_propose === true,
+              metadata_cid: daoData.metadata_cid || null,
+              member_count: Number(daoData.member_count || 0),
+            });
+          }
+        } catch (err) {
+          log("warn", "dao_fetch_failed", {
+            daoId: i,
+            error: (err as Error).message,
           });
         }
-      } catch (err) {
-        log("warn", "dao_fetch_failed", {
-          daoId: i,
-          error: (err as Error).message,
-        });
+      };
+
+      for (let i = 0; i < daoIds.length; i += DAO_CHUNK_SIZE) {
+        const chunk = daoIds.slice(i, i + DAO_CHUNK_SIZE);
+        await Promise.all(chunk.map((id) => fetchDao(id)));
       }
-    };
 
-    for (let i = 0; i < daoIds.length; i += DAO_CHUNK_SIZE) {
-      const chunk = daoIds.slice(i, i + DAO_CHUNK_SIZE);
-      await Promise.all(chunk.map((id) => fetchDao(id)));
-    }
+      // Save to database
+      if (daos.length > 0) {
+        dbService.upsertDaos(daos);
 
-    // Save to database
-    if (daos.length > 0) {
-      dbService.upsertDaos(daos);
-
-      // Ensure dao_create events exist
-      for (const dao of daos) {
-        ensureDaoCreateEvent(dao.id, dao);
+        // Ensure dao_create events exist
+        for (const dao of daos) {
+          ensureDaoCreateEvent(dao.id, dao);
+        }
       }
+
+      dbService.setDaosSyncTime(new Date().toISOString());
+      daosSynced.inc(daos.length);
+      serviceLastRunTime.set({ service: "dao_sync" }, Date.now() / 1000);
+      log("info", "dao_sync_complete", { synced: daos.length, total: daoCount });
+
+      return daos.length;
+    } catch (err) {
+      serviceErrors.inc({ service: "dao_sync" });
+      log("error", "dao_sync_error", { error: (err as Error).message });
+      return 0;
     }
-
-    dbService.setDaosSyncTime(new Date().toISOString());
-    daosSynced.inc(daos.length);
-    serviceLastRunTime.set({ service: "dao_sync" }, Date.now() / 1000);
-    log("info", "dao_sync_complete", { synced: daos.length, total: daoCount });
-
-    return daos.length;
-  } catch (err) {
-    serviceErrors.inc({ service: "dao_sync" });
-    log("error", "dao_sync_error", { error: (err as Error).message });
-    return 0;
-  }
+  });
 }
 
 let daoSyncInterval: NodeJS.Timeout | null = null;
@@ -574,4 +597,185 @@ export function stopMembershipSync(): void {
 export async function triggerDaoMembershipSync(daoId: number): Promise<void> {
   log("info", "triggered_membership_sync", { daoId });
   await syncDaoMembership(daoId);
+}
+
+// ============================================
+// REAL-TIME MEMBERSHIP VERIFICATION
+//
+// daoMembersCache (above) is refreshed on a periodic interval and is fine for
+// non-critical reads (e.g. displaying a user's role). For security-critical
+// writes, a stale cache creates a window where a just-revoked member is still
+// treated as a member. verifyMembership() closes that window by reading the
+// SBT contract's `has()` directly, with a short-TTL result cache so bursts of
+// writes from the same caller don't each pay a full RPC round trip.
+// ============================================
+
+const MEMBERSHIP_VERIFICATION_TTL_MS = 30_000;
+
+interface MembershipVerificationEntry {
+  result: boolean;
+  expiresAt: number;
+}
+
+const membershipVerificationCache = new Map<string, MembershipVerificationEntry>();
+
+interface MembershipVerificationMetrics {
+  checks: number;
+  chainCalls: number;
+  cacheHits: number;
+  mismatches: number;
+  errors: number;
+  totalLatencyMs: number;
+  maxLatencyMs: number;
+}
+
+const membershipVerificationMetrics: MembershipVerificationMetrics = {
+  checks: 0,
+  chainCalls: 0,
+  cacheHits: 0,
+  mismatches: 0,
+  errors: 0,
+  totalLatencyMs: 0,
+  maxLatencyMs: 0,
+};
+
+/**
+ * Latency/hit-rate/mismatch metrics for verifyMembership(), for monitoring.
+ */
+export function getMembershipVerificationMetrics(): {
+  checks: number;
+  chainCalls: number;
+  cacheHits: number;
+  mismatches: number;
+  errors: number;
+  avgLatencyMs: number;
+  maxLatencyMs: number;
+} {
+  const { checks, chainCalls, cacheHits, mismatches, errors, totalLatencyMs, maxLatencyMs } =
+    membershipVerificationMetrics;
+  return {
+    checks,
+    chainCalls,
+    cacheHits,
+    mismatches,
+    errors,
+    avgLatencyMs:
+      chainCalls > 0 ? Math.round((totalLatencyMs / chainCalls) * 100) / 100 : 0,
+    maxLatencyMs,
+  };
+}
+
+function membershipCacheKey(daoId: number, address: string): string {
+  return `${daoId}:${address}`;
+}
+
+/** Test/ops hook: clear the short-TTL verification cache. */
+export function clearMembershipVerificationCache(): void {
+  membershipVerificationCache.clear();
+}
+
+/**
+ * Real-time on-chain membership check via the Membership SBT contract's
+ * `has(dao_id, of)` read entrypoint — the source of truth for write-path
+ * authorization. Results are cached for MEMBERSHIP_VERIFICATION_TTL_MS (30s)
+ * to bound RPC load; a cache miss/mismatch against the periodic daoMembersCache
+ * is logged for monitoring. Throws if the on-chain check itself cannot be
+ * completed (RPC error) — callers should fail closed (reject the write)
+ * rather than silently falling back to the periodic cache.
+ */
+export async function verifyMembership(
+  daoId: number,
+  address: string,
+): Promise<boolean> {
+  membershipVerificationMetrics.checks++;
+
+  const key = membershipCacheKey(daoId, address);
+  const cached = membershipVerificationCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    membershipVerificationMetrics.cacheHits++;
+    return cached.result;
+  }
+
+  if (
+    !config.membershipSbtContractId ||
+    !isValidContractId(config.membershipSbtContractId)
+  ) {
+    throw new Error(
+      "Membership verification unavailable: MEMBERSHIP_SBT_CONTRACT_ID not configured",
+    );
+  }
+
+  const start = Date.now();
+  try {
+    const sbtContract = new StellarSdk.Contract(config.membershipSbtContractId);
+    const account = await (server as StellarSdk.rpc.Server).getAccount(
+      relayerKeypair.publicKey(),
+    );
+    const operation = sbtContract.call(
+      "has",
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.xdr.ScVal.scvAddress(
+        StellarSdk.Address.fromString(address).toScAddress(),
+      ),
+    );
+    const tx = new StellarSdk.TransactionBuilder(account, {
+      fee: "100",
+      networkPassphrase: config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await callWithTimeout(
+      () =>
+        simulateWithBackoff(() =>
+          (server as StellarSdk.rpc.Server).simulateTransaction(tx),
+        ),
+      `simulate_verify_membership_${daoId}`,
+    );
+
+    if (
+      !StellarSdk.rpc.Api.isSimulationSuccess(simResult) ||
+      !simResult.result?.retval
+    ) {
+      throw new Error("Membership verification simulation failed");
+    }
+
+    const isMember = Boolean(
+      StellarSdk.scValToNative(simResult.result.retval),
+    );
+    const latencyMs = Date.now() - start;
+    membershipVerificationMetrics.chainCalls++;
+    membershipVerificationMetrics.totalLatencyMs += latencyMs;
+    membershipVerificationMetrics.maxLatencyMs = Math.max(
+      membershipVerificationMetrics.maxLatencyMs,
+      latencyMs,
+    );
+
+    const cachedMembers = getDaoMembersFromCache(daoId);
+    const cachedSaysMember = cachedMembers?.has(address) ?? false;
+    if (cachedSaysMember !== isMember) {
+      membershipVerificationMetrics.mismatches++;
+      log("warn", "membership_cache_mismatch", {
+        daoId,
+        cachedMember: cachedSaysMember,
+        onChainMember: isMember,
+      });
+    }
+
+    membershipVerificationCache.set(key, {
+      result: isMember,
+      expiresAt: Date.now() + MEMBERSHIP_VERIFICATION_TTL_MS,
+    });
+
+    log("debug", "membership_verified_realtime", { daoId, isMember, latencyMs });
+    return isMember;
+  } catch (err) {
+    membershipVerificationMetrics.errors++;
+    log("error", "membership_verify_failed", {
+      daoId,
+      error: (err as Error).message,
+    });
+    throw err;
+  }
 }
