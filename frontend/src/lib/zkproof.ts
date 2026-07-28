@@ -41,6 +41,15 @@ export interface GeneratedProof {
   publicSignals: string[];
 }
 
+let activeProofGenerationCount = 0;
+
+/**
+ * Check whether a proof generation operation is currently running.
+ */
+export function isProofGenerationActive(): boolean {
+  return activeProofGenerationCount > 0;
+}
+
 /**
  * Generate a Groth16 proof for anonymous voting
  * @param input Proof input parameters
@@ -53,6 +62,12 @@ export async function generateVoteProof(
   wasmPath: string | Uint8Array,
   zkeyPath: string | Uint8Array,
 ): Promise<GeneratedProof> {
+  if (activeProofGenerationCount > 0) {
+    throw new Error(
+      "A proof generation process is already in progress. Please wait for it to finish.",
+    );
+  }
+  activeProofGenerationCount++;
   try {
     const circuitVersion = input.circuitVersion || "v1";
 
@@ -99,6 +114,8 @@ export async function generateVoteProof(
     throw new Error(
       `Vote proof generation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
     );
+  } finally {
+    activeProofGenerationCount = Math.max(0, activeProofGenerationCount - 1);
   }
 }
 
@@ -130,6 +147,12 @@ export async function generateCommentProof(
   wasmPath: string | Uint8Array = "/circuits/comment/comment.wasm",
   zkeyPath: string | Uint8Array = "/circuits/comment/comment_final.zkey",
 ): Promise<GeneratedProof> {
+  if (activeProofGenerationCount > 0) {
+    throw new Error(
+      "A proof generation process is already in progress. Please wait for it to finish.",
+    );
+  }
+  activeProofGenerationCount++;
   try {
     const circuitVersion = input.circuitVersion || "v1";
 
@@ -178,6 +201,8 @@ export async function generateCommentProof(
     throw new Error(
       `Comment proof generation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
     );
+  } finally {
+    activeProofGenerationCount = Math.max(0, activeProofGenerationCount - 1);
   }
 }
 

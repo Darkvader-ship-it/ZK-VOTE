@@ -334,6 +334,7 @@ export default function VoteModal({
                 <div className="grid grid-cols-2 gap-4 pt-2">
                   <Button
                     onClick={() => handleVote(true)}
+                    disabled={step !== "select"}
                     variant="outline"
                     className="h-12 text-lg"
                   >
@@ -341,6 +342,7 @@ export default function VoteModal({
                   </Button>
                   <Button
                     onClick={() => handleVote(false)}
+                    disabled={step !== "select"}
                     variant="outline"
                     className="h-12 text-lg"
                   >

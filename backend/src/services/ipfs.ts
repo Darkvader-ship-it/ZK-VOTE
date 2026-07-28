@@ -212,8 +212,14 @@ export function sanitizeMetadata<T>(data: T): T {
   if (data && typeof data === "object") {
     const sanitized: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(data)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype" || key.startsWith("__")) {
+        continue;
+      }
       // Sanitize both keys and values
       const sanitizedKey = sanitizeString(key);
+      if (sanitizedKey === "__proto__" || sanitizedKey === "constructor" || sanitizedKey === "prototype" || sanitizedKey.startsWith("__")) {
+        continue;
+      }
       sanitized[sanitizedKey] = sanitizeMetadata(value);
     }
     return sanitized as T;
