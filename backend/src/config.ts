@@ -138,6 +138,13 @@ export const config = {
   archivalAgeDays: Number(process.env.ARCHIVAL_AGE_DAYS || 90),
   archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
 
+  // Proof Security & Mitigations
+  maxProofAgeSeconds: Number(process.env.MAX_PROOF_AGE_SECONDS || 300),
+  requireClientCert: process.env.REQUIRE_CLIENT_CERT === "true",
+  walletRateLimitMax: Number(process.env.WALLET_RATE_LIMIT_MAX || 5),
+  walletRateLimitWindowMs: Number(process.env.WALLET_RATE_LIMIT_WINDOW_MS || 60_000),
+  relayerPublicKey: process.env.RELAYER_PUBLIC_KEY || "",
+
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
 } as const;

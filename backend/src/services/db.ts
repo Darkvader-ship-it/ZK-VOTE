@@ -291,6 +291,22 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
     ],
     indexes: [{ name: "idx_ttl_cost_cycle", columns: ["cycle_id"] }],
   },
+  proof_commitments: {
+    columns: [
+      { name: "commitment_hash", type: "TEXT", notNull: true, primaryKey: true },
+      { name: "nullifier", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "proposal_id", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "wallet_address", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "timestamp", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "status", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      { name: "idx_commitments_nullifier", columns: ["nullifier"] },
+      { name: "idx_commitments_wallet", columns: ["wallet_address"] },
+    ],
+  },
 };
 
 function normalizeType(t: string): string {
@@ -619,6 +635,20 @@ export function initDb(dbPath?: string): DatabaseType {
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS proof_commitments (
+      commitment_hash TEXT PRIMARY KEY,
+      nullifier TEXT NOT NULL,
+      dao_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      wallet_address TEXT,
+      timestamp INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_commitments_nullifier ON proof_commitments(nullifier);
+    CREATE INDEX IF NOT EXISTS idx_commitments_wallet ON proof_commitments(wallet_address);
+
     -- Keep the old events table temporarily during migration,
     -- then drop it once migration completes.
     CREATE TABLE IF NOT EXISTS events (
@@ -727,6 +757,13 @@ export function initDb(dbPath?: string): DatabaseType {
   });
   // feat: events partitioning, db monitoring, migration framework, and data integrity constraints
   return database;
+}
+
+/**
+ * Get active database instance or initialize default.
+ */
+export function getDb(): DatabaseType {
+  return initDb();
 }
 
 /**
@@ -1984,3 +2021,68 @@ export function getTotalTTLCostXLM(): number {
     .get() as { total: number };
   return row.total;
 }
+
+// ============================================
+// PROOF COMMITMENT STORAGE
+// ============================================
+
+export interface ProofCommitmentRecord {
+  commitmentHash: string;
+  nullifier: string;
+  daoId: number;
+  proposalId: number;
+  walletAddress?: string | null;
+  timestamp: number;
+  status: "COMMITTED" | "REVEALED" | "EXPIRED";
+  createdAt: string;
+}
+
+export function recordProofCommitment(
+  commitmentHash: string,
+  nullifier: string,
+  daoId: number,
+  proposalId: number,
+  timestamp: number,
+  walletAddress?: string | null,
+): void {
+  const database = initDb();
+  const createdAt = new Date().toISOString();
+  database
+    .prepare(
+      `INSERT INTO proof_commitments (commitment_hash, nullifier, dao_id, proposal_id, wallet_address, timestamp, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'COMMITTED', ?)
+       ON CONFLICT(commitment_hash) DO UPDATE SET timestamp = excluded.timestamp, status = 'COMMITTED'`,
+    )
+    .run(commitmentHash, nullifier, daoId, proposalId, walletAddress || null, timestamp, createdAt);
+}
+
+export function getProofCommitment(commitmentHash: string): ProofCommitmentRecord | null {
+  const database = initDb();
+  const row = database
+    .prepare("SELECT * FROM proof_commitments WHERE commitment_hash = ?")
+    .get(commitmentHash) as Record<string, unknown> | undefined;
+
+  if (!row) return null;
+
+  return {
+    commitmentHash: row.commitment_hash as string,
+    nullifier: row.nullifier as string,
+    daoId: row.dao_id as number,
+    proposalId: row.proposal_id as number,
+    walletAddress: row.wallet_address as string | null,
+    timestamp: row.timestamp as number,
+    status: row.status as "COMMITTED" | "REVEALED" | "EXPIRED",
+    createdAt: row.created_at as string,
+  };
+}
+
+export function updateProofCommitmentStatus(
+  commitmentHash: string,
+  status: "COMMITTED" | "REVEALED" | "EXPIRED",
+): void {
+  const database = initDb();
+  database
+    .prepare("UPDATE proof_commitments SET status = ? WHERE commitment_hash = ?")
+    .run(status, commitmentHash);
+}
+

@@ -223,23 +223,50 @@ const txHash = z
   .regex(/^[0-9a-fA-F]{64}$/, "Invalid transaction hash format");
 
 // ============================================
-// VOTE SCHEMA
+// PROOF COMMITMENT SCHEMA
 // ============================================
 
-export const voteSchema = z.object({
+export const commitSchema = z.object({
   daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
   proposalId: z
     .number()
     .int()
     .nonnegative("proposalId must be a non-negative integer"),
-  choice: z.boolean({
-    required_error: "choice is required",
-    invalid_type_error: "choice must be a boolean",
-  }),
   nullifier: bn254Field,
-  root: bn254Field,
-  proof: groth16Proof,
+  commitmentHash: commitmentHash,
+  timestamp: z.number().int().positive("timestamp must be a positive integer"),
+  walletAddress: z.string().optional(),
 });
+
+export type CommitRequest = z.infer<typeof commitSchema>;
+
+// ============================================
+// VOTE SCHEMA
+// ============================================
+
+export const voteSchema = z
+  .object({
+    daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
+    proposalId: z
+      .number()
+      .int()
+      .nonnegative("proposalId must be a non-negative integer"),
+    choice: z.boolean({
+      required_error: "choice is required",
+      invalid_type_error: "choice must be a boolean",
+    }),
+    nullifier: bn254Field.optional(),
+    root: bn254Field.optional(),
+    proof: groth16Proof.optional(),
+    nonce: z.string().optional(),
+    timestamp: z.number().int().optional(),
+    walletAddress: z.string().optional(),
+    encryptedPayload: z.union([z.string(), z.record(z.unknown())]).optional(),
+  })
+  .refine(
+    (data) => data.encryptedPayload || (data.nullifier && data.root && data.proof),
+    { message: "Either encryptedPayload or full vote payload (nullifier, root, proof) must be provided" },
+  );
 
 export type VoteRequest = z.infer<typeof voteSchema>;
 
