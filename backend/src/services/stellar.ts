@@ -73,10 +73,20 @@ export const relayerKeypair = _relayerKeypair;
  * Promise-based mutex to serialize transaction submissions.
  * Prevents nonce race conditions when multiple requests try to
  * build+submit transactions concurrently using the same relayer account.
+ * Uses IPC distributed sequence lock when running in cluster mode.
  */
 let sequenceLock: Promise<void> = Promise.resolve();
 
 export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (config.clusterEnabled && cluster.isWorker) {
+    await acquireClusterSequenceLock();
+    try {
+      return await fn();
+    } finally {
+      await releaseClusterSequenceLock();
+    }
+  }
+
   const previous = sequenceLock;
   let resolve: () => void;
   sequenceLock = new Promise<void>((r) => {
