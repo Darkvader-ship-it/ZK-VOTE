@@ -9,12 +9,19 @@ import {
 } from "@creit.tech/stellar-wallets-kit";
 import type { ISupportedWallet } from "@creit.tech/stellar-wallets-kit";
 import { NETWORK_CONFIG } from "../config/contracts";
+import {
+  listenToAccountChange,
+  listenToNetworkChange,
+  persistConnectionIntent,
+} from "../services/freighter";
+import { clearAllStores } from "../store";
 
 export interface WalletState {
   publicKey: string | null;
   isConnected: boolean;
   isInitializing: boolean;
   kit: StellarWalletsKit | null;
+  networkWarning?: string | null;
 }
 
 let globalKit: StellarWalletsKit | null = null;
@@ -68,7 +75,50 @@ export function useWallet() {
     isConnected: false,
     isInitializing: true,
     kit: null,
+    networkWarning: null,
   });
+
+  useEffect(() => {
+    let unlistenAccount: (() => void) | null = null;
+    let unlistenNetwork: (() => void) | null = null;
+
+    if (wallet.isConnected) {
+      unlistenAccount = listenToAccountChange((newAccount) => {
+        if (!newAccount) {
+          setWallet((prev) => ({
+            ...prev,
+            publicKey: null,
+            isConnected: false,
+          }));
+        } else {
+          setWallet((prev) => ({
+            ...prev,
+            publicKey: newAccount,
+            isConnected: true,
+          }));
+        }
+      });
+
+      unlistenNetwork = listenToNetworkChange((net) => {
+        if (net && !NETWORK_CONFIG.networkPassphrase.toLowerCase().includes(net.toLowerCase())) {
+          setWallet((prev) => ({
+            ...prev,
+            networkWarning: `Wallet network is set to "${net}", but app expects target network. Please switch networks in wallet.`,
+          }));
+        } else {
+          setWallet((prev) => ({
+            ...prev,
+            networkWarning: null,
+          }));
+        }
+      });
+    }
+
+    return () => {
+      if (unlistenAccount) unlistenAccount();
+      if (unlistenNetwork) unlistenNetwork();
+    };
+  }, [wallet.isConnected]);
 
   useEffect(() => {
     // Initialize kit only once
@@ -152,12 +202,14 @@ export function useWallet() {
 
           // Store wallet selection in localStorage for persistence
           safeLocalStorageSet("selectedWalletId", option.id);
+          persistConnectionIntent(true);
 
           setWallet({
             publicKey: address,
             isConnected: true,
             isInitializing: false,
             kit: globalKit,
+            networkWarning: null,
           });
         },
       });
@@ -170,6 +222,8 @@ export function useWallet() {
   const disconnect = useCallback(() => {
     // Clear stored wallet selection
     safeLocalStorageRemove("selectedWalletId");
+    persistConnectionIntent(false);
+    clearAllStores();
 
     // Clear all Stellar Wallets Kit localStorage entries
     // The library stores data with keys prefixed with "SWK" or containing "stellar"
