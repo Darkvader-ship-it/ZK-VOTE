@@ -36,6 +36,7 @@ import {
   updateTransactionLogStatus,
 } from "../services/db.js";
 import { votesProcessed } from "../services/metrics.js";
+import { sharedSingleFlight } from "../utils/singleflight.js";
 
 const router = Router();
 
@@ -281,61 +282,73 @@ router.get("/proposal/:daoId/:proposalId", queryLimiter, validateParams(proposal
   const { daoId, proposalId } = (req as any).validatedParams;
 
   try {
-    const contract = new StellarSdk.Contract(config.votingContractId!);
-    const args = [
-      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
-      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
-    ];
+    const result = await sharedSingleFlight.do(`proposal:${daoId}:${proposalId}`, async () => {
+      const contract = new StellarSdk.Contract(config.votingContractId!);
+      const args = [
+        StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+        StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
+      ];
 
-    const operation = contract.call("get_results", ...args);
+      const operation = contract.call("get_results", ...args);
 
-    const account = await (server as StellarSdk.rpc.Server).getAccount(
-      relayerKeypair.publicKey(),
-    );
-    const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100000",
-      networkPassphrase: config.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
+      const tx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
 
-    const simResult = await (
-      server as StellarSdk.rpc.Server
-    ).simulateTransaction(tx);
+      const simResult = await (
+        server as StellarSdk.rpc.Server
+      ).simulateTransaction(tx);
 
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+        throw new Error("PROPOSAL_NOT_FOUND");
+      }
+
+      // Parse results from simulation
+      const resultScVal = simResult.result?.retval;
+      if (!resultScVal) {
+        throw new Error("NO_RESULT_RETURNED");
+      }
+
+      // Parse the tuple (yes_votes, no_votes, closed)
+      const resultVec = resultScVal.vec();
+      if (!resultVec || resultVec.length < 3) {
+        throw new Error("INVALID_RESULT_FORMAT");
+      }
+
+      const yesVotes = resultVec[0].u64().toString();
+      const noVotes = resultVec[1].u64().toString();
+      const closed = resultVec[2].b();
+
+      return {
+        daoId,
+        proposalId,
+        yesVotes,
+        noVotes,
+        closed,
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    if (errMsg === "PROPOSAL_NOT_FOUND") {
       return res.status(404).json({ error: "Proposal not found" });
-    }
-
-    // Parse results from simulation
-    const resultScVal = simResult.result?.retval;
-    if (!resultScVal) {
+    } else if (errMsg === "NO_RESULT_RETURNED") {
       return res.status(500).json({ error: "No result returned" });
-    }
-
-    // Parse the tuple (yes_votes, no_votes, closed)
-    const resultVec = resultScVal.vec();
-    if (!resultVec || resultVec.length < 3) {
+    } else if (errMsg === "INVALID_RESULT_FORMAT") {
       return res.status(500).json({ error: "Invalid result format" });
     }
-
-    const yesVotes = resultVec[0].u64().toString();
-    const noVotes = resultVec[1].u64().toString();
-    const closed = resultVec[2].b();
-
-    res.json({
-      daoId,
-      proposalId,
-      yesVotes,
-      noVotes,
-      closed,
-    });
-  } catch (err) {
     log("error", "proposal_fetch_error", {
       daoId,
       proposalId,
-      error: (err as Error).message,
+      error: errMsg,
     });
     res.status(500).json({ error: "Failed to fetch proposal results" });
   }
@@ -351,45 +364,55 @@ router.get("/root/:daoId", queryLimiter, validateParams(daoParamsSchema), (async
   const { daoId } = (req as any).validatedParams;
 
   try {
-    const contract = new StellarSdk.Contract(config.treeContractId!);
-    const args = [StellarSdk.nativeToScVal(daoId, { type: "u64" })];
+    const result = await sharedSingleFlight.do(`root:${daoId}`, async () => {
+      const contract = new StellarSdk.Contract(config.treeContractId!);
+      const args = [StellarSdk.nativeToScVal(daoId, { type: "u64" })];
 
-    const operation = contract.call("get_root", ...args);
+      const operation = contract.call("get_root", ...args);
 
-    const account = await (server as StellarSdk.rpc.Server).getAccount(
-      relayerKeypair.publicKey(),
-    );
-    const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100000",
-      networkPassphrase: config.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
+      const tx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
 
-    const simResult = await (
-      server as StellarSdk.rpc.Server
-    ).simulateTransaction(tx);
+      const simResult = await (
+        server as StellarSdk.rpc.Server
+      ).simulateTransaction(tx);
 
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+        throw new Error("DAO_NOT_FOUND");
+      }
+
+      const resultScVal = simResult.result?.retval;
+      if (!resultScVal) {
+        throw new Error("NO_RESULT_RETURNED");
+      }
+
+      const root = scValToU256Hex(resultScVal);
+
+      return {
+        daoId,
+        root,
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    if (errMsg === "DAO_NOT_FOUND") {
       return res
         .status(404)
         .json({ error: "DAO not found or tree not initialized" });
-    }
-
-    const resultScVal = simResult.result?.retval;
-    if (!resultScVal) {
+    } else if (errMsg === "NO_RESULT_RETURNED") {
       return res.status(500).json({ error: "No result returned" });
     }
-
-    const root = scValToU256Hex(resultScVal);
-
-    res.json({
-      daoId,
-      root,
-    });
-  } catch (err) {
-    log("error", "root_fetch_error", { daoId, error: (err as Error).message });
+    log("error", "root_fetch_error", { daoId, error: errMsg });
     res.status(500).json({ error: "Failed to fetch Merkle root" });
   }
 }) as AsyncHandler);

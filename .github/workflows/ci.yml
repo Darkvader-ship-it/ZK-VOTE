@@ -88,6 +88,8 @@ jobs:
         run: npm run lint
       - name: Format check
         run: npx prettier --check "src/**/*.ts"
+      - name: Validate environment profiles
+        run: npm run validate-profiles
       - name: Run tests
         run: npm test
         env:

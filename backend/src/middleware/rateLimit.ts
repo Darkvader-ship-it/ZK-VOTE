@@ -44,6 +44,7 @@ function hashIp(ip: string | undefined): string {
  * Key generator for rate limiters - uses hashed IP
  */
 const keyGenerator = (req: Express.Request): string =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   hashIp((req as any).ip || "");
 
 // ============================================
@@ -103,6 +104,7 @@ function withMetrics(name: string, limiter: RequestHandler): RequestHandler {
  */
 function makeHandler(name: string, message: string) {
   return (req: Request, res: Response): void => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const info = (req as any).rateLimit as
       | { limit: number; remaining: number; resetTime?: Date }
       | undefined;

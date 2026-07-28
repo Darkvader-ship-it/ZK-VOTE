@@ -62,6 +62,7 @@ import {
   bridgeRoutes,
   circuitRoutes,
   adminRoutes,
+  thresholdRoutes,
 } from "./routes/index.js";
 import { registerShutdownHandler } from "./routes/admin.js";
 
@@ -125,6 +126,7 @@ app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
 app.use(adminRoutes);
+app.use(thresholdRoutes);
 
 // OpenAPI spec + interactive docs
 const openApiDocument = buildOpenApiDocument();
@@ -256,6 +258,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       try {
         await startIndexer(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           server as any,
           contractIds,
           config.indexerPollIntervalMs,
