@@ -6,6 +6,12 @@
  */
 
 import { type Database as DatabaseType } from "better-sqlite3";
+import {
+  dbQueriesTotal,
+  dbQueryDuration,
+  dbSlowQueries,
+  dbCacheHitRate,
+} from "./metrics.js";
 
 // ============================================
 // CONFIGURATION
@@ -105,6 +111,7 @@ function recordQuery(
   const isSlow = durationMs >= SLOW_QUERY_THRESHOLD_MS;
   if (isSlow) {
     slowQueries++;
+    dbSlowQueries.inc();
     log("warn", "slow_query", {
       operation,
       durationMs: Math.round(durationMs),
@@ -112,6 +119,16 @@ function recordQuery(
       avgMs: Math.round(runningAvgMs),
       ...extra,
     });
+  }
+
+  // Record Prometheus metrics for every query
+  dbQueriesTotal.inc({ operation, status: isSlow ? "slow" : "ok" });
+  dbQueryDuration.observe({ operation }, durationMs / 1000);
+
+  // Update cache hit rate gauge
+  const total = cacheHits + cacheMisses;
+  if (total > 0) {
+    dbCacheHitRate.set(cacheHits / total);
   }
 
   // EXPLAIN complex queries that exceed the explain threshold

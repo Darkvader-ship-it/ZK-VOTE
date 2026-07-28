@@ -32,7 +32,7 @@ import { startIndexer, stopIndexer } from "./services/indexer.js";
 import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
 
 // Middleware
-import { csrfGuard, requestLogger, errorHandler } from "./middleware/index.js";
+import { csrfGuard, requestLogger, errorHandler, metricsMiddleware } from "./middleware/index.js";
 
 // Routes
 import {
@@ -46,6 +46,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  metricsRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -62,6 +63,9 @@ const app: Express = express();
 
 // Security: HTTP headers
 app.use(helmet());
+
+// Metrics middleware (before other middleware to capture all requests)
+app.use(metricsMiddleware);
 
 // Security: CORS configuration
 const corsOrigins = config.corsOrigins === "*" ? "*" : config.corsOrigins;
@@ -90,7 +94,8 @@ app.use(csrfGuard);
 initHealthRoutes(server, relayerKeypair.publicKey());
 initIndexerRoutes(triggerDaoMembershipSync);
 
-// Mount route handlers
+// Mount route handlers (metrics first, before CSRF/auth middleware)
+app.use(metricsRoutes);
 app.use(healthRoutes);
 app.use(votingRoutes);
 app.use(daoRoutes);

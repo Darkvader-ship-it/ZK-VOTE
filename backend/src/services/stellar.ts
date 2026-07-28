@@ -8,6 +8,14 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { config, BN254_SCALAR_FIELD } from "../config.js";
 import { log, logger } from "./logger.js";
+import {
+  rpcCallsTotal,
+  rpcCallDuration,
+  rpcErrors,
+  rpcPoolHealthyEndpoints,
+  rpcPoolTotalEndpoints,
+  rpcEndpointLatency,
+} from "./metrics.js";
 import type { Groth16Proof } from "../types/index.js";
 
 // ============================================
@@ -148,6 +156,10 @@ export class RpcPoolManager {
         ep.errorCount++;
       }
       ep.lastChecked = Date.now();
+
+      // Update Prometheus gauges per endpoint
+      rpcEndpointLatency.set({ url: ep.url }, ep.latencyMs / 1000);
+
       results.push({
         url: ep.url,
         healthy: ep.healthy,
@@ -156,6 +168,12 @@ export class RpcPoolManager {
         lastChecked: new Date(ep.lastChecked).toISOString(),
       });
     }
+
+    // Update pool-level gauges
+    const healthyCount = results.filter((r) => r.healthy).length;
+    rpcPoolHealthyEndpoints.set(healthyCount);
+    rpcPoolTotalEndpoints.set(results.length);
+
     return results;
   }
 
@@ -203,7 +221,27 @@ export const server: SorobanServer = config.testMode
         get(_target, prop) {
           const activeServer = rpcPoolManager.getActiveServer() as any;
           const value = activeServer[prop];
-          return typeof value === "function" ? value.bind(activeServer) : value;
+          if (typeof value !== "function") return value;
+
+          return async function (...args: unknown[]) {
+            const method = String(prop);
+            const start = process.hrtime.bigint();
+            try {
+              const result = await value.apply(activeServer, args);
+              const duration = Number(process.hrtime.bigint() - start) / 1e9;
+              rpcCallsTotal.inc({ method, status: "success" });
+              rpcCallDuration.observe({ method, status: "success" }, duration);
+              return result;
+            } catch (err) {
+              const duration = Number(process.hrtime.bigint() - start) / 1e9;
+              const errorType =
+                err instanceof Error ? err.constructor.name : "unknown";
+              rpcCallsTotal.inc({ method, status: "error" });
+              rpcCallDuration.observe({ method, status: "error" }, duration);
+              rpcErrors.inc({ method, error_type: errorType });
+              throw err;
+            }
+          };
         },
       },
     ) as SorobanServer);

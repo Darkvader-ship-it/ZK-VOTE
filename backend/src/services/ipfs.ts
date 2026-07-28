@@ -10,6 +10,12 @@ import fs from "node:fs";
 import { PinataSDK } from "pinata";
 import * as pinManager from "./ipfs-pin-manager.js";
 import { getMonitorStatus, type MonitorStatus } from "./ipfs-monitor.js";
+import {
+  ipfsPinsTotal,
+  ipfsFetchDuration,
+  ipfsCacheHits,
+  ipfsCacheMisses,
+} from "./metrics.js";
 
 // ============================================
 // TYPES
@@ -311,6 +317,8 @@ export async function pinJSON(
     });
   }
 
+  ipfsPinsTotal.inc({ type: "json", status: "success" });
+
   // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
   if (backupPath) {
     pinManager.pinToSecondary(result.cid, backupPath, "json").catch(() => {});
@@ -384,6 +392,8 @@ export async function pinFile(
     });
   }
 
+  ipfsPinsTotal.inc({ type: "file", status: "success" });
+
   // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
   if (backupPath) {
     pinManager.pinToSecondary(result.cid, backupPath, "file").catch(() => {});
@@ -456,6 +466,7 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
+  const fetchStart = performance.now();
   try {
     const response = await fetch(url, { signal: controller.signal });
 
@@ -471,16 +482,23 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
     let data: unknown;
     if (contentType.includes("application/json")) {
       data = await response.json();
+      ipfsCacheHits.inc();
     } else {
       data = await response.text();
+      ipfsCacheHits.inc();
     }
 
     return {
       data,
       contentType,
     };
+  } catch (err) {
+    ipfsCacheMisses.inc();
+    throw err;
   } finally {
     clearTimeout(timeout);
+    const fetchDuration = (performance.now() - fetchStart) / 1000;
+    ipfsFetchDuration.observe({ type: "json" }, fetchDuration);
   }
 }
 
@@ -521,6 +539,7 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
+  const fetchStart = performance.now();
   try {
     const response = await fetch(url, { signal: controller.signal });
 
@@ -535,12 +554,19 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
+    ipfsCacheHits.inc();
+
     return {
       buffer,
       contentType,
     };
+  } catch (err) {
+    ipfsCacheMisses.inc();
+    throw err;
   } finally {
     clearTimeout(timeout);
+    const fetchDuration = (performance.now() - fetchStart) / 1000;
+    ipfsFetchDuration.observe({ type: "raw" }, fetchDuration);
   }
 }
 

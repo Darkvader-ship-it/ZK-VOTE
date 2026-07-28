@@ -33,6 +33,7 @@ import {
   recordTransactionLog,
   updateTransactionLogStatus,
 } from "../services/db.js";
+import { votesProcessed } from "../services/metrics.js";
 
 const router = Router();
 
@@ -191,6 +192,7 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
       if (nullifier && sendResult.hash) {
         updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
       }
+      votesProcessed.inc({ status: "success" });
       log("info", "vote_success", {
         txHash: sendResult.hash,
         daoId,
@@ -205,6 +207,7 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
       if (nullifier && sendResult.hash) {
         updateTransactionLogStatus(nullifier, "FAILED", sendResult.hash);
       }
+      votesProcessed.inc({ status: "failed" });
       log("error", "vote_failed", {
         txHash: sendResult.hash,
         status: result.status,
@@ -219,6 +222,7 @@ router.post("/vote", authGuard, voteLimiter, validateBody(voteSchema), (async (
     if (nullifier) {
       updateTransactionLogStatus(nullifier, "FAILED");
     }
+    votesProcessed.inc({ status: "error" });
     log("error", "vote_exception", {
       message: (err as Error).message,
       stack: (err as Error).stack,
