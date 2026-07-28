@@ -41,7 +41,9 @@ import {
   requestLogger,
   errorHandler,
   graduatedSlowDown,
+  degradationContext,
 } from "./middleware/index.js";
+import { metricsMiddleware } from "./middleware/metrics.js";
 
 // Routes
 import {
@@ -57,6 +59,8 @@ import {
   circuitRoutes,
   adminRoutes,
 } from "./routes/index.js";
+import metricsRoutes from "./routes/metrics.js";
+import remediationRoutes from "./routes/remediation.js";
 
 // ============================================
 // ENVIRONMENT VALIDATION
@@ -76,12 +80,16 @@ app.use(helmet());
 // Metrics middleware (before other middleware to capture all requests)
 app.use(metricsMiddleware);
 
+// Request-scoped degradation tracking (#204)
+app.use(degradationContext);
+
 // Security: CORS configuration
 const corsOrigins = config.corsOrigins === "*" ? "*" : config.corsOrigins;
 const corsOptions: cors.CorsOptions = {
   origin: corsOrigins,
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth"],
+  exposedHeaders: ["X-Service-Degraded", "X-Service-Status"],
   maxAge: 86400, // 24 hours
 };
 app.use(cors(corsOptions));

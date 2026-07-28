@@ -22,6 +22,44 @@ const state: RelayerState = {
 type ConnectionListener = (connected: boolean) => void;
 const listeners: Set<ConnectionListener> = new Set();
 
+// Degraded auxiliary services (#204)
+type DegradationListener = (services: string[]) => void;
+const degradationListeners: Set<DegradationListener> = new Set();
+let lastDegradedServices: string[] = [];
+
+export function subscribeToServiceDegradation(
+  listener: DegradationListener,
+): () => void {
+  degradationListeners.add(listener);
+  listener(lastDegradedServices);
+  return () => degradationListeners.delete(listener);
+}
+
+export function getDegradedServices(): string[] {
+  return [...lastDegradedServices];
+}
+
+function notifyDegradation(services: string[]) {
+  const key = services.slice().sort().join(",");
+  const prev = lastDegradedServices.slice().sort().join(",");
+  lastDegradedServices = services;
+  if (key !== prev) {
+    degradationListeners.forEach((l) => l(services));
+  }
+}
+
+function readDegradedHeader(response: Response): void {
+  const header = response.headers.get("X-Service-Degraded");
+  if (header) {
+    notifyDegradation(
+      header
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+  }
+}
+
 export function subscribeToRelayerStatus(
   listener: ConnectionListener,
 ): () => void {
@@ -147,6 +185,7 @@ export async function relayerFetch(
 
       // Success - reset failure count
       markSuccess();
+      readDegradedHeader(response);
       return response;
     } catch (error) {
       lastError = error as Error;
@@ -177,7 +216,7 @@ export async function relayerFetch(
 
 /**
  * Health check for the relayer.
- * Returns true if connected, false otherwise.
+ * Returns true if connected (including degraded mode), false otherwise.
  */
 export async function checkRelayerHealth(): Promise<boolean> {
   try {
@@ -185,9 +224,58 @@ export async function checkRelayerHealth(): Promise<boolean> {
       maxRetries: 1,
       skipBackoff: true,
     });
-    return response.ok;
+    if (!response.ok) return false;
+    const body = (await response.json()) as {
+      status?: string;
+      services?: HealthServicesSnapshot;
+    };
+    if (body.services) {
+      notifyDegradation([
+        ...(body.services.degraded ?? []),
+        ...(body.services.unavailable ?? []),
+      ]);
+    } else if (body.status === "ok") {
+      notifyDegradation([]);
+    }
+    // Degraded still means the API is reachable
+    return body.status === "ok" || body.status === "degraded" || response.ok;
   } catch {
     return false;
+  }
+}
+
+export interface HealthServicesSnapshot {
+  status: "ok" | "degraded";
+  degraded: string[];
+  unavailable: string[];
+}
+
+/** Fetch /health service degradation details for the UI banner. */
+export async function checkRelayerHealthDetails(): Promise<HealthServicesSnapshot | null> {
+  try {
+    const response = await relayerFetch("/health", {
+      maxRetries: 1,
+      skipBackoff: true,
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as {
+      status?: string;
+      services?: HealthServicesSnapshot;
+    };
+    if (body.services) {
+      notifyDegradation([
+        ...(body.services.degraded ?? []),
+        ...(body.services.unavailable ?? []),
+      ]);
+      return body.services;
+    }
+    return {
+      status: body.status === "degraded" ? "degraded" : "ok",
+      degraded: [],
+      unavailable: [],
+    };
+  } catch {
+    return null;
   }
 }
 

@@ -18,7 +18,9 @@ import {
   auditLog,
   queryLimiter,
   validateParams,
+  noteDegraded,
 } from "../middleware/index.js";
+import { getServiceHealth } from "../services/service-health.js";
 import { daoParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler, DaoWithRole } from "../types/index.js";
 
@@ -34,6 +36,10 @@ router.get("/daos", queryLimiter, (async (req: Request, res: Response) => {
     const userAddress = req.query.user as string | undefined;
 
     if (!userAddress) {
+      const syncHealth = getServiceHealth("dao_sync") as { state: string };
+      if (syncHealth.state !== "healthy") {
+        noteDegraded("dao_sync");
+      }
       return res.json({
         daos,
         total: daos.length,
