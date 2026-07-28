@@ -170,4 +170,24 @@ router.get("/db/stats", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST /csp-report
+ * Content Security Policy violation reporting endpoint
+ * Receives CSP violation reports from browsers and logs them for monitoring
+ */
+router.post("/csp-report", (req: Request, res: Response) => {
+  try {
+    const report = req.body;
+    log("warn", "csp_violation", {
+      "csp-report": report["csp-report"] || report,
+      userAgent: req.get("user-agent"),
+      ip: req.ip,
+    });
+    res.status(204).send();
+  } catch (err) {
+    log("error", "csp_report_failed", { error: (err as Error).message });
+    res.status(400).json({ error: "Invalid CSP report" });
+  }
+});
+
 export default router;

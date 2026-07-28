@@ -60,8 +60,27 @@ validateEnv();
 
 const app: Express = express();
 
-// Security: HTTP headers
-app.use(helmet());
+// Security: HTTP headers with CSP
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
+        connectSrc: ["'self'", "https:", "wss:", "blob:"],
+        fontSrc: ["'self'", "data:"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+        blockAllMixedContent: [],
+        upgradeInsecureRequests: [],
+      },
+    },
+  }),
+);
 
 // Security: CORS configuration
 const corsOrigins = config.corsOrigins === "*" ? "*" : config.corsOrigins;
