@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useMounted } from "../hooks/useMounted";
 import { Button, Card, Banner } from "@stellar/design-system";
 
 interface WalletConnectProps {
@@ -16,6 +17,7 @@ export default function WalletConnect({
 }: WalletConnectProps) {
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const mounted = useMounted();
 
   const handleConnect = async () => {
     try {
@@ -36,6 +38,27 @@ export default function WalletConnect({
   const truncateAddress = (addr: string) => {
     return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
   };
+
+  if (!mounted) {
+    // Return placeholder during SSR to prevent hydration mismatch
+    return (
+      <Card variant="primary">
+        <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
+        <p className="text-muted-foreground mb-4">
+          Connect your Stellar wallet (Freighter, xBull, Albedo, etc.) to interact
+          with the DAO.
+        </p>
+        <Button
+          variant="primary"
+          size="md"
+          isFullWidth
+          disabled
+        >
+          Connect Wallet
+        </Button>
+      </Card>
+    );
+  }
 
   if (isConnected && publicKey) {
     return (
