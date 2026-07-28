@@ -46,11 +46,15 @@ export function ThresholdPanel({
   });
   const [authorityName, setAuthorityName] = useState("");
   const [authorities, setAuthorities] = useState<AuthorityRegistration[]>([]);
-  const [protocolState, setProtocolState] = useState<ProtocolState | null>(null);
+  const [protocolState, setProtocolState] = useState<ProtocolState | null>(
+    null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"setup" | "status" | "decrypt">("setup");
+  const [activeTab, setActiveTab] = useState<"setup" | "status" | "decrypt">(
+    "setup",
+  );
 
   const clearMessages = () => {
     setError(null);
@@ -114,20 +118,23 @@ export function ThresholdPanel({
     const verifierId = `${BN254_VERIFIER_PREFIX}${publicKey.slice(0, 16)}`;
 
     try {
-      const response = await fetch(`${RELAYER_URL}/threshold/authority/register`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Relayer-Auth": import.meta.env.VITE_RELAYER_AUTH_TOKEN || "",
+      const response = await fetch(
+        `${RELAYER_URL}/threshold/authority/register`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Relayer-Auth": import.meta.env.VITE_RELAYER_AUTH_TOKEN || "",
+          },
+          body: JSON.stringify({
+            daoId,
+            proposalId,
+            authorityAddress: publicKey,
+            authorityName: authorityName.trim(),
+            verifierId,
+          }),
         },
-        body: JSON.stringify({
-          daoId,
-          proposalId,
-          authorityAddress: publicKey,
-          authorityName: authorityName.trim(),
-          verifierId,
-        }),
-      });
+      );
 
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Registration failed");
@@ -162,7 +169,8 @@ export function ThresholdPanel({
       });
 
       const data = await response.json();
-      if (!data.success) throw new Error(data.error || "DKG finalization failed");
+      if (!data.success)
+        throw new Error(data.error || "DKG finalization failed");
 
       setDkgState((prev) => ({
         ...prev,
@@ -183,7 +191,7 @@ export function ThresholdPanel({
   const refreshState = useCallback(async () => {
     try {
       const response = await fetch(
-        `${RELAYER_URL}/threshold/state/${daoId}/${proposalId}`
+        `${RELAYER_URL}/threshold/state/${daoId}/${proposalId}`,
       );
       const data = await response.json();
       if (data.success) {
@@ -217,18 +225,19 @@ export function ThresholdPanel({
           className={`px-3 py-1 rounded-full text-xs font-medium ${
             dkgState.phase === "completed"
               ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-              : dkgState.phase === "registration" || dkgState.phase === "commitment"
-              ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
-              : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+              : dkgState.phase === "registration" ||
+                  dkgState.phase === "commitment"
+                ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
+                : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
           }`}
         >
           {dkgState.phase === "completed"
             ? "Active"
             : dkgState.phase === "registration"
-            ? "Registering"
-            : dkgState.phase === "commitment"
-            ? "DKG in Progress"
-            : "Not Initialized"}
+              ? "Registering"
+              : dkgState.phase === "commitment"
+                ? "DKG in Progress"
+                : "Not Initialized"}
         </span>
       </div>
 
@@ -244,7 +253,11 @@ export function ThresholdPanel({
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {tab === "setup" ? "Setup" : tab === "status" ? "Status" : "Decrypt"}
+            {tab === "setup"
+              ? "Setup"
+              : tab === "status"
+                ? "Status"
+                : "Decrypt"}
           </button>
         ))}
       </div>
@@ -301,7 +314,7 @@ export function ThresholdPanel({
                         ...prev,
                         thresholdT: Math.min(
                           parseInt(e.target.value) || 2,
-                          prev.thresholdN
+                          prev.thresholdN,
                         ),
                       }))
                     }
@@ -311,8 +324,8 @@ export function ThresholdPanel({
               </div>
               <p className="text-xs text-muted-foreground">
                 (t, n) = ({dkgState.thresholdT}, {dkgState.thresholdN}): Any{" "}
-                {dkgState.thresholdT} of {dkgState.thresholdN} authorities can decrypt the
-                tally.
+                {dkgState.thresholdT} of {dkgState.thresholdN} authorities can
+                decrypt the tally.
               </p>
               <button
                 onClick={handleInitElection}
@@ -390,7 +403,8 @@ export function ThresholdPanel({
                 DKG Completed
               </h4>
               <p className="text-sm mt-1 text-muted-foreground">
-                Joint public key established with {dkgState.authorityCount} authorities.
+                Joint public key established with {dkgState.authorityCount}{" "}
+                authorities.
               </p>
               {dkgState.jointPublicKey && (
                 <p className="text-xs font-mono mt-2 text-muted-foreground break-all">
@@ -410,7 +424,9 @@ export function ThresholdPanel({
               <div className="text-2xl font-bold">
                 {protocolState?.encryptedVoteCount ?? 0}
               </div>
-              <div className="text-sm text-muted-foreground">Encrypted Votes</div>
+              <div className="text-sm text-muted-foreground">
+                Encrypted Votes
+              </div>
             </div>
             <div className="p-4 border border-border/40 rounded-lg">
               <div className="text-2xl font-bold">
@@ -437,9 +453,7 @@ export function ThresholdPanel({
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Tally Decrypted</span>
-                <span>
-                  {protocolState?.isTallyDecrypted ? "Yes" : "No"}
-                </span>
+                <span>{protocolState?.isTallyDecrypted ? "Yes" : "No"}</span>
               </div>
             </div>
           </div>
@@ -470,7 +484,9 @@ export function ThresholdPanel({
                 </div>
 
                 <button
-                  onClick={() => showSuccess("Decryption share submitted (simulated)")}
+                  onClick={() =>
+                    showSuccess("Decryption share submitted (simulated)")
+                  }
                   disabled={loading}
                   className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 text-sm"
                 >

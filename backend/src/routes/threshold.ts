@@ -11,9 +11,8 @@
 
 import { Router, type Request, type Response } from "express";
 
-import { config } from "../config.js";
 import { log } from "../services/logger.js";
-import { authGuard, auditLog, validateBody, validateParams } from "../middleware/index.js";
+import { authGuard, auditLog } from "../middleware/index.js";
 import type { AsyncHandler } from "../types/index.js";
 import * as coordinator from "../services/threshold-coordinator.js";
 
@@ -35,7 +34,7 @@ router.post(
         Number(proposalId),
         Number(thresholdN),
         Number(thresholdT),
-        req.body.creator || req.auth?.address || ""
+        req.body.creator || ""
       );
 
       res.json({

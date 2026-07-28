@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype,
-    panic_with_error, symbol_short, Address, BytesN, Env, String, Symbol, Vec, U256,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
+    BytesN, Env, String, Symbol, Vec, U256,
 };
 
 const VERSION: u32 = 1;
@@ -200,7 +200,11 @@ impl ThresholdCrypto {
             panic_with_error!(&env, ThresholdError::AlreadyInitialized);
         }
         env.storage().instance().set(&VERSION_KEY, &VERSION);
-        ContractUpgraded { from: 0, to: VERSION }.publish(&env);
+        ContractUpgraded {
+            from: 0,
+            to: VERSION,
+        }
+        .publish(&env);
     }
 
     pub fn version(env: Env) -> u32 {
@@ -263,11 +267,7 @@ impl ThresholdCrypto {
         .publish(&env);
     }
 
-    pub fn get_election_config(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-    ) -> ElectionCryptoConfig {
+    pub fn get_election_config(env: Env, dao_id: u64, proposal_id: u64) -> ElectionCryptoConfig {
         Self::bump_instance(&env);
         let key = DataKey::Election(dao_id, proposal_id);
         let config: ElectionCryptoConfig = env
@@ -279,11 +279,7 @@ impl ThresholdCrypto {
         config
     }
 
-    fn get_election_config_mut(
-        env: &Env,
-        dao_id: u64,
-        proposal_id: u64,
-    ) -> ElectionCryptoConfig {
+    fn get_election_config_mut(env: &Env, dao_id: u64, proposal_id: u64) -> ElectionCryptoConfig {
         let key = DataKey::Election(dao_id, proposal_id);
         env.storage()
             .persistent()
@@ -297,11 +293,7 @@ impl ThresholdCrypto {
         Self::bump_persistent(env, &key);
     }
 
-    fn require_phase(
-        config: &ElectionCryptoConfig,
-        expected: DkgPhase,
-        env: &Env,
-    ) {
+    fn require_phase(config: &ElectionCryptoConfig, expected: DkgPhase, env: &Env) {
         if config.phase != expected {
             panic_with_error!(env, ThresholdError::DkgPhaseMismatch);
         }
@@ -355,14 +347,16 @@ impl ThresholdCrypto {
         Self::bump_persistent(&env, &auth_key);
 
         let list_key = DataKey::AuthorityList(dao_id, proposal_id);
-        let mut list: Vec<Address> = env.storage().persistent().get(&list_key).unwrap_or_else(|| Vec::new(&env));
+        let mut list: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&list_key)
+            .unwrap_or_else(|| Vec::new(&env));
         list.push_back(authority.clone());
         env.storage().persistent().set(&list_key, &list);
         Self::bump_persistent(&env, &list_key);
 
-        env.storage()
-            .persistent()
-            .set(&count_key, &(count + 1));
+        env.storage().persistent().set(&count_key, &(count + 1));
         Self::bump_persistent(&env, &count_key);
 
         if count + 1 == config.threshold_n {
@@ -380,12 +374,7 @@ impl ThresholdCrypto {
         .publish(&env);
     }
 
-    pub fn get_authority(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-        authority: Address,
-    ) -> Authority {
+    pub fn get_authority(env: Env, dao_id: u64, proposal_id: u64, authority: Address) -> Authority {
         Self::bump_instance(&env);
         let key = DataKey::Authority(dao_id, proposal_id, authority);
         let auth: Authority = env
@@ -403,14 +392,13 @@ impl ThresholdCrypto {
         env.storage().persistent().get(&count_key).unwrap_or(0)
     }
 
-    pub fn get_authority_list(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-    ) -> Vec<Address> {
+    pub fn get_authority_list(env: Env, dao_id: u64, proposal_id: u64) -> Vec<Address> {
         Self::bump_instance(&env);
         let list_key = DataKey::AuthorityList(dao_id, proposal_id);
-        env.storage().persistent().get(&list_key).unwrap_or_else(|| Vec::new(&env))
+        env.storage()
+            .persistent()
+            .get(&list_key)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     // ── DKG Ceremony ────────────────────────────────────────────────────
@@ -476,10 +464,18 @@ impl ThresholdCrypto {
         Self::bump_instance(&env);
         let mut commitments = Vec::new(&env);
         let list_key = DataKey::AuthorityList(dao_id, proposal_id);
-        let list: Vec<Address> = env.storage().persistent().get(&list_key).unwrap_or_else(|| Vec::new(&env));
+        let list: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&list_key)
+            .unwrap_or_else(|| Vec::new(&env));
         for addr in list.iter() {
             let auth_key = DataKey::Authority(dao_id, proposal_id, addr.clone());
-            if let Some(auth) = env.storage().persistent().get::<DataKey, Authority>(&auth_key) {
+            if let Some(auth) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Authority>(&auth_key)
+            {
                 if let Some(ref commitment) = auth.dkg_commitment {
                     commitments.push_back((addr, commitment.clone()));
                 }
@@ -509,7 +505,11 @@ impl ThresholdCrypto {
             .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::AuthorityNotRegistered));
 
         let list_key = DataKey::AuthorityList(dao_id, proposal_id);
-        let list: Vec<Address> = env.storage().persistent().get(&list_key).unwrap_or_else(|| Vec::new(&env));
+        let list: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&list_key)
+            .unwrap_or_else(|| Vec::new(&env));
         for addr in list.iter() {
             let ak = DataKey::Authority(dao_id, proposal_id, addr);
             let auth: Authority = env.storage().persistent().get(&ak).unwrap();
@@ -569,9 +569,7 @@ impl ThresholdCrypto {
 
         let count_key = DataKey::EncryptedVoteCount(dao_id, proposal_id);
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&count_key, &(count + 1));
+        env.storage().persistent().set(&count_key, &(count + 1));
         Self::bump_persistent(&env, &count_key);
 
         EncryptedVoteSubmittedEvent {
@@ -588,11 +586,7 @@ impl ThresholdCrypto {
         env.storage().persistent().get(&count_key).unwrap_or(0)
     }
 
-    pub fn get_encrypted_tally(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-    ) -> Option<Ciphertext> {
+    pub fn get_encrypted_tally(env: Env, dao_id: u64, proposal_id: u64) -> Option<Ciphertext> {
         Self::bump_instance(&env);
         let config = Self::get_election_config_mut(&env, dao_id, proposal_id);
         config.encrypted_tally
@@ -666,10 +660,18 @@ impl ThresholdCrypto {
         Self::bump_instance(&env);
         let mut shares = Vec::new(&env);
         let list_key = DataKey::AuthorityList(dao_id, proposal_id);
-        let list: Vec<Address> = env.storage().persistent().get(&list_key).unwrap_or_else(|| Vec::new(&env));
+        let list: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&list_key)
+            .unwrap_or_else(|| Vec::new(&env));
         for addr in list.iter() {
             let auth_key = DataKey::Authority(dao_id, proposal_id, addr.clone());
-            if let Some(auth) = env.storage().persistent().get::<DataKey, Authority>(&auth_key) {
+            if let Some(auth) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Authority>(&auth_key)
+            {
                 if let Some(ref share) = auth.decryption_share {
                     shares.push_back((addr, share.clone()));
                 }
@@ -678,18 +680,22 @@ impl ThresholdCrypto {
         shares
     }
 
-    pub fn get_decryption_share_count(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-    ) -> u32 {
+    pub fn get_decryption_share_count(env: Env, dao_id: u64, proposal_id: u64) -> u32 {
         Self::bump_instance(&env);
         let mut count: u32 = 0;
         let list_key = DataKey::AuthorityList(dao_id, proposal_id);
-        let list: Vec<Address> = env.storage().persistent().get(&list_key).unwrap_or_else(|| Vec::new(&env));
+        let list: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&list_key)
+            .unwrap_or_else(|| Vec::new(&env));
         for addr in list.iter() {
             let auth_key = DataKey::Authority(dao_id, proposal_id, addr);
-            if let Some(auth) = env.storage().persistent().get::<DataKey, Authority>(&auth_key) {
+            if let Some(auth) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Authority>(&auth_key)
+            {
                 if auth.decryption_share.is_some() {
                     count += 1;
                 }

@@ -22,7 +22,6 @@ import {
   Globe,
   ChevronDown,
   ChevronUp,
-  Key,
 } from "lucide-react";
 
 // Custom social icons
@@ -540,6 +539,11 @@ export default function DAOHeader({
                   <PlusCircle className="w-4 h-4" /> Add Proposal
                 </>
               )}
+              {activeTab === "threshold" && (
+                <>
+                  <Lock className="w-4 h-4" /> Tally Auth
+                </>
+              )}
             </span>
             <ChevronDown
               className={`w-4 h-4 transition-transform ${mobileMenuOpen ? "rotate-180" : ""}`}
@@ -599,6 +603,17 @@ export default function DAOHeader({
                       <PlusCircle className="w-4 h-4" /> Add Proposal
                     </button>
                   )}
+                {dao.isAdmin && (
+                  <button
+                    onClick={() => {
+                      navigateToTab("threshold");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${activeTab === "threshold" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
+                  >
+                    <Lock className="w-4 h-4" /> Tally Auth
+                  </button>
+                )}
                 <JoinButton
                   hasMembership={dao.hasMembership}
                   membershipOpen={dao.membershipOpen}

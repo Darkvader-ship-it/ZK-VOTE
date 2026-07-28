@@ -12,9 +12,7 @@
  * for actual cryptographic operations.
  */
 
-import { config } from "../config.js";
 import { log } from "./logger.js";
-import { submitTransaction, simulateTransaction } from "./stellar.js";
 import * as tc from "./threshold-crypto.js";
 
 // Types for protocol messages
@@ -61,7 +59,6 @@ class ProtocolState {
   private rounds: Map<string, DkgRound> = new Map();
   private encryptedVotes: Map<string, EncryptedVote[]> = new Map();
   private decryptionShares: Map<string, Map<number, string>> = new Map();
-  private authorities: Map<string, Map<string, tc.DKGFinalKey>> = new Map();
 
   getRoundKey(daoId: number, proposalId: number): string {
     return `${daoId}:${proposalId}`;
@@ -201,7 +198,7 @@ export async function registerAuthority(
   const authorityIndex = round.authorities.length;
 
   // Generate this authority's DKG contribution
-  const { shares, commitments, secret } = tc.generateDKGShares(
+  const { shares, commitments } = tc.generateDKGShares(
     authorityIndex,
     round.thresholdT,
     round.thresholdN
@@ -221,17 +218,6 @@ export async function registerAuthority(
   };
 
   state.addAuthority(daoId, proposalId, authority);
-
-  // Store this authority's derived key for later decryption
-  const authKey = `${daoId}:${proposalId}:${authorityAddress}`;
-  const dkgResult = tc.computeDKGResult(
-    [{ fromIndex: authorityIndex, value: secret }],
-    [commitments]
-  );
-
-  if (!state.authorities.has(authKey)) {
-    // We'll store the keys when all shares are received
-  }
 
   emitEvent({
     type: "authority_registered",

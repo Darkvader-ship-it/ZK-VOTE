@@ -611,11 +611,8 @@ fn test_propose_and_approve_clawback() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
 
     let proposal = client.get_clawback_proposal(&proposal_id);
     assert_eq!(proposal.approvals.len(), 1);
@@ -640,11 +637,8 @@ fn test_execute_clawback_before_delay_fails() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
     client.approve_clawback(&proposal_id);
 
     client.execute_clawback(&proposal_id);
@@ -662,11 +656,8 @@ fn test_execute_clawback_after_delay() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
     client.approve_clawback(&proposal_id);
 
     env.ledger()
@@ -694,11 +685,8 @@ fn test_clawback_emits_event() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "regulatory"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "regulatory"));
     client.approve_clawback(&proposal_id);
 
     env.ledger()
@@ -722,11 +710,8 @@ fn test_clawback_history() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
     client.approve_clawback(&proposal_id);
 
     env.ledger()
@@ -751,11 +736,8 @@ fn test_double_approve_clawback_rejected() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
 
     client.approve_clawback(&proposal_id);
     client.approve_clawback(&proposal_id);
@@ -774,11 +756,8 @@ fn test_execute_clawback_insufficient_approvals() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
 
     env.ledger()
         .with_mut(|l| l.sequence_number = l.sequence_number + CLAWBACK_DELAY_LEDGERS + 1);
@@ -818,8 +797,7 @@ fn test_allowance_expired_at_boundary() {
 
     assert_eq!(client.allowance(&alice, &bob), 100);
 
-    env.ledger()
-        .with_mut(|l| l.sequence_number = expiration);
+    env.ledger().with_mut(|l| l.sequence_number = expiration);
 
     assert_eq!(client.allowance(&alice, &bob), 100);
 
@@ -904,25 +882,20 @@ fn test_transfer_with_permit() {
     let deadline_bytes = deadline.to_be_bytes();
     digest_data.extend_from_slice(&deadline_bytes);
 
-    let sk = env.crypto().ed25519_secret_key_from_binary(&BytesN::from_array(
-        &env,
-        &[
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
-            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
-            0x1d, 0x1e, 0x1f, 0x20,
-        ],
-    ));
+    let sk = env
+        .crypto()
+        .ed25519_secret_key_from_binary(&BytesN::from_array(
+            &env,
+            &[
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+                0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+                0x1d, 0x1e, 0x1f, 0x20,
+            ],
+        ));
 
     let signature = sk.sign(&digest_data);
 
-    client.transfer_with_permit(
-        &alice,
-        &bob,
-        &charlie,
-        &100i128,
-        &deadline,
-        &signature,
-    );
+    client.transfer_with_permit(&alice, &bob, &charlie, &100i128, &deadline, &signature);
 
     assert_eq!(client.balance(&alice), 900);
     assert_eq!(client.balance(&charlie), 100);

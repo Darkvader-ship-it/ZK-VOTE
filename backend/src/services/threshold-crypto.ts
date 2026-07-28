@@ -6,7 +6,8 @@ export const BN254_FR_MODULUS =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 const G1 = bn254.G1.ProjectivePoint;
-const G1_GENERATOR = G1.BASE;
+type G1Point = typeof G1.prototype;
+export const G1_GENERATOR = G1.BASE;
 
 export interface Ciphertext {
   c1: string;
@@ -23,20 +24,25 @@ export interface TallyProof {
 
 // ── Point Serialization ───────────────────────────────────────────────
 
-export function g1ToHex(point: any): string {
+export function g1ToHex(point: G1Point): string {
   const aff = point.toAffine();
   const x = aff.x.toString(16).padStart(64, "0");
   const y = aff.y.toString(16).padStart(64, "0");
   return x + y;
 }
 
-export function hexToG1(hex: string): any {
+export function hexToG1(hex: string): G1Point {
   const padded = hex.padStart(128, "0");
   const xHex = padded.slice(0, 64);
   const yHex = padded.slice(64, 128);
   const x = BigInt("0x" + xHex);
   const y = BigInt("0x" + yHex);
   return new G1(x, y, 1n);
+}
+
+export function scalarMulG1(scalar: bigint): G1Point {
+  if (scalar === 0n) return G1.ZERO;
+  return G1_GENERATOR.multiply(scalar);
 }
 
 export function randomFr(): bigint {
@@ -59,11 +65,6 @@ export function generateElGamalKeypair(): { privateKey: bigint; publicKey: strin
 }
 
 // ── ElGamal Encryption ───────────────────────────────────────────────
-
-export function scalarMulG1(scalar: bigint): any {
-  if (scalar === 0n) return G1.ZERO;
-  return G1_GENERATOR.multiply(scalar);
-}
 
 export function encryptVote(publicKeyHex: string, vote: bigint): Ciphertext {
   const h = hexToG1(publicKeyHex);
@@ -296,7 +297,7 @@ export function verifyTallyProof(
   ciphertext: Ciphertext,
   combinedShareHex: string,
   decryptedTally: bigint,
-  proofHex: string
+  _proofHex: string
 ): boolean {
   const g_tally = G1_GENERATOR.multiply(decryptedTally);
   const combinedShare = hexToG1(combinedShareHex);
