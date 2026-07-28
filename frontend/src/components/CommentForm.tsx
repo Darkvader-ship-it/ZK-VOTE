@@ -23,6 +23,7 @@ import {
   calculateNullifier,
   type VoteProofInput,
 } from "../lib/zkproof";
+import { fetchWithProgress } from "../lib/fetchWithProgress";
 import { getMerklePath } from "../lib/merkletree";
 import { initializeContractClients } from "../lib/contracts";
 import { relayerFetch } from "../lib/api";
@@ -142,11 +143,22 @@ export default function CommentForm({
           proposalId.toString(),
         );
 
+        // Download circuit artifacts with progress (the proving key is
+        // several MB and is the main bottleneck for perceived performance)
+        const zkey = await fetchWithProgress(
+          "/circuits/vote_final.zkey",
+          ({ loadedBytes, totalBytes }) => {
+            const pct = totalBytes
+              ? Math.round((loadedBytes / totalBytes) * 100)
+              : 0;
+            setProgress(`Downloading proving key... ${pct}%`);
+          },
+        );
+        const wasm = await fetchWithProgress("/circuits/vote.wasm");
+
         // Generate ZK proof using vote circuit (same circuit for voting and comments)
         // For comments, we just use voteChoice=false (0) - the contract ignores it
         setProgress("Generating ZK proof...");
-        const wasmPath = "/circuits/vote.wasm";
-        const zkeyPath = "/circuits/vote_final.zkey";
 
         const proofInput: VoteProofInput = {
           root: root.toString(),
@@ -167,8 +179,8 @@ export default function CommentForm({
 
         const { proof } = await generateVoteProof(
           proofInput,
-          wasmPath,
-          zkeyPath,
+          wasm,
+          zkey,
         );
 
         // Format proof for Soroban

@@ -63,6 +63,32 @@ export const httpResponseSize = new Histogram({
 });
 
 // ============================================
+// COALESCING METRICS
+// ============================================
+
+export const coalescingHitsTotal = new Counter({
+  name: "zkvote_coalescing_hits_total",
+  help: "Total request coalescing hits",
+  labelNames: ["key"] as const,
+  registers: [register],
+});
+
+export const coalescingMissesTotal = new Counter({
+  name: "zkvote_coalescing_misses_total",
+  help: "Total request coalescing misses (original requests)",
+  labelNames: ["key"] as const,
+  registers: [register],
+});
+
+export const coalescingWaitTime = new Histogram({
+  name: "zkvote_coalescing_wait_time_seconds",
+  help: "Time spent waiting for coalesced requests in seconds",
+  labelNames: ["key"] as const,
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+  registers: [register],
+});
+
+// ============================================
 // SOROBAN RPC METRICS
 // ============================================
 
@@ -266,6 +292,41 @@ export const indexerEventsProcessed = new Counter({
 export const indexerLag = new Gauge({
   name: "zkvote_indexer_lag_ledgers",
   help: "Number of ledgers behind the indexer is",
+  registers: [register],
+});
+
+// ============================================
+// CIRCUIT BREAKER METRICS
+// ============================================
+
+export const circuitBreakerState = new Gauge({
+  name: "zkvote_circuit_breaker_state",
+  help: "Circuit breaker state (0=closed, 1=open, 2=half_open)",
+  labelNames: ["breaker"] as const,
+  registers: [register],
+});
+
+export const circuitBreakerTripsTotal = new Counter({
+  name: "zkvote_circuit_breaker_trips_total",
+  help: "Total number of times a circuit breaker has tripped open",
+  labelNames: ["breaker"] as const,
+  registers: [register],
+});
+
+// ============================================
+// MEMORY MONITORING METRICS
+// ============================================
+
+export const memoryUsageRatio = new Gauge({
+  name: "zkvote_memory_usage_ratio",
+  help: "Process RSS memory as a ratio of the configured container memory limit",
+  registers: [register],
+});
+
+export const memoryThresholdBreachesTotal = new Counter({
+  name: "zkvote_memory_threshold_breaches_total",
+  help: "Total number of times memory usage crossed the warn/critical threshold",
+  labelNames: ["level"] as const,
   registers: [register],
 });
 

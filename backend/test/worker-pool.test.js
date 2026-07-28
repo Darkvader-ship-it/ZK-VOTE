@@ -52,6 +52,33 @@ test("DbWorkerPool initialization, read/write execution, round-robin, and metric
   await pool.close();
 });
 
+test("DbWorkerPool rejects in-flight requests instead of leaking them on worker crash", async () => {
+  const { DbWorkerPool } = await import("../src/services/dbWorkerPool.ts");
+  const dbPath = path.join(TEST_DIR, "crash_test.db");
+
+  const pool = new DbWorkerPool(dbPath);
+  await pool.init({ numReaders: 1 });
+
+  const worker = pool.readerWorkers[0];
+
+  // Dispatch a request directly (bypassing the worker's real response) so we
+  // can simulate a crash while it's still pending.
+  const pending = pool.dispatch(worker, "query", "SELECT 1", []);
+  assert.equal(pool.pendingRequests.size, 1);
+
+  // Simulate the worker crashing before it replies.
+  pool.handleCrash(worker, false, 1);
+
+  await assert.rejects(pending, /Worker crashed/);
+  assert.equal(
+    pool.pendingRequests.size,
+    0,
+    "pending request map should not leak entries for a crashed worker",
+  );
+
+  await pool.close();
+});
+
 test("DbWorkerPool concurrent load and performance benchmark", async () => {
   const { DbWorkerPool } = await import("../src/services/dbWorkerPool.ts");
   const dbPath = path.join(TEST_DIR, "benchmark_test.db");
