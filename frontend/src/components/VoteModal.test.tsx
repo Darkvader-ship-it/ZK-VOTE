@@ -41,6 +41,10 @@ vi.mock("../lib/merkletree", () => ({
   }),
 }));
 
+vi.mock("../lib/fetchWithProgress", () => ({
+  fetchWithProgress: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+}));
+
 vi.mock("../lib/zk", () => ({
   generateDeterministicZKCredentials: vi.fn().mockResolvedValue({
     secret: "123",

@@ -44,14 +44,14 @@ export interface GeneratedProof {
 /**
  * Generate a Groth16 proof for anonymous voting
  * @param input Proof input parameters
- * @param wasmPath Path to compiled circuit WASM
- * @param zkeyPath Path to proving key
+ * @param wasmPath Path to compiled circuit WASM, or an already-downloaded buffer
+ * @param zkeyPath Path to proving key, or an already-downloaded buffer
  * @returns Generated proof and public signals
  */
 export async function generateVoteProof(
   input: VoteProofInput,
-  wasmPath: string,
-  zkeyPath: string,
+  wasmPath: string | Uint8Array,
+  zkeyPath: string | Uint8Array,
 ): Promise<GeneratedProof> {
   try {
     const circuitVersion = input.circuitVersion || "v1";
@@ -108,8 +108,8 @@ export async function generateVoteProof(
  */
 export async function generateVoteProofV2(
   input: VoteProofInput,
-  wasmPath: string = "/circuits/vote_v2/vote_v2.wasm",
-  zkeyPath: string = "/circuits/vote_v2/vote_v2_final.zkey",
+  wasmPath: string | Uint8Array = "/circuits/vote_v2/vote_v2.wasm",
+  zkeyPath: string | Uint8Array = "/circuits/vote_v2/vote_v2_final.zkey",
 ): Promise<GeneratedProof> {
   return generateVoteProof(
     { ...input, circuitVersion: "v2" },
@@ -121,14 +121,14 @@ export async function generateVoteProofV2(
 /**
  * Generate a Groth16 proof for anonymous commenting
  * @param input Proof input parameters (uses commentNonce instead of voteChoice)
- * @param wasmPath Path to compiled comment circuit WASM
- * @param zkeyPath Path to comment proving key
+ * @param wasmPath Path to compiled comment circuit WASM, or an already-downloaded buffer
+ * @param zkeyPath Path to comment proving key, or an already-downloaded buffer
  * @returns Generated proof and public signals
  */
 export async function generateCommentProof(
   input: CommentProofInput,
-  wasmPath: string = "/circuits/comment/comment.wasm",
-  zkeyPath: string = "/circuits/comment/comment_final.zkey",
+  wasmPath: string | Uint8Array = "/circuits/comment/comment.wasm",
+  zkeyPath: string | Uint8Array = "/circuits/comment/comment_final.zkey",
 ): Promise<GeneratedProof> {
   try {
     const circuitVersion = input.circuitVersion || "v1";
@@ -186,8 +186,8 @@ export async function generateCommentProof(
  */
 export async function generateCommentProofV2(
   input: CommentProofInput,
-  wasmPath: string = "/circuits/comment_v2/comment_v2.wasm",
-  zkeyPath: string = "/circuits/comment_v2/comment_v2_final.zkey",
+  wasmPath: string | Uint8Array = "/circuits/comment_v2/comment_v2.wasm",
+  zkeyPath: string | Uint8Array = "/circuits/comment_v2/comment_v2_final.zkey",
 ): Promise<GeneratedProof> {
   return generateCommentProof(
     { ...input, circuitVersion: "v2" },
