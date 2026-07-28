@@ -388,6 +388,12 @@ export const eventsQuerySchema = paginationSchema.extend({
     .string()
     .optional()
     .transform((val) => val?.split(",").filter(Boolean) || null),
+  orderBy: z
+    .enum(['id', 'timestamp', 'ledger', 'type', 'verified', 'created_at'])
+    .default('timestamp'),
+  orderDirection: z
+    .enum(['ASC', 'DESC'])
+    .default('DESC'),
 });
 
 export const commentNonceQuerySchema = z.object({
