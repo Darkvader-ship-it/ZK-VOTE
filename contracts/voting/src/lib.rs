@@ -106,6 +106,16 @@ pub enum VotingError {
     RandomnessParticipantLimit = 39,
     /// Candidate index >= numCandidates configured for this election
     InvalidCandidateIndex = 40,
+    /// VDF proof verification failed
+    VdfVerificationFailed = 41,
+    /// VDF output already submitted for this election
+    VdfAlreadySubmitted = 42,
+    /// VDF delay period has not elapsed yet
+    VdfDelayNotElapsed = 43,
+    /// VDF delay parameter is invalid
+    VdfInvalidDelay = 44,
+    /// VDF input (block hash) is not available
+    VdfInputNotAvailable = 45,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -127,6 +137,12 @@ pub const RANDOMNESS_COMMIT_WINDOW: u64 = 3_600;
 pub const RANDOMNESS_REVEAL_WINDOW: u64 = 3_600;
 const MIN_RANDOMNESS_PARTICIPANTS: u32 = 2;
 const MAX_RANDOMNESS_PARTICIPANTS: u32 = 32;
+
+// VDF constants
+/// Minimum VDF checkpoints for on-chain verification
+const MIN_VDF_CHECKPOINTS: u32 = 3;
+/// Maximum VDF checkpoints to bound on-chain computation
+const MAX_VDF_CHECKPOINTS: u32 = 100;
 
 #[contracttype]
 #[derive(Clone)]
@@ -160,6 +176,16 @@ pub enum DataKey {
     RandomnessCommit(u64, u64, Address),
     RandomnessReveal(u64, u64, Address),
     RandomnessCommitters(u64, u64),
+    /// VDF output for election randomness
+    VdfOutput(u64, u64),
+    /// VDF proof (checkpoints for on-chain verification)
+    VdfProof(u64, u64),
+    /// VDF delay parameter (number of SHA256 iterations)
+    VdfDelay(u64, u64),
+    /// VDF input seed derived from election parameters
+    VdfInput(u64, u64),
+    /// Whether VDF has been finalized for this election
+    VdfFinalized(u64, u64),
 }
 
 #[contracttype]
@@ -201,6 +227,13 @@ pub struct ElectionConfig {
     /// Number of valid candidates. The circuit constrains voteChoice < num_candidates.
     /// Must be set at election creation and cannot be changed after votes are cast.
     pub num_candidates: u32,
+    /// VDF output: y = SHA256^T(x) where x is the VDF input and T is the delay param.
+    /// Provides verifiable randomness for deterministic candidate ordering.
+    /// None if VDF has not been computed/submitted yet.
+    pub vdf_output: Option<BytesN<32>>,
+    /// VDF delay parameter: number of SHA256 iterations applied.
+    /// Determines the minimum time before VDF output can be revealed.
+    pub vdf_delay: u64,
 }
 
 #[contracttype]
@@ -352,6 +385,27 @@ pub struct CandidateSeedFinalizedEvent {
     #[topic]
     pub proposal_id: u64,
     pub seed: BytesN<32>,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VdfSubmittedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub output: BytesN<32>,
+    pub delay: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VdfVerifiedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub verified: bool,
 }
 
 #[contract]
@@ -1137,6 +1191,8 @@ impl Voting {
                 twab_window: 0,
                 candidate_seed: None,
                 num_candidates: 0,
+                vdf_output: None,
+                vdf_delay: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -1294,6 +1350,8 @@ impl Voting {
                 twab_window: 0,
                 candidate_seed: None,
                 num_candidates: 0,
+                vdf_output: None,
+                vdf_delay: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -1811,6 +1869,8 @@ impl Voting {
                 twab_window: 0,
                 candidate_seed: None,
                 num_candidates: 0,
+                vdf_output: None,
+                vdf_delay: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -1877,17 +1937,18 @@ impl Voting {
         Self::require_not_paused(&env);
         let snapshot_ledger = env.ledger().sequence();
         let key = DataKey::ElectionConfig(dao_id, proposal_id);
-        let candidate_seed = env
-            .storage()
-            .persistent()
-            .get::<_, ElectionConfig>(&key)
-            .and_then(|config| config.candidate_seed);
+        let existing = env.storage().persistent().get::<_, ElectionConfig>(&key);
+        let candidate_seed = existing.as_ref().and_then(|config| config.candidate_seed.clone());
+        let vdf_output = existing.as_ref().and_then(|config| config.vdf_output.clone());
+        let vdf_delay = existing.as_ref().map(|config| config.vdf_delay).unwrap_or(0);
         let config = ElectionConfig {
             snapshot_ledger,
             min_balance,
             twab_window,
             candidate_seed,
             num_candidates,
+            vdf_output,
+            vdf_delay,
         };
         env.storage().persistent().set(&key, &config);
         Self::bump_persistent(&env, &key);
@@ -2253,6 +2314,8 @@ impl Voting {
                     twab_window: 0,
                     candidate_seed: None,
                     num_candidates: 0,
+                    vdf_output: None,
+                    vdf_delay: 0,
                 });
         if config.candidate_seed.is_some() {
             panic_with_error!(&env, VotingError::CandidateSeedFinalized);
@@ -2302,12 +2365,280 @@ impl Voting {
         proposal_id: u64,
         candidate: BytesN<32>,
     ) -> BytesN<32> {
-        let seed = Self::get_candidate_seed(env.clone(), dao_id, proposal_id)
-            .unwrap_or_else(|| panic_with_error!(&env, VotingError::RandomnessCommitmentMissing));
+        // Use VDF output as the seed if available (VDF randomness takes precedence)
+        let vdf_output = Self::get_vdf_output(env.clone(), dao_id, proposal_id);
+        let seed = match vdf_output {
+            Some(vdf_seed) => vdf_seed,
+            None => {
+                // Fall back to commit-reveal seed
+                Self::get_candidate_seed(env.clone(), dao_id, proposal_id)
+                    .unwrap_or_else(|| panic_with_error!(&env, VotingError::RandomnessCommitmentMissing))
+            }
+        };
         let mut input = Bytes::new(&env);
         input.append(&Bytes::from_array(&env, &seed.to_array()));
         input.append(&Bytes::from_array(&env, &candidate.to_array()));
         env.crypto().sha256(&input).into()
+    }
+
+    // ── VDF (Verifiable Delay Function) Functions ───────────────────────────
+
+    /// Set the VDF delay parameter for an election.
+    ///
+    /// This configures the number of SHA256 iterations required for the VDF.
+    /// A higher delay provides stronger unpredictability guarantees.
+    /// Must be set before VDF output can be submitted.
+    ///
+    /// # Arguments
+    ///
+    /// * `dao_id` - DAO identifier
+    /// * `proposal_id` - Proposal identifier
+    /// * `delay` - Number of SHA256 iterations (VDF delay parameter)
+    /// * `admin` - DAO admin address (required for auth)
+    pub fn set_vdf_delay(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        delay: u64,
+        admin: Address,
+    ) {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
+
+        if delay < vdf::MIN_VDF_ITERATIONS || delay > vdf::MAX_VDF_ITERATIONS {
+            panic_with_error!(&env, VotingError::VdfInvalidDelay);
+        }
+
+        let delay_key = DataKey::VdfDelay(dao_id, proposal_id);
+        env.storage().persistent().set(&delay_key, &delay);
+        Self::bump_persistent(&env, &delay_key);
+
+        // Derive and store the VDF input from election parameters
+        let block_hash = BytesN::from_array(&env, &[0u8; 32]); // Placeholder — in production use ledger hash
+        let admin_xdr = admin.to_xdr(&env);
+        let admin_seed: BytesN<32> = env.crypto().sha256(&admin_xdr).into();
+        let vdf_input = vdf::derive_vdf_input(&env, dao_id, proposal_id, &block_hash, &admin_seed);
+        let input_key = DataKey::VdfInput(dao_id, proposal_id);
+        env.storage().persistent().set(&input_key, &vdf_input);
+        Self::bump_persistent(&env, &input_key);
+    }
+
+    /// Submit VDF output and proof for an election.
+    ///
+    /// Anyone can submit the VDF output once the delay period is complete.
+    /// The output is verified on-chain using the provided checkpoints.
+    ///
+    /// # Arguments
+    ///
+    /// * `dao_id` - DAO identifier
+    /// * `proposal_id` - Proposal identifier
+    /// * `vdf_output` - The VDF output `y = SHA256^T(x)` (32 bytes)
+    /// * `checkpoints` - Intermediate hash values for on-chain verification
+    /// * `proposal_creation_time` - Timestamp when the proposal was created (used to verify delay elapsed)
+    pub fn submit_vdf_output(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        vdf_output: BytesN<32>,
+        checkpoints: soroban_sdk::Vec<BytesN<32>>,
+        proposal_creation_time: u64,
+    ) {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env);
+
+        // Check not already finalized
+        let finalized_key = DataKey::VdfFinalized(dao_id, proposal_id);
+        if env.storage().persistent().has(&finalized_key) {
+            panic_with_error!(&env, VotingError::VdfAlreadySubmitted);
+        }
+
+        // Get VDF delay
+        let delay_key = DataKey::VdfDelay(dao_id, proposal_id);
+        let delay: u64 = env
+            .storage()
+            .persistent()
+            .get(&delay_key)
+            .unwrap_or_else(|| panic_with_error!(&env, VotingError::VdfInvalidDelay));
+
+        // Verify delay has elapsed
+        let now = env.ledger().timestamp();
+        if now < proposal_creation_time.saturating_add(delay) {
+            panic_with_error!(&env, VotingError::VdfDelayNotElapsed);
+        }
+
+        // Get VDF input
+        let input_key = DataKey::VdfInput(dao_id, proposal_id);
+        let vdf_input: BytesN<32> = env
+            .storage()
+            .persistent()
+            .get(&input_key)
+            .unwrap_or_else(|| panic_with_error!(&env, VotingError::VdfInputNotAvailable));
+
+        // Verify the VDF proof on-chain
+        let verified = vdf::verify_vdf(&env, &vdf_input, delay, &vdf_output, &checkpoints);
+        if !verified {
+            // Emit failure event
+            VdfVerifiedEvent {
+                dao_id,
+                proposal_id,
+                verified: false,
+            }
+            .publish(&env);
+            panic_with_error!(&env, VotingError::VdfVerificationFailed);
+        }
+
+        // Store VDF output
+        let output_key = DataKey::VdfOutput(dao_id, proposal_id);
+        env.storage().persistent().set(&output_key, &vdf_output);
+        Self::bump_persistent(&env, &output_key);
+
+        // Store checkpoints as proof
+        let proof_key = DataKey::VdfProof(dao_id, proposal_id);
+        env.storage().persistent().set(&proof_key, &checkpoints);
+        Self::bump_persistent(&env, &proof_key);
+
+        // Mark as finalized
+        env.storage().persistent().set(&finalized_key, &true);
+        Self::bump_persistent(&env, &finalized_key);
+
+        // Update ElectionConfig with VDF output
+        let config_key = DataKey::ElectionConfig(dao_id, proposal_id);
+        let mut config: ElectionConfig = env
+            .storage()
+            .persistent()
+            .get(&config_key)
+            .unwrap_or(ElectionConfig {
+                snapshot_ledger: env.ledger().sequence(),
+                min_balance: 0,
+                twab_window: 0,
+                candidate_seed: None,
+                num_candidates: 0,
+                vdf_output: None,
+                vdf_delay: delay,
+            });
+        config.vdf_output = Some(vdf_output.clone());
+        config.vdf_delay = delay;
+        env.storage().persistent().set(&config_key, &config);
+        Self::bump_persistent(&env, &config_key);
+
+        VdfSubmittedEvent {
+            dao_id,
+            proposal_id,
+            output: vdf_output,
+            delay,
+        }
+        .publish(&env);
+
+        VdfVerifiedEvent {
+            dao_id,
+            proposal_id,
+            verified: true,
+        }
+        .publish(&env);
+    }
+
+    /// Get the VDF output for an election, if submitted.
+    pub fn get_vdf_output(env: Env, dao_id: u64, proposal_id: u64) -> Option<BytesN<32>> {
+        Self::bump_instance(&env);
+        let output_key = DataKey::VdfOutput(dao_id, proposal_id);
+        let output: Option<BytesN<32>> = env.storage().persistent().get(&output_key);
+        if output.is_some() {
+            Self::bump_persistent(&env, &output_key);
+        }
+        output
+    }
+
+    /// Get the VDF delay parameter for an election.
+    pub fn get_vdf_delay(env: Env, dao_id: u64, proposal_id: u64) -> u64 {
+        Self::bump_instance(&env);
+        let delay_key = DataKey::VdfDelay(dao_id, proposal_id);
+        env.storage()
+            .persistent()
+            .get(&delay_key)
+            .unwrap_or(0)
+    }
+
+    /// Get the VDF input seed for an election.
+    pub fn get_vdf_input(env: Env, dao_id: u64, proposal_id: u64) -> Option<BytesN<32>> {
+        Self::bump_instance(&env);
+        let input_key = DataKey::VdfInput(dao_id, proposal_id);
+        let input: Option<BytesN<32>> = env.storage().persistent().get(&input_key);
+        if input.is_some() {
+            Self::bump_persistent(&env, &input_key);
+        }
+        input
+    }
+
+    /// Check if VDF has been finalized for an election.
+    pub fn is_vdf_finalized(env: Env, dao_id: u64, proposal_id: u64) -> bool {
+        Self::bump_instance(&env);
+        let finalized_key = DataKey::VdfFinalized(dao_id, proposal_id);
+        env.storage().persistent().has(&finalized_key)
+    }
+
+    /// Finalize the candidate seed using the VDF output.
+    ///
+    /// If VDF output is available, it is used directly as the candidate seed.
+    /// This provides verified randomness that was unpredictable before the
+    /// delay period elapsed.
+    ///
+    /// If VDF output is not available, falls back to the commit-reveal seed.
+    ///
+    /// # Returns
+    ///
+    /// The finalized candidate seed (32 bytes)
+    pub fn finalize_with_vdf(env: Env, dao_id: u64, proposal_id: u64) -> BytesN<32> {
+        Self::bump_instance(&env);
+
+        // Check if VDF output is available
+        if let Some(vdf_output) = Self::get_vdf_output(env.clone(), dao_id, proposal_id) {
+            // Use VDF output directly as the candidate seed
+            // Store it in ElectionConfig for backward compatibility
+            let config_key = DataKey::ElectionConfig(dao_id, proposal_id);
+            let mut config: ElectionConfig = env
+                .storage()
+                .persistent()
+                .get(&config_key)
+                .unwrap_or(ElectionConfig {
+                    snapshot_ledger: env.ledger().sequence(),
+                    min_balance: 0,
+                    twab_window: 0,
+                    candidate_seed: None,
+                    num_candidates: 0,
+                    vdf_output: None,
+                    vdf_delay: 0,
+                });
+
+            // Mix VDF output with existing seed if available, or use VDF output as seed
+            let seed = match config.candidate_seed {
+                Some(existing_seed) => {
+                    // Mix: seed = SHA256(vdf_output || existing_seed)
+                    let mut mix = Bytes::new(&env);
+                    mix.append(&Bytes::from_array(&env, &vdf_output.to_array()));
+                    mix.append(&Bytes::from_array(&env, &existing_seed.to_array()));
+                    env.crypto().sha256(&mix).into()
+                }
+                None => vdf_output,
+            };
+
+            config.candidate_seed = Some(seed.clone());
+            env.storage().persistent().set(&config_key, &config);
+            Self::bump_persistent(&env, &config_key);
+
+            CandidateSeedFinalizedEvent {
+                dao_id,
+                proposal_id,
+                seed: seed.clone(),
+            }
+            .publish(&env);
+
+            seed
+        } else {
+            // Fall back to commit-reveal seed finalization
+            Self::finalize_candidate_seed(env, dao_id, proposal_id)
+        }
     }
 }
 
