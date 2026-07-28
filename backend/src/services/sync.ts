@@ -21,6 +21,13 @@ import {
   simulateWithBackoff,
 } from "./stellar.js";
 import type { Dao } from "../types/index.js";
+import {
+  serviceLastRunTime,
+  serviceErrors,
+  serviceRunning,
+  daosSynced,
+  membershipSyncsTotal,
+} from "./metrics.js";
 
 // ============================================
 // IMMUTABLE CACHE SNAPSHOT & CONCURRENCY STATE
@@ -333,10 +340,13 @@ export async function syncDaosFromContract(): Promise<number> {
     }
 
     dbService.setDaosSyncTime(new Date().toISOString());
+    daosSynced.inc(daos.length);
+    serviceLastRunTime.set({ service: "dao_sync" }, Date.now() / 1000);
     log("info", "dao_sync_complete", { synced: daos.length, total: daoCount });
 
     return daos.length;
   } catch (err) {
+    serviceErrors.inc({ service: "dao_sync" });
     log("error", "dao_sync_error", { error: (err as Error).message });
     return 0;
   }
@@ -351,6 +361,8 @@ export function startDaoSync(): void {
   if (daoSyncInterval) {
     clearInterval(daoSyncInterval);
   }
+
+  serviceRunning.set({ service: "dao_sync" }, 1);
 
   syncDaosFromContract()
     .then((count) => {
@@ -380,6 +392,7 @@ export function stopDaoSync(): void {
   if (daoSyncInterval) {
     clearInterval(daoSyncInterval);
     daoSyncInterval = null;
+    serviceRunning.set({ service: "dao_sync" }, 0);
     log("info", "dao_sync_stopped");
   }
 }
@@ -505,6 +518,8 @@ export async function syncAllMemberships(): Promise<void> {
   }
 
   log("info", "membership_sync_complete", { daoCount: daos.length });
+  membershipSyncsTotal.inc({ status: "success" });
+  serviceLastRunTime.set({ service: "membership_sync" }, Date.now() / 1000);
 }
 
 let membershipSyncInterval: NodeJS.Timeout | null = null;
@@ -516,6 +531,8 @@ export function startMembershipSync(): void {
   if (membershipSyncInterval) {
     clearInterval(membershipSyncInterval);
   }
+
+  serviceRunning.set({ service: "membership_sync" }, 1);
 
   // Initial sync after DAO sync
   setTimeout(() => {
@@ -546,6 +563,7 @@ export function stopMembershipSync(): void {
   if (membershipSyncInterval) {
     clearInterval(membershipSyncInterval);
     membershipSyncInterval = null;
+    serviceRunning.set({ service: "membership_sync" }, 0);
     log("info", "membership_sync_stopped");
   }
 }

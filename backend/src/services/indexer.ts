@@ -10,6 +10,13 @@ import path from "path";
 import { fileURLToPath } from "url";
 import * as db from "./db.js";
 import type { Event, EventInput, EventQueryOptions, DbStatus } from "./db.js";
+import {
+  serviceLastRunTime,
+  serviceErrors,
+  serviceRunning,
+  indexerEventsProcessed,
+  indexerLag as indexerLagGauge,
+} from "./metrics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,6 +191,7 @@ async function pollEvents(
     }
 
     indexerLag = currentLedger - startLedger;
+    indexerLagGauge.set(indexerLag);
 
     // Detect gap or large lag (> 100 ledgers)
     let targetEndLedger = currentLedger;
@@ -228,6 +236,7 @@ async function pollEvents(
             }
           }
           if (addedCount > 0) {
+            indexerEventsProcessed.inc({ event_type: "indexed" }, addedCount);
             log("info", "events_indexed", {
               contract: contractId.slice(0, 8) + "...",
               count: addedCount,
@@ -332,6 +341,7 @@ export async function startIndexer(
 
   isPolling = true;
   rpcServer = server as StellarSdk.rpc.Server;
+  serviceRunning.set({ service: "indexer" }, 1);
 
   // Initialize database and migrate from JSON if exists
   db.initDb();
@@ -371,9 +381,11 @@ export async function startIndexer(
       // Also verify any pending events
       await verifyPendingEvents();
     } catch (err) {
+      serviceErrors.inc({ service: "indexer" });
       log("error", "poll_failed", { error: (err as Error).message });
     }
 
+    serviceLastRunTime.set({ service: "indexer" }, Date.now() / 1000);
     setTimeout(poll, pollIntervalMs);
   };
 
@@ -385,6 +397,7 @@ export async function startIndexer(
  */
 export function stopIndexer(): void {
   isPolling = false;
+  serviceRunning.set({ service: "indexer" }, 0);
   db.closeDb();
   log("info", "indexer_stopped");
 }
