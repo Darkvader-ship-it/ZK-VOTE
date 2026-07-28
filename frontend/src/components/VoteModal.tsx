@@ -17,6 +17,7 @@ import {
   calculateNullifier,
   type ProofInput,
 } from "../lib/zkproof";
+import { fetchWithProgress } from "../lib/fetchWithProgress";
 import { getMerklePath } from "../lib/merkletree";
 import {
   generateDeterministicZKCredentials,
@@ -148,10 +149,21 @@ export default function VoteModal({
         proposalId.toString(),
       );
 
-      // Step 4: Generate ZK proof
+      // Step 4: Download circuit artifacts with progress (the proving key
+      // is several MB and is the main bottleneck for perceived performance)
+      const zkey = await fetchWithProgress(
+        "/circuits/vote_final.zkey",
+        ({ loadedBytes, totalBytes }) => {
+          const pct = totalBytes
+            ? Math.round((loadedBytes / totalBytes) * 100)
+            : 0;
+          setProgress(`Downloading proving key... ${pct}%`);
+        },
+      );
+      const wasm = await fetchWithProgress("/circuits/vote.wasm");
+
+      // Step 4b: Generate ZK proof
       setProgress("Generating zero-knowledge proof...");
-      const wasmPath = "/circuits/vote.wasm";
-      const zkeyPath = "/circuits/vote_final.zkey";
 
       const proofInput: ProofInput = {
         // Public signals
@@ -175,8 +187,8 @@ export default function VoteModal({
 
       const { proof, publicSignals } = await generateVoteProof(
         proofInput,
-        wasmPath,
-        zkeyPath,
+        wasm,
+        zkey,
       );
 
       // Step 4.5: Verify proof locally before submitting

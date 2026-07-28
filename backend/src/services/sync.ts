@@ -129,6 +129,24 @@ export function onCacheInvalidated(listener: (snapshot: CacheSnapshot) => void):
 }
 
 /**
+ * Evict the oldest entries (in Map insertion order) once a snapshot map
+ * exceeds the configured max size. Bounds memory growth of the DAO caches
+ * (see #191) — insertion-order (FIFO) eviction is used rather than
+ * access-order LRU because these maps are immutable copy-on-write
+ * snapshots, and reordering on read would defeat that concurrency design.
+ */
+export function evictOldestOverflow<K, V>(map: Map<K, V>, maxEntries: number): Map<K, V> {
+  if (map.size <= maxEntries) return map;
+  const trimmed = new Map(map);
+  while (trimmed.size > maxEntries) {
+    const oldestKey = trimmed.keys().next().value;
+    if (oldestKey === undefined) break;
+    trimmed.delete(oldestKey);
+  }
+  return trimmed;
+}
+
+/**
  * Atomically swap cache snapshot reference (Copy-on-Write)
  */
 function swapCacheSnapshot(
@@ -136,9 +154,11 @@ function swapCacheSnapshot(
   newAdmins: Map<number, string>
 ): CacheSnapshot {
   const nextVersion = currentSnapshot.version + 1;
+  const boundedMembers = evictOldestOverflow(newMembers, config.maxCachedDaos);
+  const boundedAdmins = evictOldestOverflow(newAdmins, config.maxCachedDaos);
   const nextSnapshot: CacheSnapshot = {
-    daoMembers: newMembers,
-    daoAdmins: newAdmins,
+    daoMembers: boundedMembers,
+    daoAdmins: boundedAdmins,
     version: nextVersion,
     updatedAt: new Date().toISOString(),
   };

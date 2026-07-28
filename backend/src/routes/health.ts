@@ -16,6 +16,12 @@ import { getBackupStatus } from "../services/backup.js";
 import { checkRotationHealth, getSecretBackend } from "../services/secrets/index.js";
 
 import { rpcPoolManager } from "../services/stellar.js";
+import { getAllCircuitBreakerMetrics } from "../services/circuit-breaker.js";
+import { getMemorySnapshot } from "../services/memory-monitor.js";
+import v8 from "node:v8";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const router = Router();
 
@@ -64,11 +70,20 @@ async function rpcHealth(): Promise<{
  */
 router.get("/health", async (req: Request, res: Response) => {
   const rpc = config.healthcheckPing ? await rpcHealth() : { ok: true };
+  const memory = getMemorySnapshot();
   const base: Record<string, unknown> = {
     status: "ok",
     rpc: {
       ...rpc,
       pool: rpcPoolManager.getMetrics(),
+    },
+    circuitBreakers: getAllCircuitBreakerMetrics(),
+    memory: {
+      rssMb: Math.round(memory.rss / 1024 / 1024),
+      heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+      limitMb: memory.limitMb,
+      usageRatio: Math.round(memory.usageRatio * 1000) / 1000,
     },
   };
 
@@ -176,33 +191,36 @@ router.get("/db/stats", async (req: Request, res: Response) => {
 });
 
 /**
- * GET /health/secrets
- * Secret health monitoring (admin only)
- * Reports rotation status, backend availability, and expiration.
+ * GET /debug/heap
+ * Writes a V8 heap snapshot and returns it for download (admin only).
+ * Used to diagnose memory leaks in the long-running relayer process.
  */
-router.get("/health/secrets", async (_req: Request, res: Response) => {
-  try {
-    const health = await checkRotationHealth();
-    res.json(health);
-  } catch (err) {
-    log("error", "secret_health_check_failed", { error: (err as Error).message });
-    res.status(500).json({ error: "Secret health check failed" });
+router.get("/debug/heap", async (req: Request, res: Response) => {
+  const token = extractAuthToken(req);
+  if (!config.relayerAuthToken || token !== config.relayerAuthToken) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-});
 
-/**
- * GET /health/backend
- * Returns backend configuration summary (no secret values)
- */
-router.get("/health/backend", (_req: Request, res: Response) => {
-  res.json({
-    backend: getSecretBackend(),
-    vaultConfigured: !!process.env.VAULT_URL,
-    ipfsEnabled: config.ipfsEnabled,
-    pinataGateway: config.pinataGateway,
-    rpcUrl: config.rpcUrl,
-    networkPassphrase: config.networkPassphrase,
-  });
+  const snapshotPath = path.join(
+    os.tmpdir(),
+    `zkvote-heap-${Date.now()}.heapsnapshot`,
+  );
+
+  try {
+    log("info", "heap_snapshot_requested", { path: snapshotPath });
+    v8.writeHeapSnapshot(snapshotPath);
+
+    res.download(snapshotPath, path.basename(snapshotPath), (err) => {
+      fs.unlink(snapshotPath, () => {});
+      if (err) {
+        log("error", "heap_snapshot_send_failed", { error: err.message });
+      }
+    });
+  } catch (err) {
+    log("error", "heap_snapshot_failed", { error: (err as Error).message });
+    fs.unlink(snapshotPath, () => {});
+    res.status(500).json({ error: "Failed to generate heap snapshot" });
+  }
 });
 
 export default router;
