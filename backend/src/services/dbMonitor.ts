@@ -6,6 +6,7 @@
  */
 
 import { type Database as DatabaseType } from "better-sqlite3";
+import { config } from "../config.js";
 import {
   dbQueriesTotal,
   dbQueryDuration,
@@ -342,6 +343,12 @@ const DEFAULT_CACHE_TTL_MS = 30_000; // 30 seconds
 
 /**
  * Get a cached value or compute and cache it.
+ *
+ * Bounded LRU: on hit the entry is moved to the most-recently-used position
+ * (Map iteration order); when the store exceeds the configured max size the
+ * least-recently-used entries are evicted. This caps memory growth from
+ * high-cardinality cache keys whose entries are never explicitly
+ * invalidated (see #191).
  */
 export function getCachedOrCompute<T>(
   key: string,
@@ -353,13 +360,31 @@ export function getCachedOrCompute<T>(
 
   if (entry && entry.expiresAt > now) {
     cacheHits++;
+    // Move to MRU position
+    cacheStore.delete(key);
+    cacheStore.set(key, entry);
     return entry.value;
   }
 
   cacheMisses++;
   const value = compute();
+  cacheStore.delete(key);
   cacheStore.set(key, { value, expiresAt: now + ttlMs });
+  evictLruOverflow();
   return value;
+}
+
+/**
+ * Evict least-recently-used entries once the cache exceeds its configured
+ * maximum size.
+ */
+function evictLruOverflow(): void {
+  const maxEntries = config.dbQueryCacheMaxEntries;
+  while (cacheStore.size > maxEntries) {
+    const oldestKey = cacheStore.keys().next().value;
+    if (oldestKey === undefined) break;
+    cacheStore.delete(oldestKey);
+  }
 }
 
 /**

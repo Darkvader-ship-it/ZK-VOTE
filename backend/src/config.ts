@@ -2,6 +2,8 @@
  * Environment Configuration
  *
  * Centralizes all environment variables and configuration.
+ * Secrets can be retrieved dynamically via the SecretManager
+ * for runtime fetch from Vault or Fly.io secrets.
  */
 
 import dotenv from "dotenv";
@@ -43,7 +45,7 @@ export const config = {
     process.env.NETWORK_PASSPHRASE || "Standalone Network ; February 2017",
   rpcTimeoutMs: Number(process.env.RPC_TIMEOUT_MS || 30_000),
 
-  // Authentication
+  // Authentication (read from env as fallback; see getSecret() for dynamic retrieval)
   relayerAuthToken: process.env.RELAYER_AUTH_TOKEN,
   relayerSecretKey: process.env.RELAYER_SECRET_KEY,
 
@@ -86,7 +88,7 @@ export const config = {
     process.env.MEMBERSHIP_SYNC_INTERVAL_MS || 600000,
   ),
 
-  // IPFS/Pinata
+  // IPFS/Pinata (read from env as fallback; see getSecret() for dynamic retrieval)
   pinataJwt: process.env.PINATA_JWT,
   pinataGateway: process.env.PINATA_GATEWAY,
   ipfsEnabled: !!process.env.PINATA_JWT,
@@ -138,6 +140,41 @@ export const config = {
   archivalAgeDays: Number(process.env.ARCHIVAL_AGE_DAYS || 90),
   archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
 
+  // Circuit Breakers
+  circuitBreakerRpcFailureThreshold: Number(
+    process.env.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD || 5,
+  ),
+  circuitBreakerRpcResetMs: Number(
+    process.env.CIRCUIT_BREAKER_RPC_RESET_MS || 30_000,
+  ),
+  circuitBreakerPinataFailureThreshold: Number(
+    process.env.CIRCUIT_BREAKER_PINATA_FAILURE_THRESHOLD || 5,
+  ),
+  circuitBreakerPinataResetMs: Number(
+    process.env.CIRCUIT_BREAKER_PINATA_RESET_MS || 30_000,
+  ),
+  circuitBreakerGatewayFailureThreshold: Number(
+    process.env.CIRCUIT_BREAKER_GATEWAY_FAILURE_THRESHOLD || 5,
+  ),
+  circuitBreakerGatewayResetMs: Number(
+    process.env.CIRCUIT_BREAKER_GATEWAY_RESET_MS || 30_000,
+  ),
+
+  // Memory monitoring
+  memoryMonitorIntervalMs: Number(
+    process.env.MEMORY_MONITOR_INTERVAL_MS || 60_000,
+  ),
+  // Container memory limit in MB (should match fly.toml [[vm]] memory, minus
+  // a safety margin) — used to compute the usage ratio for alerting.
+  memoryLimitMb: Number(process.env.MEMORY_LIMIT_MB || 512),
+  memoryWarnRatio: Number(process.env.MEMORY_WARN_RATIO || 0.8),
+  memoryCriticalRatio: Number(process.env.MEMORY_CRITICAL_RATIO || 0.95),
+  memoryAutoRestart: process.env.MEMORY_AUTO_RESTART !== "false",
+
+  // Cache eviction bounds
+  maxCachedDaos: Number(process.env.MAX_CACHED_DAOS || 5000),
+  dbQueryCacheMaxEntries: Number(process.env.DB_QUERY_CACHE_MAX_ENTRIES || 500),
+
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
 } as const;
@@ -178,7 +215,7 @@ export const ALLOWED_IMAGE_MIMES = [
 
 // BN254 field modulus (p)
 export const BN254_MODULUS = BigInt(
-  "21888242871839275222246405745257275088548364400416034343698204186575808495617",
+  "218882428718392752222464057452572750885483644004160343698204186575808495617",
 );
 
 // BN254 scalar field modulus (r)

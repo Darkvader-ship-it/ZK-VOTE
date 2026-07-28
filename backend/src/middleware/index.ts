@@ -14,6 +14,8 @@ export {
   ipfsUploadLimiter,
   ipfsReadLimiter,
   commentLimiter,
+  graduatedSlowDown,
+  getRateLimitMetrics,
 } from "./rateLimit.js";
 export { validateBody, validateQuery, validateParams } from "./validate.js";
-export { metricsMiddleware } from "./metrics.js";
+export { auditLog } from "./audit.js";

@@ -16,6 +16,20 @@ import {
   ipfsCacheHits,
   ipfsCacheMisses,
 } from "./metrics.js";
+import { registerCircuitBreaker } from "./circuit-breaker.js";
+import { config } from "../config.js";
+
+// Circuit breakers for external IPFS dependencies. Trips fast when Pinata
+// or the public gateways are degraded, instead of letting every caller run
+// its own retry logic against a service that is known to be down.
+const pinataBreaker = registerCircuitBreaker("pinata", {
+  failureThreshold: config.circuitBreakerPinataFailureThreshold,
+  resetTimeoutMs: config.circuitBreakerPinataResetMs,
+});
+const ipfsGatewayBreaker = registerCircuitBreaker("ipfs_gateway", {
+  failureThreshold: config.circuitBreakerGatewayFailureThreshold,
+  resetTimeoutMs: config.circuitBreakerGatewayResetMs,
+});
 
 // ============================================
 // TYPES
@@ -198,8 +212,14 @@ export function sanitizeMetadata<T>(data: T): T {
   if (data && typeof data === "object") {
     const sanitized: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(data)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype" || key.startsWith("__")) {
+        continue;
+      }
       // Sanitize both keys and values
       const sanitizedKey = sanitizeString(key);
+      if (sanitizedKey === "__proto__" || sanitizedKey === "constructor" || sanitizedKey === "prototype" || sanitizedKey.startsWith("__")) {
+        continue;
+      }
       sanitized[sanitizedKey] = sanitizeMetadata(value);
     }
     return sanitized as T;
@@ -293,10 +313,12 @@ export async function pinJSON(
 
   // 2. Upload to Pinata (primary)
   // SDK v2.x: pinata.upload.public.json() with chainable methods
-  const result = await pinata.upload.public.json(data).name(name).keyvalues({
-    app: "zkvote",
-    type: "proposal-metadata",
-  });
+  const result = await pinataBreaker.execute(async () =>
+    pinata!.upload.public.json(data).name(name).keyvalues({
+      app: "zkvote",
+      type: "proposal-metadata",
+    }),
+  );
 
   const sizeBytes = result.size || JSON.stringify(data).length;
 
@@ -365,13 +387,15 @@ export async function pinFile(
   });
 
   // SDK v2.x: pinata.upload.public.file() with chainable methods
-  const result = await pinata.upload.public
-    .file(file)
-    .name(filename)
-    .keyvalues({
-      app: "zkvote",
-      type: "proposal-image",
-    });
+  const result = await pinataBreaker.execute(async () =>
+    pinata!.upload.public
+      .file(file)
+      .name(filename)
+      .keyvalues({
+        app: "zkvote",
+        type: "proposal-image",
+      }),
+  );
 
   const sizeBytes = result.size || buffer.length;
 
@@ -468,13 +492,15 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
   const timeout = setTimeout(() => controller.abort(), 30000);
   const fetchStart = performance.now();
   try {
-    const response = await fetch(url, { signal: controller.signal });
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch from IPFS: ${response.status} ${response.statusText}`,
-      );
-    }
+    const response = await ipfsGatewayBreaker.execute(async () => {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(
+          `Failed to fetch from IPFS: ${res.status} ${res.statusText}`,
+        );
+      }
+      return res;
+    });
 
     const contentType =
       response.headers.get("content-type") || "application/json";
@@ -541,13 +567,15 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
   const timeout = setTimeout(() => controller.abort(), 30000);
   const fetchStart = performance.now();
   try {
-    const response = await fetch(url, { signal: controller.signal });
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch from IPFS: ${response.status} ${response.statusText}`,
-      );
-    }
+    const response = await ipfsGatewayBreaker.execute(async () => {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(
+          `Failed to fetch from IPFS: ${res.status} ${res.statusText}`,
+        );
+      }
+      return res;
+    });
 
     const contentType =
       response.headers.get("content-type") || "application/octet-stream";

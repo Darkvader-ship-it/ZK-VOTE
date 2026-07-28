@@ -34,6 +34,7 @@ interface PendingRequest {
   resolve: (value: any) => void;
   reject: (reason: any) => void;
   startTime: number;
+  worker: Worker;
 }
 
 const WORKER_SCRIPT = `
@@ -206,6 +207,16 @@ export class DbWorkerPool {
       crashedWorker.terminate();
     } catch (_) {}
 
+    // Reject and remove any requests that were in flight on the crashed
+    // worker — otherwise their promises (and the map entries holding them)
+    // never resolve and leak for the lifetime of the process (see #191).
+    for (const [reqId, pending] of this.pendingRequests) {
+      if (pending.worker === crashedWorker) {
+        this.pendingRequests.delete(reqId);
+        pending.reject(new Error("Worker crashed before completing request"));
+      }
+    }
+
     if (isWriter) {
       log("warn", "restarting_db_writer_worker");
       this.writerWorker = this.spawnWorker(true, 0);
@@ -272,6 +283,7 @@ export class DbWorkerPool {
         resolve,
         reject,
         startTime: Date.now(),
+        worker,
       });
 
       worker.postMessage({
