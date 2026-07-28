@@ -44,6 +44,7 @@ export const config = {
   networkPassphrase:
     process.env.NETWORK_PASSPHRASE || "Standalone Network ; February 2017",
   rpcTimeoutMs: Number(process.env.RPC_TIMEOUT_MS || 30_000),
+  shutdownDrainTimeoutMs: Number(process.env.SHUTDOWN_DRAIN_TIMEOUT_MS || 30_000),
 
   // Authentication (read from env as fallback; see getSecret() for dynamic retrieval)
   relayerAuthToken: process.env.RELAYER_AUTH_TOKEN,
