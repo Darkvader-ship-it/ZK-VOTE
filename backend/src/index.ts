@@ -117,26 +117,63 @@ validateEnv();
 const app: Express = express();
 
 // Security: HTTP headers with CSP
+// This is a pure JSON API (no HTML is served outside /api-docs), so the CSP
+// defaults everything to 'none' and only opens the handful of directives
+// still needed (e.g. the Swagger UI docs route explicitly relaxes CSP for
+// itself further down). See #140.
 app.use(
   helmet({
     contentSecurityPolicy: {
       directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "https:", "blob:"],
-        connectSrc: ["'self'", "https:", "wss:", "blob:"],
-        fontSrc: ["'self'", "data:"],
+        defaultSrc: ["'none'"],
+        scriptSrc: ["'none'"],
+        styleSrc: ["'none'"],
+        imgSrc: ["'none'"],
+        connectSrc: ["'none'"],
+        fontSrc: ["'none'"],
         objectSrc: ["'none'"],
-        baseUri: ["'self'"],
-        formAction: ["'self'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
         frameAncestors: ["'none'"],
         blockAllMixedContent: [],
         upgradeInsecureRequests: [],
       },
     },
+    // Explicit HSTS (helmet enables this by default, but pin the values so
+    // the policy is documented and doesn't silently change with a helmet
+    // upgrade). Browsers ignore this header over plain HTTP.
+    hsts: {
+      maxAge: 31536000, // 1 year
+      includeSubDomains: true,
+      preload: true,
+    },
+    // helmet.noSniff() (X-Content-Type-Options: nosniff) and
+    // helmet.frameguard() (X-Frame-Options: DENY) are both on by default;
+    // kept implicit here but verified via the header-presence test added
+    // alongside this change.
   }),
 );
+
+// Restrict powerful browser features. Not part of helmet's own defaults
+// (no bundled Permissions-Policy middleware as of helmet v8), so it's set
+// directly. This is a JSON API with no UI, so every feature is denied.
+app.use((_req, res, next) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  );
+  next();
+});
+
+// Prevent caching of sensitive, non-static API responses. Kept scoped to the
+// routes that return per-user or per-vote data rather than applied globally,
+// since some routes (e.g. /api-docs, /ipfs/image/:cid) are fine to cache.
+// See #140 — per-route CSP exceptions for the IPFS image endpoint are left
+// as follow-up (needs its own directive design, not a 2-3 line change).
+const noStore = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+};
 
 // Metrics middleware (before other middleware to capture all requests)
 app.use(metricsMiddleware);
@@ -191,7 +228,7 @@ initIndexerRoutes(triggerDaoMembershipSync);
 app.use(metricsRoutes);
 app.use(healthRoutes);
 app.use(remediationRoutes);
-app.use(votingRoutes);
+app.use(noStore, votingRoutes);
 app.use(daoRoutes);
 app.use(ipfsRoutes);
 app.use(commentsRoutes);
@@ -201,8 +238,40 @@ app.use(circuitRoutes);
 app.use(authRoutes);
 app.use(quadraticRoutes);
 app.use("/api/v1/nova", novaRoutes);
-app.use(adminRoutes);
-app.use(thresholdRoutes);
+app.use(noStore, adminRoutes);
+app.use(noStore, thresholdRoutes);
+
+// ============================================
+// API VERSIONING (#139)
+// ============================================
+// URL-based versioning: mount the same routers under /api/v1 in addition to
+// the existing unversioned paths, so existing clients keep working while new
+// clients can opt into the explicit, cache-friendly versioned path. A
+// response header also advertises which version served the request.
+//
+// Deliberately out of scope for this pass (see PR body): deprecation/Sunset
+// headers for the unversioned routes, a version-lifecycle policy doc, and
+// updating the frontend to call /api/v1.
+app.use((_req, res, next) => {
+  res.setHeader("API-Version", "v1");
+  next();
+});
+
+const v1Router = express.Router();
+v1Router.use(metricsRoutes);
+v1Router.use(healthRoutes);
+v1Router.use(remediationRoutes);
+v1Router.use(noStore, votingRoutes);
+v1Router.use(daoRoutes);
+v1Router.use(ipfsRoutes);
+v1Router.use(commentsRoutes);
+v1Router.use(indexerRoutes);
+v1Router.use(bridgeRoutes);
+v1Router.use(circuitRoutes);
+v1Router.use(quadraticRoutes);
+v1Router.use(noStore, adminRoutes);
+v1Router.use(noStore, thresholdRoutes);
+app.use("/api/v1", v1Router);
 
 // OpenAPI spec + interactive docs
 const openApiDocument = buildOpenApiDocument();
