@@ -263,6 +263,8 @@ export const voteSchema = z
     timestamp: z.number().int().optional(),
     walletAddress: z.string().optional(),
     encryptedPayload: z.union([z.string(), z.record(z.unknown())]).optional(),
+    voterPublicKey: stellarAddress.optional(),
+    voterSignature: z.string().min(1).optional(), // signed XDR from Freighter
   })
   .refine(
     (data) => data.encryptedPayload || (data.nullifier && data.root && data.proof),
