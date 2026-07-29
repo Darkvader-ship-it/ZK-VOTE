@@ -12,6 +12,7 @@ export { default as commentsRoutes } from "./comments.js";
 export { default as indexerRoutes, initIndexerRoutes } from "./indexer.js";
 export { default as bridgeRoutes } from "./bridge.js";
 export { default as circuitRoutes } from "./circuits.js";
+export { default as authRoutes } from "./auth.js";
 export { default as quadraticRoutes } from "./quadratic.js";
 export { default as metricsRoutes } from "./metrics.js";
 export { default as remediationRoutes } from "./remediation.js";

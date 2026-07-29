@@ -58,6 +58,11 @@ import {
 } from "./services/sync.js";
 import { startIndexer, stopIndexer } from "./services/indexer.js";
 import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
+import {
+  startAuthScheduler,
+  stopAuthScheduler,
+  ensureLegacyTokenMigrated,
+} from "./services/authScheduler.js";
 import { startMemoryMonitor, stopMemoryMonitor } from "./services/memory-monitor.js";
 import { closeDb } from "./services/db.js";
 
@@ -85,6 +90,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  authRoutes,
   quadraticRoutes,
   metricsRoutes,
   remediationRoutes,
@@ -143,6 +149,14 @@ const corsOrigins = config.corsOrigins === "*" ? "*" : config.corsOrigins;
 const corsOptions: cors.CorsOptions = {
   origin: corsOrigins,
   methods: ["GET", "POST"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Relayer-Auth",
+    "X-Client-Id",
+    "X-Master-Key",
+  ],
+  exposedHeaders: ["X-Token-Id", "X-Client-Id"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth"],
   exposedHeaders: ["X-Service-Degraded", "X-Service-Status"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth", "X-CSRF-Token"],
@@ -184,6 +198,7 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(authRoutes);
 app.use(quadraticRoutes);
 app.use("/api/v1/nova", novaRoutes);
 app.use(adminRoutes);
@@ -359,6 +374,12 @@ async function startBackgroundServices(): Promise<void> {
   // Start TTL renewal service (prevents contract data from expiring)
   startTTLRenewal();
 
+    // Start TTL renewal service (prevents contract data from expiring)
+    startTTLRenewal();
+
+    // Initialize auth: migrate legacy token and start rotation scheduler
+    ensureLegacyTokenMigrated();
+    startAuthScheduler();
   // Start periodic memory monitoring
   startMemoryMonitor(() => {
     log("warn", "memory_threshold_exceeded_triggering_shutdown", { pid: process.pid });
@@ -537,6 +558,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     stopTTLRenewal();
     log("info", "shutdown_component_stopped", { component: "ttl_renewal" });
     stopPinMonitor();
+    stopAuthScheduler();
+    process.exit(0);
+  });
     log("info", "shutdown_component_stopped", { component: "pin_monitor" });
     stopMemoryMonitor();
     stopWalResilience();
@@ -579,6 +603,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     void gracefulShutdown("SIGTERM");
   });
   process.on("SIGINT", () => {
+    log("info", "shutdown_signal");
+    stopIndexer();
+    stopDaoSync();
+    stopMembershipSync();
+    stopTTLRenewal();
+    stopPinMonitor();
+    stopAuthScheduler();
+    process.exit(0);
     void gracefulShutdown("SIGINT");
   });
 }
