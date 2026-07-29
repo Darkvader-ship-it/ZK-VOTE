@@ -8,7 +8,6 @@ include "merkle_tree.circom";
 // SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
 // Prevents cross-protocol attacks where commitments from other systems
 // could be valid in ZK-VOTE
-var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
 
 // BridgeVote Circuit
 //
@@ -36,6 +35,8 @@ var DOMAIN_TAG = 196660415917974038346554814039824430374385039807437935376559836
 //   where 1 = isActive (unrevoked)
 // - sbtRoot is posted by relayer; circuit verifies inclusion
 template BridgeVote(levels) {
+    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
+
     // === Public inputs ===
     signal input sbtContractAddr;   // Soroban SBT contract address (U256)
     signal input memberAddr;        // Stellar address of the member (U256)

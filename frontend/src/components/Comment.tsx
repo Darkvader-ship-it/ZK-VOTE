@@ -257,8 +257,6 @@ export default function Comment({
 
           {/* Actions */}
           {!comment.deleted && !isPending && (
-            <div className="relative">
-          {!comment.deleted && (
             <div className="relative ml-auto">
               <button
                 onClick={() => setShowActions(!showActions)}

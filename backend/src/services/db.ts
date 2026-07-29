@@ -15,13 +15,10 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import {
 import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
 import { migrateUp } from "./migrate.js";
 import { kysely } from "./kysely.js";
 import { sql } from "kysely";
-import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
-import { migrateUp } from "./migrate.js";
 import { initWalResilience, configureWalResilience, incrementTransactionCounter } from "./walResilience.js";
 import { config } from "../config.js";
 
@@ -337,6 +334,8 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "idx_auth_audit_client_id", columns: ["client_id"] },
       { name: "idx_auth_audit_action", columns: ["action"] },
       { name: "idx_auth_audit_created_at", columns: ["created_at"] },
+    ],
+  },
   proof_commitments: {
     columns: [
       { name: "commitment_hash", type: "TEXT", notNull: true, primaryKey: true },
@@ -2671,6 +2670,10 @@ function rowToAuditEntry(row: Record<string, unknown>): AuthTokenAuditEntry {
     ipHash: (row.ip_hash as string) ?? null,
     success: !!row.success,
     errorMessage: (row.error_message as string) ?? null,
+    createdAt: (row.created_at as string) ?? null,
+  };
+}
+
 // PROOF COMMITMENT STORAGE
 // ============================================
 

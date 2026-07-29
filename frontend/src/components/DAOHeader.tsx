@@ -44,7 +44,6 @@ const GitHubIcon = ({ className }: { className?: string }) => (
 );
 
 export type DAOTab =
-  "info" | "proposals" | "members" | "create-proposal" | "settings";
   | "info"
   | "proposals"
   | "members"

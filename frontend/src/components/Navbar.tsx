@@ -14,8 +14,8 @@ interface NavbarProps {
   connecting: boolean;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  currentView: "home" | "browse" | "votes" | "docs";
-  onNavigate: (view: "home" | "browse" | "votes" | "docs") => void;
+  currentView: "home" | "browse" | "votes" | "docs" | "profile";
+  onNavigate: (view: "home" | "browse" | "votes" | "docs" | "profile") => void;
   relayerStatus?: string | null;
   relayerErrors?: string[];
 }
@@ -37,7 +37,7 @@ export default function Navbar({
   const mounted = useMounted();
   const { t } = useTranslation();
 
-  const handleNavigate = (view: "home" | "browse" | "votes" | "docs") => {
+  const handleNavigate = (view: "home" | "browse" | "votes" | "docs" | "profile") => {
     onNavigate(view);
     setMobileMenuOpen(false);
   };
@@ -105,6 +105,14 @@ export default function Navbar({
           >
             {t("nav.docs")}
           </button>
+          <button
+            onClick={() => handleNavigate("profile")}
+            className={`transition-colors hover:text-foreground/80 ${
+              currentView === "profile" ? "text-foreground" : "text-foreground/60"
+            }`}
+          >
+            Receipts
+          </button>
         </nav>
 
         <div className="flex flex-1 items-center justify-end space-x-2">
@@ -150,10 +158,10 @@ export default function Navbar({
                     variant="outline"
                     size="sm"
                     onClick={onDisconnect}
-                    className="h-9"
+                    className="min-h-[48px] sm:min-h-0 sm:h-9"
                   >
-                    <LogOut className="mr-2 h-3.5 w-3.5" />
-                    Disconnect
+                    <LogOut className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                    <span className="text-xs sm:text-sm">{t("nav.disconnect")}</span>
                   </Button>
                 </div>
               ) : (
@@ -161,36 +169,14 @@ export default function Navbar({
                   onClick={onConnect}
                   disabled={connecting}
                   size="sm"
-                  className="h-9"
+                  className="min-h-[48px] sm:min-h-0 sm:h-9 px-3 sm:px-4"
                 >
-                  <Wallet className="mr-2 h-3.5 w-3.5" />
-                  {connecting ? "Connecting..." : "Connect Wallet"}
+                  <Wallet className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                  <span className="text-xs sm:text-sm">
+                    {connecting ? t("nav.connecting") : t("nav.connectWallet")}
+                  </span>
                 </Button>
               ))}
-                  onClick={onDisconnect}
-                  className="min-h-[48px] sm:min-h-0 sm:h-9"
-                >
-                  <LogOut className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                  <span className="text-xs sm:text-sm">Disconnect</span>
-                  <LogOut className="mr-2 h-3.5 w-3.5" />
-                  {t("nav.disconnect")}
-                </Button>
-              </div>
-            ) : (
-              <Button
-                onClick={onConnect}
-                disabled={connecting}
-                size="sm"
-                className="min-h-[48px] sm:min-h-0 sm:h-9 px-3 sm:px-4"
-              >
-                <Wallet className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                <span className="text-xs sm:text-sm">
-                  {connecting ? "Connecting..." : "Connect Wallet"}
-                </span>
-                <Wallet className="mr-2 h-3.5 w-3.5" />
-                {connecting ? t("nav.connecting") : t("nav.connectWallet")}
-              </Button>
-            ))}
           </div>
         </div>
       </div>
@@ -228,6 +214,16 @@ export default function Navbar({
               }`}
             >
               Docs
+            </button>
+            <button
+              onClick={() => handleNavigate("profile")}
+              className={`block w-full text-left px-3 py-2 rounded-md transition-colors ${
+                currentView === "profile"
+                  ? "bg-muted text-foreground"
+                  : "text-foreground/60 hover:bg-muted/50"
+              }`}
+            >
+              Receipts
             </button>
           </div>
         </div>

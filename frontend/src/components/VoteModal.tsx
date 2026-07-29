@@ -19,6 +19,7 @@ import {
   storeZKCredentials,
 } from "../lib/zk";
 import { CheckCircle, XCircle, AlertTriangle, Loader2, X } from "lucide-react";
+import { useReceipts } from "../hooks/useReceipts";
 
 interface VoteModalProps {
   proposalId: number;
@@ -48,6 +49,7 @@ export default function VoteModal({
   const [step, setStep] = useState<VoteStep>("select");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const { addReceipt } = useReceipts();
   const { setOptimisticVote, clearPendingVote } = useOptimisticVote();
 
   const handleVote = async (choice: boolean) => {
@@ -260,6 +262,17 @@ export default function VoteModal({
         voterPublicKey: publicKey,
         voterSignature,
       });
+
+      // Save receipt
+      if (result.success && result.txHash) {
+        addReceipt({
+          txHash: result.txHash,
+          nullifier: toHexBE(nullifier),
+          timestamp: Date.now(),
+          daoId: Number(daoId),
+          proposalId: Number(proposalId),
+        });
+      }
 
       // Optimistic update
       const revertOptimisticUpdate = setOptimisticVote(daoId, proposalId, choice);

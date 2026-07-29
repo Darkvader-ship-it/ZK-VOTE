@@ -108,7 +108,7 @@ interface LogMeta {
 }
 
 const log = (level: LogLevel, event: string, meta: LogMeta = {}): void => {
-  console.log(
+  console.info(
     JSON.stringify({ level, event, ts: new Date().toISOString(), ...meta }),
   );
 };
