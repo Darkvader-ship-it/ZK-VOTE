@@ -88,8 +88,21 @@ jobs:
         run: npm run lint
       - name: Format check
         run: npx prettier --check "src/**/*.ts"
+      - name: Validate environment profiles
+        run: npm run validate-profiles
       - name: Run tests
         run: npm test
+        env:
+          RELAYER_TEST_MODE: 'true'
+          SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
+          NETWORK_PASSPHRASE: 'Test SDF Network ; September 2015'
+          RELAYER_SECRET_KEY: 'SCZANGBA5AKIA7VTJQXBDKPQOBFZD3NWKNR3CQULPSFMJUADSHWFUCS'
+          RELAYER_AUTH_TOKEN: 'ci-test-token-placeholder-32-chars-min'
+          VOTING_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+          TREE_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+          COMMENTS_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+      - name: Check OpenAPI spec and API.md are up to date
+        run: npm run docs:check
         env:
           RELAYER_TEST_MODE: 'true'
           SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
@@ -121,6 +134,15 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+      - name: Compile circuits with Docker
+        run: ../scripts/compile-circuits.sh --docker
+      - name: Verify circuit artifact checksums (if artifacts exist)
+        run: |
+          if [ -f "build/vote.r1cs" ] || [ -f "build/verification_key.json" ]; then
+            ../scripts/verify-circuits.sh
+          else
+            echo "Skipping verification - no compiled artifacts found"
+          fi
       - name: Compile v2 circuits (if available)
         run: |
           if command -v circom &> /dev/null; then

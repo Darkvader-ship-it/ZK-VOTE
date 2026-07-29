@@ -91,20 +91,122 @@ const groth16Proof = z.object({
   c: proofC,
 });
 
+// ============================================
+// ROUTE PARAMETER VALIDATORS
+// ============================================
+
+/**
+ * Positive integer validator for DAO/Proposal/Comment IDs
+ */
+const positiveInteger = z.string().pipe(
+  z.coerce.number()
+    .positive("Must be a positive integer")
+    .int("Must be an integer")
+    .max(Number.MAX_SAFE_INTEGER, "Value too large")
+);
+
 /**
  * IPFS CID validator (CIDv0 or CIDv1)
  */
+const CIDV0_REGEX = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
+const CIDV1_REGEX = /^baf[a-z2-7]{46,120}$/i;
+
 const ipfsCid = z.string().refine(
   (val) => {
-    // CIDv0: Qm... (46 chars)
-    if (val.startsWith("Qm") && val.length >= 46) return true;
+    // CIDv0: exact-length Bitcoin base58 encoding.
+    if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(val)) return true;
     // CIDv1: bafy... or bafk... (59+ chars)
     if ((val.startsWith("bafy") || val.startsWith("bafk")) && val.length >= 59)
       return true;
     return false;
+    if (!val || typeof val !== "string") return false;
+    const trimmed = val.trim();
+    if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) return false;
+    return CIDV0_REGEX.test(trimmed) || CIDV1_REGEX.test(trimmed);
   },
   { message: "Invalid IPFS CID format" },
 );
+
+/**
+ * Hex string validator for nullifiers (64 hex chars max)
+ */
+const nullifierHex = z.string().refine(
+  (val) => {
+    const hex = val.startsWith("0x") ? val.slice(2) : val;
+    if (hex.length === 0 || hex.length > 64) return false;
+    return /^[0-9a-fA-F]*$/.test(hex);
+  },
+  { message: "Must be a valid hex string (max 64 chars)" },
+);
+
+/**
+ * Commitment hash validator (64 hex chars)
+ */
+const commitmentHash = z.string().refine(
+  (val) => {
+    const hex = val.startsWith("0x") ? val.slice(2) : val;
+    return hex.length === 64 && /^[0-9a-fA-F]*$/.test(hex);
+  },
+  { message: "Must be a 64-character hex string" },
+);
+
+// ============================================
+// ROUTE PARAMETER SCHEMAS
+// ============================================
+
+/**
+ * Parameter schema for routes with :daoId
+ */
+export const daoParamsSchema = z.object({
+  daoId: positiveInteger,
+});
+
+/**
+ * Parameter schema for routes with :daoId and :proposalId
+ */
+export const proposalParamsSchema = z.object({
+  daoId: positiveInteger,
+  proposalId: positiveInteger,
+});
+
+/**
+ * Parameter schema for routes with :daoId, :proposalId, and :commentId
+ */
+export const commentParamsSchema = z.object({
+  daoId: positiveInteger,
+  proposalId: positiveInteger,
+  commentId: positiveInteger,
+});
+
+/**
+ * Parameter schema for routes with :cid
+ */
+export const cidParamsSchema = z.object({
+  cid: ipfsCid,
+});
+
+/**
+ * Parameter schema for routes with :daoId, :proposalId, and :nullifier
+ */
+export const nullifierParamsSchema = z.object({
+  daoId: positiveInteger,
+  proposalId: positiveInteger,
+  nullifier: nullifierHex,
+});
+
+/**
+ * Parameter schema for routes with :commitment
+ */
+export const commitmentParamsSchema = z.object({
+  commitment: commitmentHash,
+});
+
+/**
+ * Parameter schema for routes with :archiveId
+ */
+export const archiveParamsSchema = z.object({
+  archiveId: positiveInteger,
+});
 
 /**
  * Stellar address validator
@@ -128,23 +230,52 @@ const txHash = z
   .regex(/^[0-9a-fA-F]{64}$/, "Invalid transaction hash format");
 
 // ============================================
-// VOTE SCHEMA
+// PROOF COMMITMENT SCHEMA
 // ============================================
 
-export const voteSchema = z.object({
+export const commitSchema = z.object({
   daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
   proposalId: z
     .number()
     .int()
     .nonnegative("proposalId must be a non-negative integer"),
-  choice: z.boolean({
-    required_error: "choice is required",
-    invalid_type_error: "choice must be a boolean",
-  }),
   nullifier: bn254Field,
-  root: bn254Field,
-  proof: groth16Proof,
+  commitmentHash: commitmentHash,
+  timestamp: z.number().int().positive("timestamp must be a positive integer"),
+  walletAddress: z.string().optional(),
 });
+
+export type CommitRequest = z.infer<typeof commitSchema>;
+
+// ============================================
+// VOTE SCHEMA
+// ============================================
+
+export const voteSchema = z
+  .object({
+    daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
+    proposalId: z
+      .number()
+      .int()
+      .nonnegative("proposalId must be a non-negative integer"),
+    choice: z.boolean({
+      required_error: "choice is required",
+      invalid_type_error: "choice must be a boolean",
+    }),
+    nullifier: bn254Field.optional(),
+    root: bn254Field.optional(),
+    proof: groth16Proof.optional(),
+    nonce: z.string().optional(),
+    timestamp: z.number().int().optional(),
+    walletAddress: z.string().optional(),
+    encryptedPayload: z.union([z.string(), z.record(z.unknown())]).optional(),
+    voterPublicKey: stellarAddress.optional(),
+    voterSignature: z.string().min(1).optional(), // signed XDR from Freighter
+  })
+  .refine(
+    (data) => data.encryptedPayload || (data.nullifier && data.root && data.proof),
+    { message: "Either encryptedPayload or full vote payload (nullifier, root, proof) must be provided" },
+  );
 
 export type VoteRequest = z.infer<typeof voteSchema>;
 
@@ -283,12 +414,40 @@ export type CommentMetadata = z.infer<typeof commentMetadataSchema>;
 // QUERY PARAMETER SCHEMAS
 // ============================================
 
-export const paginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+const MAX_PAGE_SIZE = 500;
+const DEFAULT_PAGE_SIZE = 100;
+
+export const limitOffsetPaginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-export const eventsQuerySchema = paginationSchema.extend({
+export const cursorPaginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  cursor: z.string().optional(),
+});
+
+export const eventsQuerySchema = cursorPaginationSchema.extend({
+  types: z
+    .string()
+    .optional()
+    .transform((val) => val?.split(",").filter(Boolean) || null),
+  orderBy: z
+    .enum(['id', 'timestamp', 'ledger', 'type', 'verified', 'created_at'])
+    .default('timestamp'),
+  orderDirection: z
+    .enum(['ASC', 'DESC'])
+    .default('DESC'),
+  cursorField: z
+    .enum(['id', 'ledger', 'timestamp'])
+    .default('id'),
+});
+
+export const daosQuerySchema = limitOffsetPaginationSchema.extend({
+  user: stellarAddress.optional(),
+});
+
+export const commentCountQuerySchema = limitOffsetPaginationSchema.extend({
   types: z
     .string()
     .optional()
@@ -297,8 +456,4 @@ export const eventsQuerySchema = paginationSchema.extend({
 
 export const commentNonceQuerySchema = z.object({
   commitment: bn254Field,
-});
-
-export const daosQuerySchema = z.object({
-  user: stellarAddress.optional(),
 });

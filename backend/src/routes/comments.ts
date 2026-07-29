@@ -7,7 +7,7 @@
 import { Router, type Request, type Response } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import { config } from "../config.js";
+import { config, isValidContractId } from "../config.js";
 import { log } from "../services/logger.js";
 import {
   server,
@@ -19,16 +19,25 @@ import {
   u256ToScVal,
   proofToScVal,
 } from "../services/stellar.js";
+import { verifyMembership } from "../services/sync.js";
 import {
   authGuard,
+  auditLog,
   commentLimiter,
   queryLimiter,
   validateBody,
+  validateParams,
+  noteDegraded,
+  sendPartial,
+  validateQuery,
 } from "../middleware/index.js";
 import {
   anonymousCommentSchema,
   flagCommentSchema,
-  challengeQuerySchema,
+  commentParamsSchema,
+  proposalParamsSchema,
+  commitmentParamsSchema,
+  commentCountQuerySchema,
 } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 import { generateChallenge, verifyChallenge } from "../services/pow.js";
@@ -38,8 +47,56 @@ import {
   flagComment,
   getHiddenCommentIds,
 } from "../services/anti-spam.js";
+import { commentsSubmitted } from "../services/metrics.js";
+import {
+  markDegraded,
+  markHealthy,
+  markUnavailable,
+  setLkg,
+  getLkg,
+  commentsLkgKey,
+} from "../services/service-health.js";
 
 const router = Router();
+
+/**
+ * Real-time membership gate for address-authenticated writes (edit/delete).
+ * Anonymous vote/comment paths already get a stronger, real-time guarantee
+ * from their ZK merkle-root proof verified on-chain, so this only applies to
+ * routes that identify the caller by address. No-op when the Membership SBT
+ * contract isn't configured (feature not deployed for this DAO/deployment).
+ */
+async function enforceCurrentMembership(
+  daoId: number,
+  address: string,
+  res: Response,
+  event: string,
+): Promise<boolean> {
+  if (
+    !config.membershipSbtContractId ||
+    !isValidContractId(config.membershipSbtContractId)
+  ) {
+    return true;
+  }
+  try {
+    const isMember = await verifyMembership(daoId, address);
+    if (!isMember) {
+      log("warn", `${event}_membership_denied`, { daoId });
+      res.status(403).json({ error: "Author is not a current DAO member" });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log("error", `${event}_membership_check_failed`, {
+      daoId,
+      error: (err as Error).message,
+    });
+    res
+      .status(503)
+      .json({ error: "Membership verification unavailable, please retry" });
+    return false;
+  }
+}
 
 // ============================================
 // PROOF-OF-WORK CHALLENGE
@@ -48,18 +105,14 @@ const router = Router();
 /**
  * GET /comment/challenge/:commitment - Get PoW challenge for a commitment
  */
-router.get("/comment/challenge/:commitment", queryLimiter, (async (
+router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commitmentParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { commitment } = req.params;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { commitment } = (req as any).validatedParams;
 
-  const parsed = challengeQuerySchema.safeParse({ commitment });
-  if (!parsed.success) {
-    return res.status(400).json({ error: "Invalid commitment format" });
-  }
-
-  const challenge = generateChallenge(parsed.data.commitment, {
+  const challenge = generateChallenge(commitment, {
     difficulty: config.powDifficulty,
     challengeTtlMs: config.powChallengeTtlMs,
   });
@@ -81,6 +134,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, (async (
 router.post(
   "/comment/anonymous",
   authGuard,
+  auditLog("comment_anonymous_relay"),
   commentLimiter,
   validateBody(anonymousCommentSchema),
   (async (req: Request, res: Response) => {
@@ -238,6 +292,7 @@ router.post(
       );
 
       if (result.status === "SUCCESS") {
+        commentsSubmitted.inc({ status: "success" });
         log("info", "comment_anonymous_success", {
           daoId,
           proposalId,
@@ -255,6 +310,7 @@ router.post(
 
         res.json({ success: true, commentId, txHash: sendResult.hash });
       } else {
+        commentsSubmitted.inc({ status: "failed" });
         // Log the actual failure reason
         const resultXdr = "resultXdr" in result ? result.resultXdr : undefined;
         log("error", "comment_anonymous_tx_failed", {
@@ -316,11 +372,12 @@ router.post(
 /**
  * GET /comments/:daoId/:proposalId/nonce - Get next comment nonce
  */
-router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, (async (
+router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(proposalParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId } = req.params;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { daoId, proposalId } = (req as any).validatedParams;
   const { commitment } = req.query;
 
   if (!commitment) {
@@ -334,8 +391,8 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, (async (
     const scCommitment = u256ToScVal(commitment as string);
 
     const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
       scCommitment,
     ];
 
@@ -387,23 +444,23 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, (async (
 // ============================================
 
 /**
- * GET /comments/:daoId/:proposalId - Get comments for a proposal
+ * GET /comments/:daoId/:proposalId - Get comments for a proposal with pagination
  */
-router.get("/comments/:daoId/:proposalId", queryLimiter, (async (
+router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), validateQuery(commentCountQuerySchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId } = req.params;
-  const { limit = "50", offset = "0" } = req.query;
+  const { daoId, proposalId } = (req as any).validatedParams;
+  const { limit, offset } = (req as any).validatedQuery;
 
   try {
     const contract = new StellarSdk.Contract(config.commentsContractId!);
 
     const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
       StellarSdk.nativeToScVal(parseInt(offset as string), { type: "u64" }),
-      StellarSdk.nativeToScVal(Math.min(parseInt(limit as string), 100), {
+      StellarSdk.nativeToScVal(Math.min(parseInt(limit as string), 500), {
         type: "u64",
       }),
     ];
@@ -449,28 +506,82 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, (async (
           isAnonymous: !c.author,
         }));
 
-        const hiddenIds = new Set(
-          getHiddenCommentIds(parseInt(daoId), parseInt(proposalId)),
-        );
+        const hiddenIds = new Set(getHiddenCommentIds(daoId, proposalId));
         const filtered = transformed.map((c: any) => ({
           ...c,
           hidden: hiddenIds.has(c.id),
         }));
 
-        res.json({ comments: filtered, total: filtered.length });
+        const payload = { comments: filtered, total: filtered.length };
+        setLkg(commentsLkgKey(daoId, proposalId), payload);
+        markHealthy("comments");
+        res.json(payload);
+        const total = filtered.length;
+        const hasMore = total === limit;
+
+        res.json({
+          data: filtered,
+          pagination: {
+            cursor: hasMore ? String(offset + limit) : undefined,
+            hasMore,
+            total,
+          },
+        });
       } else {
-        res.json({ comments: [], total: 0 });
+        res.json({
+          data: [],
+          pagination: {
+            cursor: undefined,
+            hasMore: false,
+            total: 0,
+          },
+        });
       }
     } else {
       res.status(400).json({ error: "Failed to get comments" });
     }
   } catch (err) {
+    const message = (err as Error).message;
     log("error", "get_comments_failed", {
       daoId,
       proposalId,
-      error: (err as Error).message,
+      error: message,
     });
-    res.status(500).json({ error: "Failed to fetch comments" });
+
+    // Disable comments UX when contract/RPC unavailable — serve LKG if present
+    if (!config.commentsContractId) {
+      markUnavailable("comments", "comments contract not configured");
+      noteDegraded("comments");
+      return res.status(503).json({
+        error: "Comments system unavailable",
+        disabled: true,
+      });
+    }
+
+    markDegraded("comments", message);
+    noteDegraded("comments");
+    const cached = getLkg<{ comments: unknown[]; total: number }>(
+      commentsLkgKey(daoId, proposalId),
+    );
+    if (cached) {
+      return sendPartial(
+        res,
+        {
+          comments: cached.comments,
+          total: cached.total,
+          stale: true,
+          source: "last_known_good",
+        },
+        ["comments"],
+      );
+    }
+
+    res.status(503).json({
+      error: "Comments temporarily unavailable",
+      disabled: true,
+      comments: [],
+      total: 0,
+    });
   }
 }) as AsyncHandler);
 
@@ -481,19 +592,19 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, (async (
 /**
  * GET /comment/:daoId/:proposalId/:commentId - Get single comment
  */
-router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, (async (
+router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, validateParams(commentParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
-  const { daoId, proposalId, commentId } = req.params;
+  const { daoId, proposalId, commentId } = (req as any).validatedParams;
 
   try {
     const contract = new StellarSdk.Contract(config.commentsContractId!);
 
     const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(commentId), { type: "u64" }),
+      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
+      StellarSdk.nativeToScVal(commentId, { type: "u64" }),
     ];
 
     const operation = contract.call("get_comment", ...args);
@@ -521,10 +632,7 @@ router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, (async (
       const result = simResult.result?.retval;
       if (result) {
         const c = StellarSdk.scValToNative(result);
-        const hiddenIds = getHiddenCommentIds(
-          parseInt(daoId),
-          parseInt(proposalId),
-        );
+        const hiddenIds = getHiddenCommentIds(daoId, proposalId);
         res.json({
           id: Number(c.id),
           daoId: Number(c.dao_id),
@@ -578,6 +686,10 @@ router.post("/comment/edit", authGuard, commentLimiter, (async (
     !author
   ) {
     return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  if (!(await enforceCurrentMembership(daoId, author, res, "comment_edit"))) {
+    return;
   }
 
   try {
@@ -684,6 +796,10 @@ router.post("/comment/delete", authGuard, commentLimiter, (async (
     !author
   ) {
     return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  if (!(await enforceCurrentMembership(daoId, author, res, "comment_delete"))) {
+    return;
   }
 
   try {

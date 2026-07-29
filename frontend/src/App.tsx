@@ -21,7 +21,9 @@ import { useDaoInfoQuery, useRelayerStatusQuery } from "./queries";
 import { truncateText, toIdSlug, parseIdFromSlug } from "./lib/utils";
 import { validateStaticConfig } from "./config/guardrails";
 import { RelayerStatusBanner } from "./components/RelayerStatusBanner";
+import { ServiceDegradationBanner } from "./components/ServiceDegradationBanner";
 import { Button } from "./components/ui/Button";
+import { I18nProvider } from "./i18n/I18nContext";
 
 // Tab types for DAO pages
 type DAOTab = "info" | "proposals" | "members" | "create-proposal" | "settings";
@@ -176,7 +178,8 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-background font-sans antialiased">
+    <I18nProvider>
+      <div className="min-h-screen bg-background font-sans antialiased">
       {/* Navigation */}
       <Navbar
         onConnect={connect}
@@ -194,6 +197,7 @@ function App() {
 
       {/* Relayer Status Banner */}
       <RelayerStatusBanner />
+      <ServiceDegradationBanner />
 
       {/* Main Content */}
       <main className="container mx-auto py-8 md:py-24 px-4 sm:px-6 lg:px-8">
@@ -545,6 +549,7 @@ function App() {
         </div>
       </footer>
     </div>
+    </I18nProvider>
   );
 }
 

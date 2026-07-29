@@ -12,7 +12,7 @@
 //   proposalId: 1
 //   voteChoice: 1 (YES)
 //
-// Circuit has 5 public signals: root, nullifier, daoId, proposalId, voteChoice
+// Circuit has 6 public signals: root, nullifier, daoId, proposalId, voteChoice, numCandidates
 // (commitment is now private)
 //
 // Expected results:
@@ -50,7 +50,7 @@ fn hex_str_to_u256(env: &Env, hex: &str) -> U256 {
 
 fn get_real_proof(env: &Env) -> Proof {
     // Real proof from circuits/build/proof_soroban.json (BIG-ENDIAN!)
-    // Generated with depth 18, 5 public signals (root, nullifier, daoId, proposalId, voteChoice)
+    // Generated with depth 18, 6 public signals (root, nullifier, daoId, proposalId, voteChoice, numCandidates)
     // G2 format: [c1, c0, c1, c0] (imaginary first)
     Proof {
         a: hex_to_bytes(
@@ -70,8 +70,8 @@ fn get_real_proof(env: &Env) -> Proof {
 
 fn get_verification_key(env: &Env) -> VerificationKey {
     // VK from circuits/build/verification_key_soroban.json (BIG-ENDIAN!)
-    // Generated for 5 public signals: [root, nullifier, daoId, proposalId, voteChoice]
-    // IC has 6 elements (n+1 for n public signals)
+    // Generated for 6 public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates]
+    // IC has 7 elements (n+1 for n public signals)
     // G2 format: [c1, c0, c1, c0] (imaginary first)
     let mut ic = Vec::new(env);
 
@@ -94,6 +94,10 @@ fn get_verification_key(env: &Env) -> VerificationKey {
     ic.push_back(hex_to_bytes(
         env,
         "09c5b9b793a6f8098f0ac918aa0a19a75b74e7f1428f726194a48af37da8ac14122edc5b3704f106fa3c095ac74f524032e460179c3e8ecd562ef050c884336a",
+    ));
+    ic.push_back(hex_to_bytes(
+        env,
+        "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21",
     ));
     ic.push_back(hex_to_bytes(
         env,

@@ -68,14 +68,15 @@ fn test_create_proposal_with_future_deadline() {
     let admin_commitment = U256::from_u32(&env, 12345);
     tree.register_with_caller(&dao_id, &admin_commitment, &admin);
 
-    // Set VK with proper admin verification (using mock VK - IC must have exactly 6 elements for vote circuit)
-    // 6 IC elements for 5 public signals: root, nullifier, daoId, proposalId, voteChoice
+    // Set VK with proper admin verification (using mock VK - IC must have exactly 7 elements for vote circuit)
+    // 7 IC elements for 6 public signals: root, nullifier, daoId, proposalId, voteChoice, numCandidates
     let mock_alpha = soroban_sdk::BytesN::from_array(&env, &[0u8; 64]);
     let mock_beta = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_gamma = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_delta = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_ic = soroban_sdk::vec![
         &env,
+        soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
@@ -143,14 +144,15 @@ fn test_create_proposal_with_past_deadline_fails() {
     let admin_commitment = U256::from_u32(&env, 12345);
     tree.register_with_caller(&dao_id, &admin_commitment, &admin);
 
-    // Set VK with proper admin verification (using mock VK - IC must have exactly 6 elements for vote circuit)
-    // 6 IC elements for 5 public signals: root, nullifier, daoId, proposalId, voteChoice
+    // Set VK with proper admin verification (using mock VK - IC must have exactly 7 elements for vote circuit)
+    // 7 IC elements for 6 public signals: root, nullifier, daoId, proposalId, voteChoice, numCandidates
     let mock_alpha = soroban_sdk::BytesN::from_array(&env, &[0u8; 64]);
     let mock_beta = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_gamma = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_delta = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_ic = soroban_sdk::vec![
         &env,
+        soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
@@ -220,14 +222,15 @@ fn test_create_proposal_with_no_deadline() {
     let admin_commitment = U256::from_u32(&env, 12345);
     tree.register_with_caller(&dao_id, &admin_commitment, &admin);
 
-    // Set VK with proper admin verification (using mock VK - IC must have exactly 6 elements for vote circuit)
-    // 6 IC elements for 5 public signals: root, nullifier, daoId, proposalId, voteChoice
+    // Set VK with proper admin verification (using mock VK - IC must have exactly 7 elements for vote circuit)
+    // 7 IC elements for 6 public signals: root, nullifier, daoId, proposalId, voteChoice, numCandidates
     let mock_alpha = soroban_sdk::BytesN::from_array(&env, &[0u8; 64]);
     let mock_beta = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_gamma = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_delta = soroban_sdk::BytesN::from_array(&env, &[0u8; 128]);
     let mock_ic = soroban_sdk::vec![
         &env,
+        soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
         soroban_sdk::BytesN::from_array(&env, &[0u8; 64]),
