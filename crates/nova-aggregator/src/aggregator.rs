@@ -45,12 +45,12 @@ impl NovaAggregator {
         hasher.update(b"NOVA_IVC_PROOF_V1");
         hasher.update(initial_state.root.as_bytes());
         hasher.update(final_state.root.as_bytes());
-        hasher.update(&initial_state.step_count.to_be_bytes());
-        hasher.update(&final_state.step_count.to_be_bytes());
-        hasher.update(&final_state.yes_votes.to_be_bytes());
-        hasher.update(&final_state.no_votes.to_be_bytes());
+        hasher.update(initial_state.step_count.to_be_bytes());
+        hasher.update(final_state.step_count.to_be_bytes());
+        hasher.update(final_state.yes_votes.to_be_bytes());
+        hasher.update(final_state.no_votes.to_be_bytes());
         hasher.update(final_state.acc_nullifier_hash.as_bytes());
-        hasher.update(&num_votes.to_be_bytes());
+        hasher.update(num_votes.to_be_bytes());
 
         let hash = hasher.finalize();
         format!("0x{}", hex::encode(hash))
