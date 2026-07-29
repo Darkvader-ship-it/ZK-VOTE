@@ -45,7 +45,7 @@ const setupServer = async () => {
 const validProof = {
   a: '11'.repeat(64),
   b: '22'.repeat(128),
-  c: '33'.repeat(64),
+  c: '05'.repeat(64),
 };
 const validNullifier = '0x' + '01'.repeat(32);
 const validRoot = '0x' + '01'.repeat(32);

@@ -18,6 +18,7 @@ import {
 } from "./metrics.js";
 import { registerCircuitBreaker, CircuitBreakerOpenError } from "./circuit-breaker.js";
 import type { Groth16Proof } from "../types/index.js";
+import { BN254_FQ_MODULUS } from "../types/index.js";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -476,6 +477,58 @@ export function hexToBytes(hex: string, expectedLength: number): Buffer {
   return bytes;
 }
 
+function bytesToBigInt(buf: Buffer): bigint {
+  return BigInt("0x" + buf.toString("hex"));
+}
+
+function bigIntToBytes(n: bigint, length: number): Buffer {
+  return Buffer.from(n.toString(16).padStart(length * 2, "0"), "hex");
+}
+
+// (Fq - 1) / 2: the threshold below which a Y-coordinate is considered
+// "canonical" (lower half of the field).
+const BN254_FQ_HALF = (BN254_FQ_MODULUS - 1n) / 2n;
+
+/**
+ * Canonicalizes a Groth16 proof's (A, B) pair (#167).
+ *
+ * Groth16 proofs are malleable: given a valid (A, B, C), the point (-A, -B, C)
+ * also satisfies the pairing check, since e(-A, -B) = e(A, B). If any
+ * downstream logic keys off proof bytes (e.g. deduplicating relayer retries,
+ * or an event-notify flow indexing by proof hash), the two representations
+ * look like distinct submissions even though they prove the same statement.
+ *
+ * This picks a single canonical representative by requiring A's Y-coordinate
+ * to lie in the lower half of the BN254 base field (Fq); if it doesn't, both
+ * A and B are negated (C is untouched — C is not part of the malleable pair).
+ * `aBytes`/`bBytes` are the raw 64/128-byte G1/G2 encodings (X||Y for G1;
+ * X_c1||X_c0||Y_c1||Y_c0 for G2, per the Groth16Proof type's format).
+ */
+export function canonicalizeProof(aBytes: Buffer, bBytes: Buffer): { a: Buffer; b: Buffer } {
+  const ay = bytesToBigInt(aBytes.subarray(32, 64));
+
+  if (ay <= BN254_FQ_HALF) {
+    return { a: aBytes, b: bBytes };
+  }
+
+  const ax = aBytes.subarray(0, 32);
+  const negAy = BN254_FQ_MODULUS - ay;
+  const newA = Buffer.concat([ax, bigIntToBytes(negAy, 32)]);
+
+  const xc1 = bBytes.subarray(0, 32);
+  const xc0 = bBytes.subarray(32, 64);
+  const yc1 = bytesToBigInt(bBytes.subarray(64, 96));
+  const yc0 = bytesToBigInt(bBytes.subarray(96, 128));
+  const newB = Buffer.concat([
+    xc1,
+    xc0,
+    bigIntToBytes(BN254_FQ_MODULUS - yc1, 32),
+    bigIntToBytes(BN254_FQ_MODULUS - yc0, 32),
+  ]);
+
+  return { a: newA, b: newB };
+}
+
 /**
  * Convert Groth16 proof to ScVal
  */
@@ -487,8 +540,8 @@ export function proofToScVal(proof: Groth16Proof): StellarSdk.xdr.ScVal {
     throw new Error("Invalid proof: missing a, b, or c fields");
   }
 
-  const aBytes = hexToBytes(proof.a, 64);
-  const bBytes = hexToBytes(proof.b, 128);
+  let aBytes = hexToBytes(proof.a, 64);
+  let bBytes = hexToBytes(proof.b, 128);
   const cBytes = hexToBytes(proof.c, 64);
 
   // Reject point at infinity for any proof component (invalid Groth16 proof)
@@ -497,6 +550,11 @@ export function proofToScVal(proof: Groth16Proof): StellarSdk.xdr.ScVal {
       "Invalid proof: proof components cannot be point at infinity (all zeros)",
     );
   }
+
+  // Canonicalize (A, B) so both malleable representations of the same proof
+  // encode identically (#167) before this ever reaches storage or on-chain
+  // submission.
+  ({ a: aBytes, b: bBytes } = canonicalizeProof(aBytes, bBytes));
 
   return StellarSdk.xdr.ScVal.scvMap([
     new StellarSdk.xdr.ScMapEntry({
