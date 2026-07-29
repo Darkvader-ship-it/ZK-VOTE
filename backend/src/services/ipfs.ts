@@ -10,6 +10,26 @@ import fs from "node:fs";
 import { PinataSDK } from "pinata";
 import * as pinManager from "./ipfs-pin-manager.js";
 import { getMonitorStatus, type MonitorStatus } from "./ipfs-monitor.js";
+import {
+  ipfsPinsTotal,
+  ipfsFetchDuration,
+  ipfsCacheHits,
+  ipfsCacheMisses,
+} from "./metrics.js";
+import { registerCircuitBreaker } from "./circuit-breaker.js";
+import { config } from "../config.js";
+
+// Circuit breakers for external IPFS dependencies. Trips fast when Pinata
+// or the public gateways are degraded, instead of letting every caller run
+// its own retry logic against a service that is known to be down.
+const pinataBreaker = registerCircuitBreaker("pinata", {
+  failureThreshold: config.circuitBreakerPinataFailureThreshold,
+  resetTimeoutMs: config.circuitBreakerPinataResetMs,
+});
+const ipfsGatewayBreaker = registerCircuitBreaker("ipfs_gateway", {
+  failureThreshold: config.circuitBreakerGatewayFailureThreshold,
+  resetTimeoutMs: config.circuitBreakerGatewayResetMs,
+});
 
 // ============================================
 // TYPES
@@ -192,8 +212,14 @@ export function sanitizeMetadata<T>(data: T): T {
   if (data && typeof data === "object") {
     const sanitized: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(data)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype" || key.startsWith("__")) {
+        continue;
+      }
       // Sanitize both keys and values
       const sanitizedKey = sanitizeString(key);
+      if (sanitizedKey === "__proto__" || sanitizedKey === "constructor" || sanitizedKey === "prototype" || sanitizedKey.startsWith("__")) {
+        continue;
+      }
       sanitized[sanitizedKey] = sanitizeMetadata(value);
     }
     return sanitized as T;
@@ -232,21 +258,32 @@ export function initPinata(jwt: string, gateway?: string): void {
  * ensuring it's accessible even if our Pinata gateway goes down.
  */
 async function propagateToPublicGateways(cid: string): Promise<void> {
+  let cleanCid: string;
+  try {
+    cleanCid = sanitizeCid(cid);
+  } catch {
+    return;
+  }
+
   // Fire off requests to public gateways in parallel (don't wait)
   const propagationPromises = PUBLIC_GATEWAYS.map(async (gateway) => {
     try {
+      const url = `${gateway}/${cleanCid}`;
+      if (!isAllowedGatewayUrl(url)) return;
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
-      const response = await fetch(`${gateway}/${cid}`, {
+      const response = await fetch(url, {
         method: "HEAD", // Just request headers to trigger caching
         signal: controller.signal,
+        redirect: "error",
       });
 
       clearTimeout(timeout);
 
       if (response.ok) {
-        log("debug", "ipfs_propagated", { gateway, cid });
+        log("debug", "ipfs_propagated", { gateway, cid: cleanCid });
       }
     } catch {
       // Ignore errors - this is best-effort propagation
@@ -258,7 +295,7 @@ async function propagateToPublicGateways(cid: string): Promise<void> {
   Promise.allSettled(propagationPromises).then((results) => {
     const successful = results.filter((r) => r.status === "fulfilled").length;
     log("info", "ipfs_propagation_complete", {
-      cid,
+      cid: cleanCid,
       successful,
       total: PUBLIC_GATEWAYS.length,
     });
@@ -287,10 +324,12 @@ export async function pinJSON(
 
   // 2. Upload to Pinata (primary)
   // SDK v2.x: pinata.upload.public.json() with chainable methods
-  const result = await pinata.upload.public.json(data).name(name).keyvalues({
-    app: "zkvote",
-    type: "proposal-metadata",
-  });
+  const result = await pinataBreaker.execute(async () =>
+    pinata!.upload.public.json(data).name(name).keyvalues({
+      app: "zkvote",
+      type: "proposal-metadata",
+    }),
+  );
 
   const sizeBytes = result.size || JSON.stringify(data).length;
 
@@ -310,6 +349,8 @@ export async function pinJSON(
       error: (err as Error).message,
     });
   }
+
+  ipfsPinsTotal.inc({ type: "json", status: "success" });
 
   // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
   if (backupPath) {
@@ -357,13 +398,15 @@ export async function pinFile(
   });
 
   // SDK v2.x: pinata.upload.public.file() with chainable methods
-  const result = await pinata.upload.public
-    .file(file)
-    .name(filename)
-    .keyvalues({
-      app: "zkvote",
-      type: "proposal-image",
-    });
+  const result = await pinataBreaker.execute(async () =>
+    pinata!.upload.public
+      .file(file)
+      .name(filename)
+      .keyvalues({
+        app: "zkvote",
+        type: "proposal-image",
+      }),
+  );
 
   const sizeBytes = result.size || buffer.length;
 
@@ -384,6 +427,8 @@ export async function pinFile(
     });
   }
 
+  ipfsPinsTotal.inc({ type: "file", status: "success" });
+
   // 4. Secondary pin to Web3.Storage (best-effort, non-blocking)
   if (backupPath) {
     pinManager.pinToSecondary(result.cid, backupPath, "file").catch(() => {});
@@ -400,24 +445,165 @@ export async function pinFile(
 }
 
 /**
- * Validate CID format (CIDv0 or CIDv1)
+ * CID format regexes
+ * CIDv0: Base58 string starting with Qm, 46 characters long
+ * CIDv1: Base32 string starting with baf, 50-120 characters long
+ */
+const CIDV0_REGEX = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/;
+const CIDV1_REGEX = /^baf[a-z2-7]{46,120}$/i;
+
+/**
+ * Validate CID format (CIDv0 or CIDv1) strictly
  */
 export function isValidCid(cid: string): boolean {
   if (!cid || typeof cid !== "string") {
     return false;
   }
 
-  // CIDv0: Starts with "Qm" and is 46 characters
-  if (cid.startsWith("Qm") && cid.length === 46) {
+  const trimmed = cid.trim();
+
+  // Reject path separators, query params, hash fragments, control characters, whitespace
+  if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) {
+    return false;
+  }
+
+  return CIDV0_REGEX.test(trimmed) || CIDV1_REGEX.test(trimmed);
+}
+
+/**
+ * Sanitize CID before URL construction (reject path separators, query strings, etc.)
+ */
+export function sanitizeCid(cid: string): string {
+  if (typeof cid !== "string") {
+    throw new Error("Invalid CID parameter type");
+  }
+
+  const trimmed = cid.trim();
+
+  if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) {
+    throw new Error("CID contains forbidden characters, query parameters, or path separators");
+  }
+
+  if (!isValidCid(trimmed)) {
+    throw new Error("Invalid CID format");
+  }
+
+  return trimmed;
+}
+
+/**
+ * Check if a host or IP is in a private/internal network range
+ */
+export function isPrivateIP(host: string): boolean {
+  if (!host) return true;
+  const h = host.toLowerCase().trim();
+
+  // Localhost & local domain identifiers
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local")) {
     return true;
   }
 
-  // CIDv1: Starts with "bafy" (base32) or "bafk" and is variable length
-  if ((cid.startsWith("bafy") || cid.startsWith("bafk")) && cid.length >= 50) {
+  // Strip IPv6 brackets if present
+  let ip = h.replace(/^\[|\]$/g, "");
+  if (ip.startsWith("::ffff:")) {
+    ip = ip.substring(7);
+  }
+
+  // Check IPv4 ranges
+  const ipv4Match = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const octets = ipv4Match.slice(1, 5).map(Number);
+    if (octets.some((o) => o > 255)) return true;
+
+    const [o1, o2, o3] = octets;
+
+    // 0.0.0.0/8
+    if (o1 === 0) return true;
+    // 10.0.0.0/8 (Private network)
+    if (o1 === 10) return true;
+    // 127.0.0.0/8 (Loopback)
+    if (o1 === 127) return true;
+    // 169.254.0.0/16 (Link-local / Cloud Metadata)
+    if (o1 === 169 && o2 === 254) return true;
+    // 172.16.0.0/12 (Private network: 172.16.0.0 – 172.31.255.255)
+    if (o1 === 172 && o2 >= 16 && o2 <= 31) return true;
+    // 192.168.0.0/16 (Private network)
+    if (o1 === 192 && o2 === 168) return true;
+    // 100.64.0.0/10 (Carrier-grade NAT)
+    if (o1 === 100 && o2 >= 64 && o2 <= 127) return true;
+    // 192.0.0.0/24 (IETF Protocol Assignments)
+    if (o1 === 192 && o2 === 0 && o3 === 0) return true;
+    // 192.0.2.0/24 (TEST-NET-1)
+    if (o1 === 192 && o2 === 0 && o3 === 2) return true;
+    // 198.51.100.0/24 (TEST-NET-2)
+    if (o1 === 198 && o2 === 51 && o3 === 100) return true;
+    // 203.0.113.0/24 (TEST-NET-3)
+    if (o1 === 203 && o2 === 0 && o3 === 113) return true;
+    // 224.0.0.0/4 (Multicast) & 240.0.0.0/4 (Reserved)
+    if (o1 >= 224) return true;
+
+    return false;
+  }
+
+  // Check IPv6 loopback, link-local, unique local
+  if (
+    ip === "::1" ||
+    ip === "::" ||
+    ip.startsWith("fe80:") ||
+    ip.startsWith("fc") ||
+    ip.startsWith("fd")
+  ) {
     return true;
   }
 
   return false;
+}
+
+/**
+ * Validate that a URL belongs to an allowed IPFS gateway and does not target private IPs
+ */
+export function isAllowedGatewayUrl(urlString: string): boolean {
+  try {
+    const parsed = new URL(urlString);
+
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return false;
+    }
+
+    if (parsed.username || parsed.password) {
+      return false;
+    }
+
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (isPrivateIP(hostname)) {
+      return false;
+    }
+
+    // Match against configured gateway URL
+    if (gatewayUrl) {
+      try {
+        const configuredHost = new URL(gatewayUrl).hostname.toLowerCase();
+        if (hostname === configuredHost || hostname.endsWith("." + configuredHost)) {
+          return true;
+        }
+      } catch {}
+    }
+
+    // Match against public gateways
+    for (const gw of PUBLIC_GATEWAYS) {
+      try {
+        const gwHost = new URL(gw).hostname.toLowerCase();
+        if (hostname === gwHost) {
+          return true;
+        }
+      } catch {}
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -428,10 +614,8 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
     throw new Error("Pinata client not initialized");
   }
 
-  // Validate CID format
-  if (!isValidCid(cid)) {
-    throw new Error("Invalid CID format");
-  }
+  // Validate and sanitize CID format
+  const cleanCid = sanitizeCid(cid);
 
   let url: string;
 
@@ -439,7 +623,7 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
     // SDK v2.x: Use gateways.private.createAccessLink for dedicated gateways
     try {
       const signedUrl = await pinata.gateways.private.createAccessLink({
-        cid: cid,
+        cid: cleanCid,
         expires: 300, // 5 minutes
       });
       url = signedUrl;
@@ -451,36 +635,61 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
     }
   } else {
     // Public gateway - direct URL
-    url = `${gatewayUrl}/ipfs/${cid}`;
+    url = `${gatewayUrl}/ipfs/${cleanCid}`;
+  }
+
+  if (!isAllowedGatewayUrl(url)) {
+    throw new Error("Target URL is not an allowed gateway or resolves to a restricted IP address");
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
+  const fetchStart = performance.now();
   try {
-    const response = await fetch(url, { signal: controller.signal });
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch from IPFS: ${response.status} ${response.statusText}`,
-      );
-    }
+    const response = await ipfsGatewayBreaker.execute(async () => {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        redirect: "error",
+      });
+      if (!res.ok) {
+        throw new Error(
+          `Failed to fetch from IPFS: ${res.status} ${res.statusText}`,
+        );
+      }
+      return res;
+    });
 
     const contentType =
       response.headers.get("content-type") || "application/json";
 
+    if (
+      contentType.includes("text/html") ||
+      contentType.includes("application/javascript") ||
+      contentType.includes("text/javascript")
+    ) {
+      throw new Error(`Forbidden response content-type: ${contentType}`);
+    }
+
     let data: unknown;
     if (contentType.includes("application/json")) {
       data = await response.json();
+      ipfsCacheHits.inc();
     } else {
       data = await response.text();
+      ipfsCacheHits.inc();
     }
 
     return {
       data,
       contentType,
     };
+  } catch (err) {
+    ipfsCacheMisses.inc();
+    throw err;
   } finally {
     clearTimeout(timeout);
+    const fetchDuration = (performance.now() - fetchStart) / 1000;
+    ipfsFetchDuration.observe({ type: "json" }, fetchDuration);
   }
 }
 
@@ -493,10 +702,8 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
     throw new Error("Pinata client not initialized");
   }
 
-  // Validate CID format
-  if (!isValidCid(cid)) {
-    throw new Error("Invalid CID format");
-  }
+  // Validate and sanitize CID format
+  const cleanCid = sanitizeCid(cid);
 
   let url: string;
 
@@ -504,7 +711,7 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
     // SDK v2.x: Use gateways.private.createAccessLink for dedicated gateways
     try {
       const signedUrl = await pinata.gateways.private.createAccessLink({
-        cid: cid,
+        cid: cleanCid,
         expires: 300, // 5 minutes
       });
       url = signedUrl;
@@ -516,31 +723,57 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
     }
   } else {
     // Public gateway - direct URL
-    url = `${gatewayUrl}/ipfs/${cid}`;
+    url = `${gatewayUrl}/ipfs/${cleanCid}`;
+  }
+
+  if (!isAllowedGatewayUrl(url)) {
+    throw new Error("Target URL is not an allowed gateway or resolves to a restricted IP address");
   }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
+  const fetchStart = performance.now();
   try {
-    const response = await fetch(url, { signal: controller.signal });
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch from IPFS: ${response.status} ${response.statusText}`,
-      );
-    }
+    const response = await ipfsGatewayBreaker.execute(async () => {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        redirect: "error",
+      });
+      if (!res.ok) {
+        throw new Error(
+          `Failed to fetch from IPFS: ${res.status} ${res.statusText}`,
+        );
+      }
+      return res;
+    });
 
     const contentType =
       response.headers.get("content-type") || "application/octet-stream";
+
+    if (
+      contentType.includes("text/html") ||
+      contentType.includes("application/javascript") ||
+      contentType.includes("text/javascript")
+    ) {
+      throw new Error(`Forbidden response content-type: ${contentType}`);
+    }
+
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+
+    ipfsCacheHits.inc();
 
     return {
       buffer,
       contentType,
     };
+  } catch (err) {
+    ipfsCacheMisses.inc();
+    throw err;
   } finally {
     clearTimeout(timeout);
+    const fetchDuration = (performance.now() - fetchStart) / 1000;
+    ipfsFetchDuration.observe({ type: "raw" }, fetchDuration);
   }
 }
 

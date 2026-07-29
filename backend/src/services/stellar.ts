@@ -8,6 +8,15 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { config, BN254_SCALAR_FIELD } from "../config.js";
 import { log, logger } from "./logger.js";
+import {
+  rpcCallsTotal,
+  rpcCallDuration,
+  rpcErrors,
+  rpcPoolHealthyEndpoints,
+  rpcPoolTotalEndpoints,
+  rpcEndpointLatency,
+} from "./metrics.js";
+import { registerCircuitBreaker, CircuitBreakerOpenError } from "./circuit-breaker.js";
 import type { Groth16Proof } from "../types/index.js";
 
 // ============================================
@@ -67,17 +76,45 @@ export const relayerKeypair = _relayerKeypair;
  */
 let sequenceLock: Promise<void> = Promise.resolve();
 
+// Count of sequence-lock operations currently queued or executing. A vote
+// submission holds the lock across build+simulate+send+confirm, which can
+// outlive its HTTP response, so shutdown must wait on this, not just on
+// httpServer.close().
+let inFlightLockOps = 0;
+
+export function getPendingSequenceLockOps(): number {
+  return inFlightLockOps;
+}
+
+/**
+ * Wait until all in-flight withSequenceLock operations drain, or until
+ * timeoutMs elapses. Resolves true if drained cleanly, false on timeout
+ * with work still outstanding.
+ */
+export async function waitForSequenceLockIdle(
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (inFlightLockOps > 0) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return true;
+}
+
 export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = sequenceLock;
   let resolve: () => void;
   sequenceLock = new Promise<void>((r) => {
     resolve = r;
   });
+  inFlightLockOps++;
   await previous;
   try {
     return await fn();
   } finally {
     resolve!();
+    inFlightLockOps--;
   }
 }
 
@@ -148,6 +185,10 @@ export class RpcPoolManager {
         ep.errorCount++;
       }
       ep.lastChecked = Date.now();
+
+      // Update Prometheus gauges per endpoint
+      rpcEndpointLatency.set({ url: ep.url }, ep.latencyMs / 1000);
+
       results.push({
         url: ep.url,
         healthy: ep.healthy,
@@ -156,6 +197,12 @@ export class RpcPoolManager {
         lastChecked: new Date(ep.lastChecked).toISOString(),
       });
     }
+
+    // Update pool-level gauges
+    const healthyCount = results.filter((r) => r.healthy).length;
+    rpcPoolHealthyEndpoints.set(healthyCount);
+    rpcPoolTotalEndpoints.set(results.length);
+
     return results;
   }
 
@@ -184,6 +231,14 @@ export class RpcPoolManager {
 
 export const rpcPoolManager = new RpcPoolManager(config.rpcUrls || [config.rpcUrl]);
 
+// Circuit breaker for Soroban RPC calls — trips when the RPC pool is
+// degraded across the board, so requests fail fast instead of each one
+// running its own retry/timeout against a service that is known to be down.
+export const sorobanRpcBreaker = registerCircuitBreaker("soroban_rpc", {
+  failureThreshold: config.circuitBreakerRpcFailureThreshold,
+  resetTimeoutMs: config.circuitBreakerRpcResetMs,
+});
+
 export const server: SorobanServer = config.testMode
   ? {
       getHealth: async () => ({ status: "online" }),
@@ -203,7 +258,33 @@ export const server: SorobanServer = config.testMode
         get(_target, prop) {
           const activeServer = rpcPoolManager.getActiveServer() as any;
           const value = activeServer[prop];
-          return typeof value === "function" ? value.bind(activeServer) : value;
+          if (typeof value !== "function") return value;
+
+          return async function (...args: unknown[]) {
+            const method = String(prop);
+            const start = process.hrtime.bigint();
+            try {
+              const result = await sorobanRpcBreaker.execute(() =>
+                value.apply(activeServer, args),
+              );
+              const duration = Number(process.hrtime.bigint() - start) / 1e9;
+              rpcCallsTotal.inc({ method, status: "success" });
+              rpcCallDuration.observe({ method, status: "success" }, duration);
+              return result;
+            } catch (err) {
+              const duration = Number(process.hrtime.bigint() - start) / 1e9;
+              const errorType =
+                err instanceof CircuitBreakerOpenError
+                  ? "CircuitBreakerOpen"
+                  : err instanceof Error
+                    ? err.constructor.name
+                    : "unknown";
+              rpcCallsTotal.inc({ method, status: "error" });
+              rpcCallDuration.observe({ method, status: "error" }, duration);
+              rpcErrors.inc({ method, error_type: errorType });
+              throw err;
+            }
+          };
         },
       },
     ) as SorobanServer);
