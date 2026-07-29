@@ -47,6 +47,7 @@ pub enum TokenError {
     PermitExpired = 18,
     PermitReplay = 19,
     SupplyCapExceeded = 20,
+    SelfDelegation = 21,
 }
 
 #[contracttype]
@@ -78,6 +79,7 @@ pub enum DataKey {
     MaxSupply,
     Checkpoints(Address),
     CheckpointRetention,
+    Delegate(Address),
 }
 
 #[soroban_sdk::contractevent]
@@ -104,9 +106,26 @@ pub struct TransferEvent {
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MintEvent {
+    // Issue #111: SEP-41 defines mint topics as ["mint", admin, to] — `admin`
+    // was previously missing entirely, so indexers couldn't attribute a mint
+    // to the admin who authorized it.
+    #[topic]
+    pub admin: Address,
     #[topic]
     pub to: Address,
     pub amount: i128,
+}
+
+// Issue #101 (phase 1): pure delegation registry. Emitted whenever a holder
+// changes or clears who they delegate to. This does NOT yet feed into
+// voting power — see `delegate`/`undelegate`/`get_delegate` doc comments.
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DelegateChanged {
+    #[topic]
+    pub delegator: Address,
+    pub from_delegatee: Option<Address>,
+    pub to_delegatee: Option<Address>,
 }
 
 #[soroban_sdk::contractevent]
@@ -761,7 +780,12 @@ impl Token {
         Self::receive_balance(&env, &to, amount);
         Self::increment_supply(&env, amount);
 
-        MintEvent { to, amount }.publish(&env);
+        MintEvent {
+            admin,
+            to,
+            amount,
+        }
+        .publish(&env);
     }
 
     pub fn version(env: Env) -> u32 {
@@ -1236,6 +1260,88 @@ impl Token {
             amount,
         }
         .publish(&env);
+    }
+
+    // ── Storage TTL (Issue #112) ────────────────────────────────────────────
+    //
+    // Admin/name/symbol/decimals already live in instance storage (see
+    // `initialize`), and allowance TTL already tracks `expiration_ledger`
+    // (see `allowance.rs::write_allowance`) — both were already correct
+    // before this change. What was missing: balances only get their
+    // persistent TTL extended as a side effect of a transfer/mint/burn
+    // touching that address. A holder who wants to keep their balance alive
+    // without transacting (e.g. to outlast the archival threshold) had no
+    // way to do that. This adds that self-serve renewal.
+
+    /// Extend the caller's own balance entry TTL without moving any funds.
+    /// No-op (does not error) if the caller has no balance entry yet.
+    pub fn extend_balance_ttl(env: Env, id: Address) {
+        id.require_auth();
+        let key = DataKey::Balance(id);
+        if env.storage().persistent().has(&key) {
+            Self::bump_persistent(&env, &key);
+        }
+    }
+
+    // ── Vote delegation registry (Issue #101, phase 1) ──────────────────────
+    //
+    // This is intentionally scoped down from the full proposal in #101.
+    // Correct *effective voting power* has to stay in sync with every
+    // balance-changing call (transfer/mint/burn/clawback) — the same
+    // problem `Checkpoints` already solves for balances (see
+    // `create_checkpoint`, issue #106). Wiring delegation into that hot
+    // path, plus transitive-delegation cycle detection, plus the voting
+    // contract's eligibility snapshot, is real, security-sensitive surgery
+    // that deserves its own careful PR and tests rather than being rushed
+    // in alongside three other issues. What ships here is the safe,
+    // additive part: a delegator -> delegatee registry that the voting
+    // power computation can be built on top of next. `get_delegate`/
+    // `delegate`/`undelegate` do not currently affect `balance_of` or any
+    // voting contract's eligibility check.
+    pub fn delegate(env: Env, delegator: Address, delegatee: Address) {
+        delegator.require_auth();
+        if delegator == delegatee {
+            panic_with_error!(&env, TokenError::SelfDelegation);
+        }
+        Self::bump_instance(&env);
+
+        let key = DataKey::Delegate(delegator.clone());
+        let previous: Option<Address> = env.storage().persistent().get(&key);
+        env.storage().persistent().set(&key, &delegatee);
+        Self::bump_persistent(&env, &key);
+
+        DelegateChanged {
+            delegator,
+            from_delegatee: previous,
+            to_delegatee: Some(delegatee),
+        }
+        .publish(&env);
+    }
+
+    pub fn undelegate(env: Env, delegator: Address) {
+        delegator.require_auth();
+        Self::bump_instance(&env);
+
+        let key = DataKey::Delegate(delegator.clone());
+        let previous: Option<Address> = env.storage().persistent().get(&key);
+        if previous.is_none() {
+            return;
+        }
+        env.storage().persistent().remove(&key);
+
+        DelegateChanged {
+            delegator,
+            from_delegatee: previous,
+            to_delegatee: None,
+        }
+        .publish(&env);
+    }
+
+    /// Returns the address `holder` currently delegates to, or `None` if
+    /// they have not delegated (i.e. they vote with their own balance).
+    pub fn get_delegate(env: Env, holder: Address) -> Option<Address> {
+        Self::bump_instance(&env);
+        env.storage().persistent().get(&DataKey::Delegate(holder))
     }
 }
 
