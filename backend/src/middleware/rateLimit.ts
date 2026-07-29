@@ -8,10 +8,20 @@
 import rateLimit from "express-rate-limit";
 import slowDown from "express-slow-down";
 import crypto from "crypto";
+import cluster from "node:cluster";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { config } from "../config.js";
 import { log } from "../services/logger.js";
+import { ClusterRateLimitStore } from "../services/cluster.js";
 
 const isTestMode = process.env.RELAYER_TEST_MODE === "true";
+
+function getStore(name: string) {
+  if (config.clusterEnabled && cluster.isWorker) {
+    return new ClusterRateLimitStore(name);
+  }
+  return undefined;
+}
 
 // N11 hardening: RELAYER_TEST_MODE neuters auth + rate limits AND stubs the
 // relayer keypair (stellar.ts). Refusing to start in this configuration in
@@ -44,6 +54,7 @@ function hashIp(ip: string | undefined): string {
  * Key generator for rate limiters - uses hashed IP
  */
 const keyGenerator = (req: Express.Request): string =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   hashIp((req as any).ip || "");
 
 // ============================================
@@ -103,6 +114,7 @@ function withMetrics(name: string, limiter: RequestHandler): RequestHandler {
  */
 function makeHandler(name: string, message: string) {
   return (req: Request, res: Response): void => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const info = (req as any).rateLimit as
       | { limit: number; remaining: number; resetTime?: Date }
       | undefined;
@@ -135,6 +147,44 @@ const headerOptions = {
 };
 
 /**
+ * Key generator for wallet address rate limiter
+ */
+const walletKeyGenerator = (req: Express.Request): string => {
+  const wallet = (req as any).body?.walletAddress || (req as any).headers?.["x-wallet-address"] || (req as any).ip || "";
+  return crypto.createHash("sha256").update(String(wallet)).digest("hex");
+};
+
+/**
+ * Rate limiter for vote submissions per wallet address
+ * Default 5 per minute per wallet address
+ *
+ * NOTE (#131): this and every limiter below use express-rate-limit's default
+ * in-memory MemoryStore (or ClusterRateLimitStore when RELAYER_CLUSTER is
+ * enabled, which only shares state across worker processes on the *same*
+ * host). Neither is a true distributed store: when the backend runs as
+ * multiple separate instances behind a load balancer (e.g. Fly.io scaling
+ * across machines), each instance still counts independently, so the
+ * effective limit is multiplied by the instance count. Fixing that requires
+ * a shared external store (e.g. Redis via `rate-limit-redis`), which is a
+ * new runtime dependency and real infra work — intentionally out of scope
+ * for this pass. What's included here instead: both limiters now emit the
+ * standard `RateLimit-*` headers plus the legacy `X-RateLimit-Remaining` /
+ * `X-RateLimit-Reset` headers (previously only some limiters set the legacy
+ * form), so clients can see and react to their remaining budget regardless
+ * of which store ends up backing this later.
+ */
+export const walletRateLimiter = isTestMode
+  ? noopMiddleware
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: 5,
+      message: { error: "Too many proof submissions for this wallet address, please try again later" },
+      standardHeaders: true,
+      legacyHeaders: true,
+      keyGenerator: walletKeyGenerator,
+    });
+
+/**
  * Rate limiter for vote submissions
  * 10 votes per minute per IP
  */
@@ -146,6 +196,7 @@ export const voteLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 10,
         ...headerOptions,
+        store: getStore("vote"),
         keyGenerator,
         handler: makeHandler(
           "vote",
@@ -166,6 +217,7 @@ export const queryLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 60,
         ...headerOptions,
+        store: getStore("query"),
         keyGenerator,
         handler: makeHandler(
           "query",
@@ -186,6 +238,7 @@ export const ipfsUploadLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 10,
         ...headerOptions,
+        store: getStore("ipfsUpload"),
         keyGenerator,
         handler: makeHandler(
           "ipfsUpload",
@@ -206,6 +259,7 @@ export const ipfsReadLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 200,
         ...headerOptions,
+        store: getStore("ipfsRead"),
         keyGenerator,
         handler: makeHandler(
           "ipfsRead",
@@ -226,6 +280,7 @@ export const commentLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 20,
         ...headerOptions,
+        store: getStore("comment"),
         keyGenerator,
         handler: makeHandler(
           "comment",
@@ -246,6 +301,7 @@ export const graduatedSlowDown = isTestMode
       delayAfter: 40,
       delayMs: (used: number) => Math.min((used - 40) * 100, 3000),
       maxDelayMs: 3000,
+      store: getStore("slowDown"),
       keyGenerator,
       validate: { delayMs: false },
     });

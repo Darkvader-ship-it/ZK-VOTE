@@ -382,7 +382,7 @@ export default function PublicVotes({
       setRegistering(true);
       setError(null);
 
-      let secret, salt, commitment;
+      let secret, salt, blindingFactor, commitment;
 
       if (import.meta.env.DEV)
         console.log(
@@ -395,6 +395,7 @@ export default function PublicVotes({
         );
         secret = credentials.secret;
         salt = credentials.salt;
+        blindingFactor = credentials.blindingFactor;
         commitment = credentials.commitment;
       } catch (err) {
         console.error("[Registration] Step 1 failed:", err);
@@ -588,7 +589,7 @@ export default function PublicVotes({
       storeZKCredentials(
         dao.id,
         publicKey,
-        { secret, salt, commitment },
+        { secret, salt, blindingFactor, commitment },
         leafIndex,
       );
 
@@ -729,7 +730,7 @@ export default function PublicVotes({
               variant={activeTab === "proposals" ? "secondary" : "outline"}
               size="sm"
               onClick={() => navigate("/public-votes/")}
-              className="gap-2"
+              className="gap-2 min-h-[48px] sm:min-h-0"
             >
               <Home className="w-4 h-4" />
               Overview
@@ -738,7 +739,7 @@ export default function PublicVotes({
               variant={activeTab === "info" ? "secondary" : "outline"}
               size="sm"
               onClick={() => navigate("/public-votes/info")}
-              className="gap-2"
+              className="gap-2 min-h-[48px] sm:min-h-0"
             >
               <FileText className="w-4 h-4" /> Info
             </Button>
@@ -746,7 +747,7 @@ export default function PublicVotes({
               variant={activeTab === "members" ? "secondary" : "outline"}
               size="sm"
               onClick={() => navigate("/public-votes/members")}
-              className="gap-2"
+              className="gap-2 min-h-[48px] sm:min-h-0"
             >
               <Users className="w-4 h-4" />
               Members
@@ -758,7 +759,7 @@ export default function PublicVotes({
                 }
                 onClick={() => navigate("/public-votes/create-proposal")}
                 size="sm"
-                className="gap-2"
+                className="gap-2 min-h-[48px] sm:min-h-0"
               >
                 <PlusCircle className="w-4 h-4" />
                 Add Proposal
@@ -771,7 +772,7 @@ export default function PublicVotes({
                 onClick={handleJoinDAO}
                 disabled={joining}
                 size="sm"
-                className="gap-2"
+                className="gap-2 min-h-[48px] sm:min-h-0"
               >
                 {joining && <LoadingSpinner size="sm" color="white" />}
                 {joining ? "Joining..." : "Join DAO"}
@@ -783,7 +784,7 @@ export default function PublicVotes({
                 onClick={handleRegisterToVote}
                 disabled={registering}
                 size="sm"
-                className="gap-2"
+                className="gap-2 min-h-[48px] sm:min-h-0"
               >
                 {registering && <LoadingSpinner size="sm" color="white" />}
                 {registering ? "Registering..." : "Register to Vote"}

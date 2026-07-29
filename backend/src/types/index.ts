@@ -82,6 +82,8 @@ export interface VoteRequest {
   nullifier: U256Hex;
   root: U256Hex;
   proof: Groth16Proof;
+  voterPublicKey?: string;
+  voterSignature?: string;
 }
 
 // ============================================
@@ -191,4 +193,36 @@ export interface TransactionResult {
 export interface CacheEntry<T> {
   data: T;
   timestamp: number;
+}
+
+// ============================================
+// ERROR TYPES
+// ============================================
+
+export enum ErrorCode {
+  VOTE_ALREADY_CAST = "VOTE_ALREADY_CAST",
+  VOTING_PERIOD_CLOSED = "VOTING_PERIOD_CLOSED",
+  INVALID_PROOF = "INVALID_PROOF",
+  NOT_ELIGIBLE = "NOT_ELIGIBLE",
+  PROPOSAL_NOT_FOUND = "PROPOSAL_NOT_FOUND",
+  DAO_NOT_FOUND = "DAO_NOT_FOUND",
+  INTERNAL_ERROR = "INTERNAL_ERROR",
+  RATE_LIMITED = "RATE_LIMITED",
+  UNAUTHORIZED = "UNAUTHORIZED",
+  VALIDATION_ERROR = "VALIDATION_ERROR",
+  SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
+  TIMEOUT = "TIMEOUT",
+  NOT_FOUND = "NOT_FOUND",
+}
+
+export interface StructuredError {
+  code: ErrorCode;
+  message: string;
+  details?: unknown;
+  requestId: string;
+  timestamp: string;
+}
+
+export interface ApiErrorResponse {
+  error: StructuredError;
 }
