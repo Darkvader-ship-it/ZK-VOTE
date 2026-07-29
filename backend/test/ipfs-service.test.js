@@ -33,6 +33,7 @@ test("sanitizeString removes executable HTML content", () => {
     '<img src="x" onclick="run()" onerror=fail()>',
     '<a href="javascript:alert(1)">link</a>',
     '<iframe src="data:text/html;base64,abc"></iframe>',
+    "data:text/html in plain text",
   ].join("");
 
   const sanitized = ipfs.sanitizeString(unsafe);
@@ -42,6 +43,9 @@ test("sanitizeString removes executable HTML content", () => {
   assert.doesNotMatch(sanitized, /onerror/i);
   assert.doesNotMatch(sanitized, /javascript:/i);
   assert.doesNotMatch(sanitized, /data:\s*text\/html/i);
+  // Active-markup containers (iframe & friends) are removed whole,
+  // attributes included; scriptable data: URLs left in text are blocked.
+  assert.doesNotMatch(sanitized, /<iframe/i);
   assert.match(sanitized, /data:blocked/i);
 });
 
