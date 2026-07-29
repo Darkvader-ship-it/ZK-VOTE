@@ -29,3 +29,4 @@ export {
   sendPartial,
 } from "./degradation.js";
 export { metricsMiddleware } from "./metrics.js";
+export { bodyLimit } from "./bodyLimit.js";

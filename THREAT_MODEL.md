@@ -218,3 +218,51 @@ See [`docs/post-quantum-evaluation.md`](file:///home/uche/ZK-VOTE/docs/post-quan
 - **Circuit constraint-count optimization** (tracked separately, #123): a
   multi-week circuit-engineering task independent of the security fixes
   above.
+## Voter Deanonymization at Registration (Issue #122)
+
+**Threat**: during credential/registration flows where a voter submits an
+identity commitment tied to an authenticated request (e.g. a signed wallet
+challenge), the admin/issuer observes the `(voter_identifier, commitment)`
+pair directly. Even though the commitment itself is later used unlinkably
+inside the ZK proof (per the "What Relays Learn" section above), the
+*registration* step itself leaks the mapping to whoever operates the
+issuer, defeating anonymity for anyone who trusts that operator less than
+they trust "the protocol".
+
+**Mitigation (implemented as a primitive, not yet wired into registration
+routes)**: `backend/src/services/blindSignature.ts` implements RSA blind
+signatures (Chaum, 1983), the "simpler alternative to full OT" the issue
+calls out:
+
+1. The voter blinds their commitment with a fresh random blinding factor
+   before sending it to the issuer: `blinded = commitment * r^e mod n`.
+2. The issuer authenticates the voter (via whatever eligibility check is
+   already in place) and signs the *blinded* value — it never sees the
+   real commitment.
+3. The voter unblinds the returned signature locally, obtaining a valid
+   issuer signature over their original, never-disclosed commitment.
+4. The voter can later present `(commitment, signature)` — e.g. alongside
+   their Merkle-inclusion / vote proof — to prove eligibility without the
+   issuer being able to link it back to the blinded value from step 1.
+
+**Privacy guarantee (formal sketch)**: for a uniformly random blinding
+factor `r` coprime to `n`, `r^e mod n` is uniformly distributed over
+`Z_n*` (since `x -> x^e mod n` is a bijection on `Z_n*` when
+`gcd(e, phi(n)) = 1`, which RSA key generation guarantees). Multiplying the
+commitment by a uniform, secret unit therefore yields a blinded value whose
+distribution is statistically independent of the commitment itself
+("perfect blinding" in the standard RSA blind signature literature). This
+is exercised directly by the unlinkability tests in
+`backend/test/blind-signature.test.js` (chi-square uniformity test across
+fixed vs. varying underlying messages, and 100% collision-free sampling
+across repeated blindings of the same message).
+
+**Residual scope / what's left out**: this landing implements and tests
+the cryptographic primitive only. Wiring it end-to-end (new registration
+HTTP endpoints for the blind/sign exchange, DB schema for issued
+credentials, revocation/one-credential-per-voter enforcement without the
+issuer learning the commitment, frontend integration) is a materially
+larger change with its own migration and abuse-prevention design (e.g.
+preventing a single eligible voter from requesting many blind signatures)
+and is intentionally out of scope for this PR — see the PR description for
+the full list of deferred acceptance criteria.
