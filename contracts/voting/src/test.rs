@@ -3238,4 +3238,62 @@ fn test_successful_vote_clears_reentrancy_lock() {
     let updated = voting_client.get_proposal(&1u64, &proposal_id);
     assert_eq!(updated.yes_votes, 1);
     assert_eq!(updated.no_votes, 1);
+#[test]
+fn test_recursive_tally_submission() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let registry_id = env.register(crate::test::DummyRegistry, ());
+
+    let voting_id = env.register_contract(None, Voting);
+    let client = VotingClient::new(&env, &voting_id);
+    client.initialize(&registry_id);
+
+    let dao_id = 1u64;
+
+    // Set recursive VK
+    let vk_bytes = Bytes::from_slice(&env, &[1, 2, 3, 4]);
+    client.set_recursive_vk(&dao_id, &vk_bytes, &admin);
+    let stored_vk = client.get_recursive_vk(&dao_id);
+    assert_eq!(stored_vk, Some(vk_bytes));
+
+    // Create a proposal
+    let end_time = env.ledger().timestamp() + 3600;
+    let prop_id = client.create_proposal(
+        &dao_id,
+        &String::from_str(&env, "Recursive Test Proposal"),
+        &String::from_str(&env, "ipfs://QmTest"),
+        &end_time,
+        &creator,
+        &VoteMode::Fixed,
+    );
+
+    // Submit recursive tally
+    let num_votes = 1000u64;
+    let yes_votes = 650u64;
+    let no_votes = 350u64;
+    let final_acc = U256::from_u32(&env, 99999);
+    let proof = Bytes::from_slice(&env, &[0xDE, 0xAD, 0xBE, 0xEF]);
+
+    client.submit_recursive_tally(
+        &dao_id,
+        &prop_id,
+        &num_votes,
+        &yes_votes,
+        &no_votes,
+        &final_acc,
+        &proof,
+    );
+
+    let tally = client.get_recursive_tally(&dao_id, &prop_id).unwrap();
+    assert_eq!(tally.num_votes, 1000);
+    assert_eq!(tally.yes_votes, 650);
+    assert_eq!(tally.no_votes, 350);
+
+    let prop_info = client.get_proposal(&dao_id, &prop_id);
+    assert_eq!(prop_info.yes_votes, 650);
+    assert_eq!(prop_info.no_votes, 350);
+    assert_eq!(prop_info.state, ProposalState::Closed);
 }

@@ -75,3 +75,46 @@ export function useInvalidateComments() {
     });
   };
 }
+
+export function useOptimisticComment() {
+  const queryClient = useQueryClient();
+
+  const addOptimisticComment = (
+    daoId: number,
+    proposalId: number,
+    comment: CommentWithContent
+  ) => {
+    const queryKey = queryKeys.comments.list(daoId, proposalId);
+
+    const previousComments = queryClient.getQueryData<CommentWithContent[]>(queryKey);
+
+    queryClient.setQueryData<CommentWithContent[]>(queryKey, (old) => {
+      if (!old) return [comment];
+      // If it's a root comment
+      if (!comment.parentId) {
+        return [comment, ...old];
+      }
+      // If it's a reply, we need to find the parent and append to its replies
+      return old.map((c) => {
+        if (c.id === comment.parentId) {
+          return { ...c, replies: [...c.replies, comment] };
+        }
+        return c;
+      });
+    });
+
+    return () => {
+      if (previousComments) {
+        queryClient.setQueryData(queryKey, previousComments);
+      }
+    };
+  };
+
+  const clearPendingComment = (daoId: number, proposalId: number) => {
+    // Invalidate instead of manually clearing, since backend now has it
+    const queryKey = queryKeys.comments.list(daoId, proposalId);
+    queryClient.invalidateQueries({ queryKey });
+  };
+
+  return { addOptimisticComment, clearPendingComment };
+}

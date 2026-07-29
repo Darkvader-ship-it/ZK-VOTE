@@ -46,6 +46,14 @@ pub enum TokenError {
     InvalidSignature = 17,
     PermitExpired = 18,
     PermitReplay = 19,
+    SupplyCapExceeded = 20,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Checkpoint {
+    pub ledger_sequence: u32,
+    pub balance: i128,
 }
 
 #[contracttype]
@@ -67,6 +75,9 @@ pub enum DataKey {
     ClawbackPeriodStart,
     ClawbackPeriodLimit,
     Nonce(Address),
+    MaxSupply,
+    Checkpoints(Address),
+    CheckpointRetention,
 }
 
 #[soroban_sdk::contractevent]
@@ -256,6 +267,7 @@ impl Token {
         });
         env.storage().persistent().set(&key, &new);
         Self::bump_persistent(env, &key);
+        Self::create_checkpoint(env, to, new);
     }
 
     fn spend_balance(env: &Env, from: &Address, amount: i128) {
@@ -274,6 +286,131 @@ impl Token {
             env.storage().persistent().set(&key, &new);
             Self::bump_persistent(env, &key);
         }
+        Self::create_checkpoint(env, from, new);
+    }
+
+    // ── Checkpoint / Snapshotting (Issue #106) ─────────────────────────────
+
+    fn create_checkpoint(env: &Env, address: &Address, balance: i128) {
+        let ledger = env.ledger().sequence();
+        let cp_key = DataKey::Checkpoints(address.clone());
+
+        let mut checkpoints: Vec<Checkpoint> = env
+            .storage()
+            .persistent()
+            .get(&cp_key)
+            .unwrap_or_else(|| Vec::new(env));
+
+        // Avoid duplicate checkpoint at the same ledger
+        if let Some(last) = checkpoints.last() {
+            if last.ledger_sequence == ledger {
+                // Update the last checkpoint in-place
+                let len = checkpoints.len();
+                checkpoints.set(len - 1, Checkpoint {
+                    ledger_sequence: ledger,
+                    balance,
+                });
+                env.storage().persistent().set(&cp_key, &checkpoints);
+                Self::bump_persistent(env, &cp_key);
+                return;
+            }
+        }
+
+        checkpoints.push_back(Checkpoint {
+            ledger_sequence: ledger,
+            balance,
+        });
+
+        // Prune old checkpoints beyond retention period
+        let retention = Self::get_checkpoint_retention(env);
+        if retention > 0 && checkpoints.len() > retention as u32 {
+            let prune_count = checkpoints.len() - retention as u32;
+            let mut pruned = Vec::new(env);
+            for i in prune_count..checkpoints.len() {
+                if let Some(cp) = checkpoints.get(i) {
+                    pruned.push_back(cp);
+                }
+            }
+            checkpoints = pruned;
+        }
+
+        env.storage().persistent().set(&cp_key, &checkpoints);
+        Self::bump_persistent(env, &cp_key);
+    }
+
+    /// Get balance at a specific ledger sequence using binary search on checkpoints.
+    /// Returns the balance that was active at the given ledger.
+    pub fn balance_at(env: Env, address: Address, ledger_sequence: u32) -> i128 {
+        Self::bump_instance(&env);
+        let cp_key = DataKey::Checkpoints(address.clone());
+        let checkpoints: Vec<Checkpoint> = env
+            .storage()
+            .persistent()
+            .get(&cp_key)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if checkpoints.is_empty() {
+            return 0;
+        }
+
+        // Binary search for the latest checkpoint <= ledger_sequence
+        let mut low: u32 = 0;
+        let mut high: u32 = checkpoints.len() - 1;
+        let mut result: i128 = 0;
+
+        while low <= high {
+            let mid = (low + high) / 2;
+            if let Some(cp) = checkpoints.get(mid) {
+                if cp.ledger_sequence <= ledger_sequence {
+                    result = cp.balance;
+                    low = mid + 1;
+                } else {
+                    if mid == 0 {
+                        break;
+                    }
+                    high = mid - 1;
+                }
+            } else {
+                break;
+            }
+        }
+
+        result
+    }
+
+    /// Get all checkpoints for an address (for debugging).
+    pub fn get_checkpoints(env: Env, address: Address) -> Vec<Checkpoint> {
+        Self::bump_instance(&env);
+        let cp_key = DataKey::Checkpoints(address);
+        env.storage()
+            .persistent()
+            .get(&cp_key)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Set checkpoint retention period (number of checkpoints to keep per address).
+    /// 0 means unlimited retention.
+    pub fn set_checkpoint_retention(env: Env, retention: u32) {
+        let admin: Address = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        let key = DataKey::CheckpointRetention;
+        env.storage().persistent().set(&key, &retention);
+        Self::bump_persistent(&env, &key);
+    }
+
+    fn get_checkpoint_retention(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CheckpointRetention)
+            .unwrap_or(0)
+    }
+
+    /// Get checkpoint retention period.
+    pub fn checkpoint_retention(env: Env) -> u32 {
+        Self::bump_instance(&env);
+        Self::get_checkpoint_retention(&env)
     }
 
     fn xfer(env: &Env, from: &Address, to: &Address, amount: i128) {
@@ -575,7 +712,32 @@ impl Token {
         .publish(&env);
     }
 
+    // ── Supply cap helpers (Issue #98) ──────────────────────────────────────
+
+    fn get_max_supply_storage(env: &Env) -> Option<i128> {
+        env.storage().persistent().get(&DataKey::MaxSupply)
+    }
+
     // ── Admin: Mint ─────────────────────────────────────────────────────────
+
+    pub fn set_max_supply(env: Env, max_supply: i128) {
+        let admin: Address = Self::admin(env.clone());
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        if max_supply < 0 {
+            panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        let key = DataKey::MaxSupply;
+        env.storage().persistent().set(&key, &max_supply);
+        Self::bump_persistent(&env, &key);
+    }
+
+    pub fn get_max_supply(env: Env) -> Option<i128> {
+        Self::bump_instance(&env);
+        Self::get_max_supply_storage(&env)
+    }
 
     pub fn mint(env: Env, to: Address, amount: i128) {
         let admin: Address = Self::admin(env.clone());
@@ -584,6 +746,16 @@ impl Token {
 
         if amount < 0 {
             panic_with_error!(&env, TokenError::InvalidAmount);
+        }
+
+        if let Some(cap) = Self::get_max_supply_storage(&env) {
+            let current = Self::get_supply(&env);
+            let new_supply = current.checked_add(amount).unwrap_or_else(|| {
+                panic_with_error!(&env, TokenError::Overflow);
+            });
+            if new_supply > cap {
+                panic_with_error!(&env, TokenError::SupplyCapExceeded);
+            }
         }
 
         Self::receive_balance(&env, &to, amount);
@@ -625,7 +797,7 @@ impl Token {
             .get(&DataKey::BurnHistoryCount)
             .unwrap_or(0);
         let mut records = Vec::new(&env);
-        let start = if count >= total { 0 } else { total - count };
+        let start = total.saturating_sub(count);
         for i in (start + 1)..=total {
             let key = DataKey::BurnRecord(i);
             if let Some(record) = env.storage().persistent().get::<_, BurnRecord>(&key) {
@@ -710,7 +882,7 @@ impl Token {
             target: target.clone(),
             amount,
             reason: reason.clone(),
-            proposer: proposer,
+            proposer,
             approvals,
             created_ledger: env.ledger().sequence(),
             executed: false,
@@ -782,8 +954,7 @@ impl Token {
         let elapsed = env
             .ledger()
             .sequence()
-            .checked_sub(proposal.created_ledger)
-            .unwrap_or(0);
+            .saturating_sub(proposal.created_ledger);
         if elapsed < CLAWBACK_DELAY_LEDGERS {
             panic_with_error!(&env, TokenError::ClawbackNotReady);
         }
@@ -898,7 +1069,7 @@ impl Token {
             .get(&DataKey::ClawbackHistoryCount)
             .unwrap_or(0);
         let mut records = Vec::new(&env);
-        let start = if count >= total { 0 } else { total - count };
+        let start = total.saturating_sub(count);
         for i in (start + 1)..=total {
             let key = DataKey::ClawbackRecord(i);
             if let Some(record) = env.storage().persistent().get::<_, ClawbackRecord>(&key) {
