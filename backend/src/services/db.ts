@@ -64,6 +64,8 @@ export interface EventQueryOptions {
   verifiedOnly?: boolean;
   orderBy?: string;
   orderDirection?: string;
+  cursor?: string;
+  cursorField?: string;
 }
 
 export interface EventQueryResult {
@@ -378,6 +380,18 @@ function validateEventTypes(types: string[]): string[] {
     throw new Error(`Invalid event types: ${invalid.join(', ')}`);
   }
   return types;
+}
+
+/**
+ * Decode a base64-encoded cursor back into its components.
+ */
+function decodeCursor(cursor: string, cursorField: string): { i?: number; l?: number; t?: string } {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64").toString("utf-8"));
+    return decoded;
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -1186,6 +1200,7 @@ export function verifyEvent(txHash: string, ledger: number): void {
 
 /**
  * Get events for a DAO (from its partition).
+ * Supports both cursor-based and offset-based pagination.
  * SECURITY: Uses parameterized queries and validates all inputs.
  */
 export function getEventsForDao(
@@ -1197,12 +1212,14 @@ export function getEventsForDao(
   ensurePartitionTable(daoId);
 
   const {
-    limit = 50,
+    limit = 100,
     offset = 0,
     types = null,
     verifiedOnly = false,
     orderBy = 'timestamp',
-    orderDirection = 'DESC'
+    orderDirection = 'DESC',
+    cursor,
+    cursorField = 'id',
   } = options;
 
   // SECURITY: Validate limit and offset
@@ -1225,11 +1242,24 @@ export function getEventsForDao(
     query = query.where("verified", "=", 1);
   }
 
+  // Cursor-based pagination: filter for records after the cursor position
+  if (cursor) {
+    const decoded = decodeCursor(cursor, cursorField);
+    if (cursorField === "id") {
+      query = query.where("id", ">", decoded.i as number);
+    } else if (cursorField === "ledger") {
+      query = query.where("ledger", ">", decoded.l as number);
+    } else if (cursorField === "timestamp") {
+      query = query.where("timestamp", ">", decoded.t as string);
+    }
+  } else {
+    query = query.offset(validOffset);
+  }
+
   query = query
     .orderBy(orderColumn as any, direction.toLowerCase() as any)
     .orderBy("ledger", "desc")
-    .limit(validLimit)
-    .offset(validOffset);
+    .limit(validLimit);
 
   const compiled = query.compile();
 
@@ -1242,7 +1272,7 @@ export function getEventsForDao(
   let countQuery = kysely
     .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
     .select(sql<number>`COUNT(*)`.as("total"));
-    
+
   if (types && types.length > 0) {
     countQuery = countQuery.where("type", "in", validateEventTypes(types));
   }

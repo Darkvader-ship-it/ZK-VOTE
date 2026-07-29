@@ -408,12 +408,20 @@ export type CommentMetadata = z.infer<typeof commentMetadataSchema>;
 // QUERY PARAMETER SCHEMAS
 // ============================================
 
-export const paginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+const MAX_PAGE_SIZE = 500;
+const DEFAULT_PAGE_SIZE = 100;
+
+export const limitOffsetPaginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-export const eventsQuerySchema = paginationSchema.extend({
+export const cursorPaginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  cursor: z.string().optional(),
+});
+
+export const eventsQuerySchema = cursorPaginationSchema.extend({
   types: z
     .string()
     .optional()
@@ -424,12 +432,22 @@ export const eventsQuerySchema = paginationSchema.extend({
   orderDirection: z
     .enum(['ASC', 'DESC'])
     .default('DESC'),
+  cursorField: z
+    .enum(['id', 'ledger', 'timestamp'])
+    .default('id'),
+});
+
+export const daosQuerySchema = limitOffsetPaginationSchema.extend({
+  user: stellarAddress.optional(),
+});
+
+export const commentCountQuerySchema = limitOffsetPaginationSchema.extend({
+  types: z
+    .string()
+    .optional()
+    .transform((val) => val?.split(",").filter(Boolean) || null),
 });
 
 export const commentNonceQuerySchema = z.object({
   commitment: bn254Field,
-});
-
-export const daosQuerySchema = z.object({
-  user: stellarAddress.optional(),
 });

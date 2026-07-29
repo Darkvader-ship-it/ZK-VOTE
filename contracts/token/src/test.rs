@@ -883,18 +883,6 @@ fn test_transfer_with_permit() {
     let deadline_bytes = deadline.to_be_bytes();
     digest_data.extend_from_slice(&deadline_bytes);
 
-    let sk = env
-        .crypto()
-        .ed25519_secret_key_from_binary(&BytesN::from_array(
-            &env,
-            &[
-                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
-                0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
-                0x1d, 0x1e, 0x1f, 0x20,
-            ],
-        ));
-
-    let signature = sk.sign(&digest_data);
     let sk_bytes: [u8; 32] = [
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
         0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
@@ -978,8 +966,10 @@ fn test_mint_exceeds_cap_after_partial_mint() {
 fn test_mint_without_cap_has_no_limit() {
     let (env, _admin, client) = setup_token();
     let alice = Address::generate(&env);
-    client.mint(&alice, &i128::MAX / 2);
+    client.mint(&alice, &(i128::MAX / 2));
     assert_eq!(client.total_supply(), i128::MAX / 2);
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Issue #106: Token Balance Snapshotting for Historical Queries
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1005,9 +995,9 @@ fn test_balance_at_returns_correct_historical_balance() {
     let ledger_after_transfer = env.ledger().sequence();
 
     // Balance at mint time should be 1000
-    assert_eq!(client.balance_at(&alice, ledger_before_mint), 1000);
+    assert_eq!(client.balance_at(&alice, &ledger_before_mint), 1000);
     // Balance after transfer should be 700
-    assert_eq!(client.balance_at(&alice, ledger_after_transfer), 700);
+    assert_eq!(client.balance_at(&alice, &ledger_after_transfer), 700);
 }
 
 #[test]
@@ -1015,8 +1005,8 @@ fn test_balance_at_before_any_checkpoint() {
     let (env, admin, alice, bob, client) = setup_token_with_balance();
 
     // Query before any checkpoint was created
-    assert_eq!(client.balance_at(&alice, 0), 0);
-    assert_eq!(client.balance_at(&alice, 999999), 1000);
+    assert_eq!(client.balance_at(&alice, &0), 0);
+    assert_eq!(client.balance_at(&alice, &999999), 1000);
 }
 
 #[test]
@@ -1074,13 +1064,13 @@ fn test_balance_at_binary_search() {
     let ledger3 = env.ledger().sequence();
 
     // Binary search should find correct balance at each point
-    assert_eq!(client.balance_at(&alice, ledger1), 900);
-    assert_eq!(client.balance_at(&alice, ledger2), 800);
-    assert_eq!(client.balance_at(&alice, ledger3), 700);
+    assert_eq!(client.balance_at(&alice, &ledger1), 900);
+    assert_eq!(client.balance_at(&alice, &ledger2), 800);
+    assert_eq!(client.balance_at(&alice, &ledger3), 700);
 
     // Query between checkpoints should return the last known balance
-    assert_eq!(client.balance_at(&alice, ledger1 + 2), 900);
-    assert_eq!(client.balance_at(&alice, ledger2 + 2), 800);
+    assert_eq!(client.balance_at(&alice, &(ledger1 + 2)), 900);
+    assert_eq!(client.balance_at(&alice, &(ledger2 + 2)), 800);
 }
 
 #[test]
@@ -1089,5 +1079,65 @@ fn test_balance_at_zero_address() {
 
     // Address that never had a balance
     let nobody = Address::generate(&env);
-    assert_eq!(client.balance_at(&nobody, 100), 0);
+    assert_eq!(client.balance_at(&nobody, &100), 0);
+}
+
+// ── extend_balance_ttl (Issue #112) ────────────────────────────────────────
+
+#[test]
+fn test_extend_balance_ttl_noop_without_balance() {
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
+    let stranger = Address::generate(&_env);
+    // Must not panic even though `stranger` has no balance entry yet.
+    client.extend_balance_ttl(&stranger);
+    let _ = alice;
+}
+
+#[test]
+fn test_extend_balance_ttl_with_balance_does_not_panic() {
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
+    client.extend_balance_ttl(&alice);
+}
+
+// ── Delegation registry (Issue #101, phase 1) ──────────────────────────────
+
+#[test]
+fn test_delegate_and_get_delegate() {
+    let (_env, _admin, alice, bob, client) = setup_token_with_balance();
+    assert_eq!(client.get_delegate(&alice), None);
+
+    client.delegate(&alice, &bob);
+    assert_eq!(client.get_delegate(&alice), Some(bob.clone()));
+}
+
+#[test]
+fn test_delegate_to_self_rejected() {
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
+    let result = client.try_delegate(&alice, &alice);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_undelegate_clears_delegate() {
+    let (_env, _admin, alice, bob, client) = setup_token_with_balance();
+    client.delegate(&alice, &bob);
+    client.undelegate(&alice);
+    assert_eq!(client.get_delegate(&alice), None);
+}
+
+#[test]
+fn test_undelegate_without_prior_delegation_is_noop() {
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
+    // Must not panic.
+    client.undelegate(&alice);
+    assert_eq!(client.get_delegate(&alice), None);
+}
+
+#[test]
+fn test_redelegate_overwrites_previous_delegatee() {
+    let (_env, _admin, alice, bob, client) = setup_token_with_balance();
+    let carol = Address::generate(&_env);
+    client.delegate(&alice, &bob);
+    client.delegate(&alice, &carol);
+    assert_eq!(client.get_delegate(&alice), Some(carol));
 }
