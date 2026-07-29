@@ -7,7 +7,33 @@
  */
 
 import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
 
+const nodeEnv = process.env.NODE_ENV || "development";
+
+// Load environment variables in order of priority (highest to lowest)
+// 1. Existing process.env variables (dotenv doesn't override by default)
+// 2. .env.${NODE_ENV}.local
+// 3. .env.${NODE_ENV}
+// 4. .env.local
+// 5. .env
+
+const envFiles = [
+  `.env.${nodeEnv}.local`,
+  `.env.${nodeEnv}`,
+  `.env.local`,
+  `.env`,
+];
+
+for (const file of envFiles) {
+  const envPath = path.resolve(process.cwd(), file);
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+}
+
+// Fallback in case none existed
 dotenv.config();
 
 // ============================================
@@ -44,6 +70,7 @@ export const config = {
   networkPassphrase:
     process.env.NETWORK_PASSPHRASE || "Standalone Network ; February 2017",
   rpcTimeoutMs: Number(process.env.RPC_TIMEOUT_MS || 30_000),
+  shutdownDrainTimeoutMs: Number(process.env.SHUTDOWN_DRAIN_TIMEOUT_MS || 30_000),
 
   // Authentication (read from env as fallback; see getSecret() for dynamic retrieval)
   relayerAuthToken: process.env.RELAYER_AUTH_TOKEN,
@@ -141,6 +168,12 @@ export const config = {
   archivalAgeDays: Number(process.env.ARCHIVAL_AGE_DAYS || 90),
   archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
 
+  // Proof Security & Mitigations
+  maxProofAgeSeconds: Number(process.env.MAX_PROOF_AGE_SECONDS || 300),
+  requireClientCert: process.env.REQUIRE_CLIENT_CERT === "true",
+  walletRateLimitMax: Number(process.env.WALLET_RATE_LIMIT_MAX || 5),
+  walletRateLimitWindowMs: Number(process.env.WALLET_RATE_LIMIT_WINDOW_MS || 60_000),
+  relayerPublicKey: process.env.RELAYER_PUBLIC_KEY || "",
   // Circuit Breakers
   circuitBreakerRpcFailureThreshold: Number(
     process.env.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD || 5,
@@ -247,8 +280,27 @@ export function validateEnv(): void {
     console.error(
       JSON.stringify({ level: "error", event: "missing_env", missing }),
     );
-    console.error("\nRun ./scripts/init-local.sh to generate backend/.env");
+    console.error("\nRun ./scripts/init-local.sh to generate backend/.env or configure your environment variables.");
     process.exit(1);
+  }
+
+  // Prevent production secrets in non-production environments
+  const isProd = process.env.NODE_ENV === "production";
+  if (
+    !isProd &&
+    config.relayerSecretKey &&
+    config.relayerSecretKey.startsWith("S") &&
+    config.relayerSecretKey.length === 56 &&
+    !config.testMode && 
+    config.relayerSecretKey !== "SCZANGBA5AKIA7VTJQXBDKPQOBFZD3NWKNR3CQULPSFMJUADSHWFUCS" // allow the specific test key
+  ) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "production_secret_in_non_prod",
+      }),
+    );
+    console.warn("WARNING: A valid Stellar Secret Key is being used in a non-production environment. Please use placeholders (e.g. S_PLACEHOLDER...) for non-production profiles unless you explicitly need a real key.");
   }
 
   // Validate auth token strength (minimum 32 characters for security)
