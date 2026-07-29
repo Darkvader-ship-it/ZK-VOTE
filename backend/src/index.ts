@@ -57,6 +57,7 @@ import {
   requestLogger,
   errorHandler,
   graduatedSlowDown,
+  metricsMiddleware,
 } from "./middleware/index.js";
 
 // Routes
@@ -76,6 +77,8 @@ import {
   remediationRoutes,
   novaRoutes,
   adminRoutes,
+  metricsRoutes,
+  remediationRoutes,
   thresholdRoutes,
 } from "./routes/index.js";
 import { registerShutdownHandler } from "./routes/admin.js";

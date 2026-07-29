@@ -40,9 +40,23 @@ export function csrfGuard(
       .json({ error: "CORS_ORIGIN must be configured for write endpoints" });
   }
 
-  // Get origin from headers
+  // Get origin from headers. A malformed Referer must fail closed rather
+  // than throwing and being converted into an internal server error.
   const origin = req.headers.origin;
   const referer = req.headers.referer;
+  let requestOrigin = typeof origin === "string" ? origin : null;
+
+  if (!requestOrigin && typeof referer === "string") {
+    try {
+      requestOrigin = new URL(referer).origin;
+    } catch {
+      log("warn", "csrf_invalid_referer", {
+        path: req.path,
+        referer,
+      });
+      return res.status(403).json({ error: "Origin not allowed" });
+    }
+  }
 
   // Security hardening #1: Reject null origins explicitly
   // Null origins come from sandboxed iframes, data URIs, and other potentially malicious contexts

@@ -21,3 +21,4 @@ export {
 } from "./rateLimit.js";
 export { validateBody, validateQuery, validateParams } from "./validate.js";
 export { auditLog } from "./audit.js";
+export { metricsMiddleware } from "./metrics.js";

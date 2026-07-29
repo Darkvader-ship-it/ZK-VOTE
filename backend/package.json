@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\"",
+    "test": "RELAYER_TEST_MODE=true tsx --test --test-concurrency=1 test/*.test.js",
+    "test:coverage": "RELAYER_TEST_MODE=true node --import tsx --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include='src/**/*.ts' --test-coverage-exclude='test/**' --test-coverage-lines=80 test/*.test.js",
     "validate-profiles": "tsx scripts/validate-profiles.ts",
     "test": "RELAYER_TEST_MODE=true tsx --test test/*.test.js",
     "test:coverage": "RELAYER_TEST_MODE=true node --import tsx --test --experimental-test-coverage test/*.test.js",

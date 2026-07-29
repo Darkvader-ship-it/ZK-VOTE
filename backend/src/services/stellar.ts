@@ -300,13 +300,22 @@ export async function callWithTimeout<T>(
   fn: () => Promise<T>,
   label: string,
 ): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
       () => reject(new Error(`Timeout: ${label} (${config.rpcTimeoutMs}ms)`)),
       config.rpcTimeoutMs,
-    ),
-  );
-  return Promise.race([fn(), timeout]);
+    );
+  });
+
+  try {
+    return await Promise.race([fn(), timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 /**

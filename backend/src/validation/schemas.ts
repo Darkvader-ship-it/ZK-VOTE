@@ -113,6 +113,12 @@ const CIDV1_REGEX = /^baf[a-z2-7]{46,120}$/i;
 
 const ipfsCid = z.string().refine(
   (val) => {
+    // CIDv0: exact-length Bitcoin base58 encoding.
+    if (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(val)) return true;
+    // CIDv1: bafy... or bafk... (59+ chars)
+    if ((val.startsWith("bafy") || val.startsWith("bafk")) && val.length >= 59)
+      return true;
+    return false;
     if (!val || typeof val !== "string") return false;
     const trimmed = val.trim();
     if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) return false;
