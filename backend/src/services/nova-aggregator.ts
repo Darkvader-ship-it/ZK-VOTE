@@ -73,7 +73,7 @@ export class NovaAggregatorService {
         cwd: path.resolve(__dirname, '../../../'),
       });
 
-      console.log('[NovaService] Aggregation CLI output:', stdout);
+      console.info('[NovaService] Aggregation CLI output:', stdout);
 
       if (!fs.existsSync(outputPath)) {
         throw new Error(`Nova aggregator failed to create output proof file: ${stderr}`);

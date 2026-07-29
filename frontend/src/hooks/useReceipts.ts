@@ -12,19 +12,19 @@ export interface VoterReceipt {
 const STORAGE_KEY = "zkvote-receipts";
 
 export function useReceipts() {
-  const [receipts, setReceipts] = useState<VoterReceipt[]>([]);
-
-  // Load from local storage on mount
-  useEffect(() => {
+  const [receipts, setReceipts] = useState<VoterReceipt[]>(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setReceipts(JSON.parse(stored));
+      if (typeof window !== 'undefined') {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          return JSON.parse(stored);
+        }
       }
     } catch (err) {
       console.error("Failed to load receipts from localStorage", err);
     }
-  }, []);
+    return [];
+  });
 
   const addReceipt = (receipt: Omit<VoterReceipt, "id">) => {
     const newReceipt = { ...receipt, id: receipt.txHash };

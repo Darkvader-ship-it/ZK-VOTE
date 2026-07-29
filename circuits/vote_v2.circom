@@ -8,7 +8,6 @@ include "merkle_tree.circom";
 // SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
 // Prevents cross-protocol attacks where commitments from other systems
 // could be valid in ZK-VOTE
-var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
 
 // DaoVote Anonymous Vote Circuit v2
 //
@@ -21,7 +20,8 @@ var DOMAIN_TAG = 196660415917974038346554814039824430374385039807437935376559836
 //
 // chainId prevents replay attacks: a proof generated for one chain
 // (e.g., testnet) cannot be replayed on another chain (e.g., mainnet).
-template VoteV2(levels) {
+\n    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
+
     // Public inputs
     signal input root;              // Merkle tree root (verified on-chain)
     signal input nullifier;         // Unique per vote attempt

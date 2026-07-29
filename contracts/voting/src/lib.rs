@@ -194,19 +194,19 @@ pub enum DataKey {
     /// Election identity is `(dao_id, proposal_id)`. Must not be a flat global map
     /// — see issue #64 / `storage.rs`.
     Nullifier(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool
-    VotingKey(u64),            // dao_id -> latest VerificationKey (BN254)
-    Proposal(u64, u64),          // (dao_id, proposal_id) -> ProposalInfo
-    ProposalCount(u64),          // dao_id -> count
-    Nullifier(u64, u64, U256),   // (dao_id, proposal_id, nullifier) -> bool
+    VotingKey(u64),     // dao_id -> latest VerificationKey (BN254)
+    Proposal(u64, u64), // (dao_id, proposal_id) -> ProposalInfo
+    ProposalCount(u64), // dao_id -> count
+    Nullifier(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool
     VoteFamily(u64, u64, U256), // (dao_id, proposal_id, family_nullifier) -> (u32, bool)
-    VotingKey(u64),              // dao_id -> latest VerificationKey (BN254)
-    VkVersion(u64),              // dao_id -> current BN254 VK version
-    VkByVersion(u64, u32),       // (dao_id, vk_version) -> VerificationKey (BN254)
-    CurveId(u64),                // dao_id -> CurveId (BN254 or BLS12_381)
-    VotingKeyBls381(u64),        // dao_id -> latest VerificationKeyBls381
+    VotingKey(u64),     // dao_id -> latest VerificationKey (BN254)
+    VkVersion(u64),     // dao_id -> current BN254 VK version
+    VkByVersion(u64, u32), // (dao_id, vk_version) -> VerificationKey (BN254)
+    CurveId(u64),       // dao_id -> CurveId (BN254 or BLS12_381)
+    VotingKeyBls381(u64), // dao_id -> latest VerificationKeyBls381
     VkByVersionBls381(u64, u32), // (dao_id, vk_version) -> VerificationKeyBls381
-    VkVersionBls381(u64),        // dao_id -> current BLS12-381 VK version
-    ProposalCurve(u64, u64),     // (dao_id, proposal_id) -> CurveId
+    VkVersionBls381(u64), // dao_id -> current BLS12-381 VK version
+    ProposalCurve(u64, u64), // (dao_id, proposal_id) -> CurveId
     /// Test-only: overrides proof verification. Not used in production.
     VerifyOverride,
     DaoCurrentCircuit(u64), // dao_id -> current circuit_id string
@@ -244,20 +244,6 @@ pub enum DataKey {
     QvCreditsTotal(u64, u64),   // (dao_id, round_id) -> u128 (sum of credits spent)
     QvTally(u64, u64, u64),     // (dao_id, round_id, proposal_id) -> u64 credits
     QvTallyFinalized(u64, u64), // (dao_id, round_id) -> bool
-}
-
-/// A single quadratic-voting ballot as stored on-chain.
-///
-/// The individual allocations stay private: only the Poseidon commitment to them
-/// (`allocations_hash`) and the revealed quadratic cost (`total_credits_spent`)
-/// are recorded. The ZK proof verified at `cast_qv_vote` guarantees that
-/// `total_credits_spent == sum(voiceCredits_i^2)` and that every allocation is in
-/// range, so overspending is impossible.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QvBallot {
-    pub allocations_hash: U256,
-    pub total_credits_spent: u64,
     /// Reentrancy guard: contract-level lock to prevent reentrant calls
     /// into vote/vote_bls381 during proof verification or cross-contract calls.
     ReentrancyLock,
@@ -277,6 +263,20 @@ pub struct QvBallot {
     RecursiveTally(u64, u64), // (dao_id, proposal_id) -> RecursiveTallyInfo
     /// ZK proof of correct tally computation for universal verifiability (#94)
     TallyProof(u64, u64), // (dao_id, proposal_id) -> Bytes (proof)
+}
+
+/// A single quadratic-voting ballot as stored on-chain.
+///
+/// The individual allocations stay private: only the Poseidon commitment to them
+/// (`allocations_hash`) and the revealed quadratic cost (`total_credits_spent`)
+/// are recorded. The ZK proof verified at `cast_qv_vote` guarantees that
+/// `total_credits_spent == sum(voiceCredits_i^2)` and that every allocation is in
+/// range, so overspending is impossible.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QvBallot {
+    pub allocations_hash: U256,
+    pub total_credits_spent: u64,
 }
 
 #[contracttype]
@@ -493,16 +493,36 @@ pub struct CandidateSeedFinalizedEvent {
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
 pub struct QvVoteEvent {
-pub struct VdfSubmittedEvent {
-pub struct RecursiveTallySubmittedEvent {
     #[topic]
     pub dao_id: u64,
     #[topic]
     pub proposal_id: u64,
     pub nullifier: U256,
     pub total_credits_spent: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VdfSubmittedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
     pub output: BytesN<32>,
     pub delay: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecursiveTallySubmittedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub num_votes: u64,
+    pub yes_votes: u64,
+    pub no_votes: u64,
+    pub final_nullifier_acc: String,
 }
 
 #[soroban_sdk::contractevent]
@@ -513,16 +533,16 @@ pub struct QvTallyEvent {
     #[topic]
     pub round_id: u64,
     pub ballots: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VdfVerifiedEvent {
     #[topic]
     pub dao_id: u64,
     #[topic]
     pub proposal_id: u64,
     pub verified: bool,
-    pub num_votes: u64,
-    pub yes_votes: u64,
-    pub no_votes: u64,
-    pub final_nullifier_acc: U256,
 }
 
 #[contract]
@@ -804,7 +824,9 @@ impl Voting {
 
     /// Fetch recursive verification key for a DAO
     pub fn get_recursive_vk(env: Env, dao_id: u64) -> Option<Bytes> {
-        env.storage().persistent().get(&DataKey::RecursiveVk(dao_id))
+        env.storage()
+            .persistent()
+            .get(&DataKey::RecursiveVk(dao_id))
     }
 
     /// Submit single aggregated recursive proof attesting to N votes cast in an election
@@ -902,11 +924,7 @@ impl Voting {
     ///
     /// On-chain verification against the recursive VK will be added once a
     /// tally-aggregation circuit is finalised.
-    pub fn verify_tally_proof(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-    ) -> Option<Bytes> {
+    pub fn verify_tally_proof(env: Env, dao_id: u64, proposal_id: u64) -> Option<Bytes> {
         env.storage()
             .persistent()
             .get(&DataKey::TallyProof(dao_id, proposal_id))
@@ -2325,9 +2343,16 @@ impl Voting {
         let snapshot_ledger = env.ledger().sequence();
         let key = DataKey::ElectionConfig(dao_id, proposal_id);
         let existing = env.storage().persistent().get::<_, ElectionConfig>(&key);
-        let candidate_seed = existing.as_ref().and_then(|config| config.candidate_seed.clone());
-        let vdf_output = existing.as_ref().and_then(|config| config.vdf_output.clone());
-        let vdf_delay = existing.as_ref().map(|config| config.vdf_delay).unwrap_or(0);
+        let candidate_seed = existing
+            .as_ref()
+            .and_then(|config| config.candidate_seed.clone());
+        let vdf_output = existing
+            .as_ref()
+            .and_then(|config| config.vdf_output.clone());
+        let vdf_delay = existing
+            .as_ref()
+            .map(|config| config.vdf_delay)
+            .unwrap_or(0);
         let config = ElectionConfig {
             snapshot_ledger,
             min_balance,
@@ -2758,8 +2783,9 @@ impl Voting {
             Some(vdf_seed) => vdf_seed,
             None => {
                 // Fall back to commit-reveal seed
-                Self::get_candidate_seed(env.clone(), dao_id, proposal_id)
-                    .unwrap_or_else(|| panic_with_error!(&env, VotingError::RandomnessCommitmentMissing))
+                Self::get_candidate_seed(env.clone(), dao_id, proposal_id).unwrap_or_else(|| {
+                    panic_with_error!(&env, VotingError::RandomnessCommitmentMissing)
+                })
             }
         };
         let mut input = Bytes::new(&env);
@@ -2782,13 +2808,7 @@ impl Voting {
     /// * `proposal_id` - Proposal identifier
     /// * `delay` - Number of SHA256 iterations (VDF delay parameter)
     /// * `admin` - DAO admin address (required for auth)
-    pub fn set_vdf_delay(
-        env: Env,
-        dao_id: u64,
-        proposal_id: u64,
-        delay: u64,
-        admin: Address,
-    ) {
+    pub fn set_vdf_delay(env: Env, dao_id: u64, proposal_id: u64, delay: u64, admin: Address) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
         admin.require_auth();
@@ -2892,19 +2912,19 @@ impl Voting {
 
         // Update ElectionConfig with VDF output
         let config_key = DataKey::ElectionConfig(dao_id, proposal_id);
-        let mut config: ElectionConfig = env
-            .storage()
-            .persistent()
-            .get(&config_key)
-            .unwrap_or(ElectionConfig {
-                snapshot_ledger: env.ledger().sequence(),
-                min_balance: 0,
-                twab_window: 0,
-                candidate_seed: None,
-                num_candidates: 0,
-                vdf_output: None,
-                vdf_delay: delay,
-            });
+        let mut config: ElectionConfig =
+            env.storage()
+                .persistent()
+                .get(&config_key)
+                .unwrap_or(ElectionConfig {
+                    snapshot_ledger: env.ledger().sequence(),
+                    min_balance: 0,
+                    twab_window: 0,
+                    candidate_seed: None,
+                    num_candidates: 0,
+                    vdf_output: None,
+                    vdf_delay: delay,
+                });
         config.vdf_output = Some(vdf_output.clone());
         config.vdf_delay = delay;
         env.storage().persistent().set(&config_key, &config);
@@ -2941,10 +2961,7 @@ impl Voting {
     pub fn get_vdf_delay(env: Env, dao_id: u64, proposal_id: u64) -> u64 {
         Self::bump_instance(&env);
         let delay_key = DataKey::VdfDelay(dao_id, proposal_id);
-        env.storage()
-            .persistent()
-            .get(&delay_key)
-            .unwrap_or(0)
+        env.storage().persistent().get(&delay_key).unwrap_or(0)
     }
 
     /// Get the VDF input seed for an election.
@@ -2984,19 +3001,19 @@ impl Voting {
             // Use VDF output directly as the candidate seed
             // Store it in ElectionConfig for backward compatibility
             let config_key = DataKey::ElectionConfig(dao_id, proposal_id);
-            let mut config: ElectionConfig = env
-                .storage()
-                .persistent()
-                .get(&config_key)
-                .unwrap_or(ElectionConfig {
-                    snapshot_ledger: env.ledger().sequence(),
-                    min_balance: 0,
-                    twab_window: 0,
-                    candidate_seed: None,
-                    num_candidates: 0,
-                    vdf_output: None,
-                    vdf_delay: 0,
-                });
+            let mut config: ElectionConfig =
+                env.storage()
+                    .persistent()
+                    .get(&config_key)
+                    .unwrap_or(ElectionConfig {
+                        snapshot_ledger: env.ledger().sequence(),
+                        min_balance: 0,
+                        twab_window: 0,
+                        candidate_seed: None,
+                        num_candidates: 0,
+                        vdf_output: None,
+                        vdf_delay: 0,
+                    });
 
             // Mix VDF output with existing seed if available, or use VDF output as seed
             let seed = match config.candidate_seed {

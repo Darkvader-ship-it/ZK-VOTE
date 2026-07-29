@@ -3238,6 +3238,8 @@ fn test_successful_vote_clears_reentrancy_lock() {
     let updated = voting_client.get_proposal(&1u64, &proposal_id);
     assert_eq!(updated.yes_votes, 1);
     assert_eq!(updated.no_votes, 1);
+}
+
 #[test]
 fn test_recursive_tally_submission() {
     let env = Env::default();
@@ -3278,13 +3280,7 @@ fn test_recursive_tally_submission() {
     let proof = Bytes::from_slice(&env, &[0xDE, 0xAD, 0xBE, 0xEF]);
 
     client.submit_recursive_tally(
-        &dao_id,
-        &prop_id,
-        &num_votes,
-        &yes_votes,
-        &no_votes,
-        &final_acc,
-        &proof,
+        &dao_id, &prop_id, &num_votes, &yes_votes, &no_votes, &final_acc, &proof,
     );
 
     let tally = client.get_recursive_tally(&dao_id, &prop_id).unwrap();
@@ -3770,21 +3766,11 @@ fn test_migrate_nullifier_to_election_scope() {
 
     assert!(!voting_client.is_nullifier_used(&1u64, &proposal_id, &nullifier));
 
-    let migrated = voting_client.migrate_nullifier(
-        &1u64,
-        &proposal_id,
-        &nullifier,
-        &admin,
-    );
+    let migrated = voting_client.migrate_nullifier(&1u64, &proposal_id, &nullifier, &admin);
     assert!(migrated);
     assert!(voting_client.is_nullifier_used(&1u64, &proposal_id, &nullifier));
 
     // Second migrate is a no-op (legacy already removed)
-    let migrated_again = voting_client.migrate_nullifier(
-        &1u64,
-        &proposal_id,
-        &nullifier,
-        &admin,
-    );
+    let migrated_again = voting_client.migrate_nullifier(&1u64, &proposal_id, &nullifier, &admin);
     assert!(!migrated_again);
 }
