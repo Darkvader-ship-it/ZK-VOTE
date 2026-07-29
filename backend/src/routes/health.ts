@@ -9,6 +9,7 @@ import type * as StellarSdk from "@stellar/stellar-sdk";
 import { config } from "../config.js";
 import { extractAuthToken } from "../middleware/auth.js";
 import { getRateLimitMetrics } from "../middleware/rateLimit.js";
+import { bodyLimit } from "../middleware/index.js";
 import { getMembershipVerificationMetrics } from "../services/sync.js";
 import { log } from "../services/logger.js";
 import { getDbDiagnostics, getDbStatus, getDb } from "../services/db.js";
@@ -231,7 +232,7 @@ router.get("/db/stats", async (req: Request, res: Response) => {
  * Content Security Policy violation reporting endpoint
  * Receives CSP violation reports from browsers and logs them for monitoring
  */
-router.post("/csp-report", (req: Request, res: Response) => {
+router.post("/csp-report", bodyLimit("100kb"), (req: Request, res: Response) => {
   try {
     const report = req.body;
     log("warn", "csp_violation", {

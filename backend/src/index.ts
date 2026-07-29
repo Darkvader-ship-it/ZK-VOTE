@@ -201,8 +201,9 @@ const corsOptions: cors.CorsOptions = {
 };
 app.use(cors(corsOptions));
 
-// Security: Request body size limit
-app.use(express.json({ limit: "100kb" }));
+// Security: request body size limits are applied per-route (#69) via the
+// `bodyLimit` middleware in each router, sized to that endpoint's actual
+// payload instead of one global cap shared by every endpoint.
 
 // Logging middleware
 app.use(requestLogger);

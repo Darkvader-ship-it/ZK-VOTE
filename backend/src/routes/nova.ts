@@ -4,6 +4,7 @@
 
 import { Router, Request, Response } from 'express';
 import { novaAggregatorService, VoteWitnessPayload } from '../services/nova-aggregator';
+import { bodyLimit } from '../middleware/index.js';
 
 const router = Router();
 
@@ -11,7 +12,7 @@ const router = Router();
  * POST /api/v1/nova/aggregate
  * Trigger off-chain Nova IVC vote proof aggregation for an election batch
  */
-router.post('/aggregate', async (req: Request, res: Response) => {
+router.post('/aggregate', bodyLimit('100kb'), async (req: Request, res: Response) => {
   try {
     const { daoId, proposalId, root, witnesses } = req.body;
 

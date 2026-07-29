@@ -12,7 +12,7 @@
 import { Router, type Request, type Response } from "express";
 
 import { log } from "../services/logger.js";
-import { authGuard, auditLog } from "../middleware/index.js";
+import { authGuard, auditLog, bodyLimit } from "../middleware/index.js";
 import type { AsyncHandler } from "../types/index.js";
 import * as coordinator from "../services/threshold-coordinator.js";
 
@@ -23,6 +23,7 @@ const router = Router();
  */
 router.post(
   "/threshold/init",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_init"),
   (async (req: Request, res: Response) => {
@@ -57,6 +58,7 @@ router.post(
  */
 router.post(
   "/threshold/authority/register",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_authority_register"),
   (async (req: Request, res: Response) => {
@@ -94,6 +96,7 @@ router.post(
  */
 router.post(
   "/threshold/dkg/finalize",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_dkg_finalize"),
   (async (req: Request, res: Response) => {
@@ -123,6 +126,7 @@ router.post(
  */
 router.post(
   "/threshold/vote/encrypt",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_vote_encrypt"),
   (async (req: Request, res: Response) => {
@@ -156,6 +160,7 @@ router.post(
  */
 router.post(
   "/threshold/tally/compute",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_tally_compute"),
   (async (req: Request, res: Response) => {
@@ -187,6 +192,7 @@ router.post(
  */
 router.post(
   "/threshold/decrypt/share",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_decrypt_share"),
   (async (req: Request, res: Response) => {
@@ -222,6 +228,7 @@ router.post(
  */
 router.post(
   "/threshold/tally/decrypt",
+  bodyLimit("100kb"),
   authGuard,
   auditLog("threshold_tally_decrypt"),
   (async (req: Request, res: Response) => {
