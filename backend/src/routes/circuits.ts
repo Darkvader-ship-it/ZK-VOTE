@@ -10,7 +10,7 @@ import { queryLimiter, validateParams } from "../middleware/index.js";
 import { z } from "zod";
 
 // Circuit parameters schema
-const circuitParamsSchema = z.object({
+export const circuitParamsSchema = z.object({
   dao: z.string().pipe(
     z.coerce.number()
       .positive("Must be a positive integer")
@@ -29,6 +29,7 @@ router.get("/circuits/:dao/:type/status", queryLimiter, validateParams(circuitPa
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { dao: daoId, type } = (req as any).validatedParams;
 
   const circuitType = type === "comment" ? "Comment" : "Vote";

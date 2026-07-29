@@ -11,16 +11,19 @@
  */
 
 import Database, { type Database as DatabaseType } from "better-sqlite3";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
-  timeQuery,
-  invalidateCachePrefix,
-  getDbStats as getMonitorDbStats,
-  profileEventQueries,
-} from "./dbMonitor.js";
+import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
 import { migrateUp } from "./migrate.js";
+import { kysely } from "./kysely.js";
+import { sql } from "kysely";
+import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
+import { migrateUp } from "./migrate.js";
+import { initWalResilience, configureWalResilience, incrementTransactionCounter } from "./walResilience.js";
+import { config } from "../config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,6 +64,8 @@ export interface EventQueryOptions {
   verifiedOnly?: boolean;
   orderBy?: string;
   orderDirection?: string;
+  cursor?: string;
+  cursorField?: string;
 }
 
 export interface EventQueryResult {
@@ -332,6 +337,20 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "idx_auth_audit_client_id", columns: ["client_id"] },
       { name: "idx_auth_audit_action", columns: ["action"] },
       { name: "idx_auth_audit_created_at", columns: ["created_at"] },
+  proof_commitments: {
+    columns: [
+      { name: "commitment_hash", type: "TEXT", notNull: true, primaryKey: true },
+      { name: "nullifier", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "proposal_id", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "wallet_address", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "timestamp", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "status", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      { name: "idx_commitments_nullifier", columns: ["nullifier"] },
+      { name: "idx_commitments_wallet", columns: ["wallet_address"] },
     ],
   },
 };
@@ -402,6 +421,18 @@ function validateEventTypes(types: string[]): string[] {
     throw new Error(`Invalid event types: ${invalid.join(', ')}`);
   }
   return types;
+}
+
+/**
+ * Decode a base64-encoded cursor back into its components.
+ */
+function decodeCursor(cursor: string, cursorField: string): { i?: number; l?: number; t?: string } {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64").toString("utf-8"));
+    return decoded;
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -562,6 +593,19 @@ export function initDb(dbPath?: string): DatabaseType {
   // SECURITY: Enable WAL mode and foreign key constraints
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
+
+  // WAL Resilience: configure and initialize
+  configureWalResilience({
+    busyTimeoutMs: config.dbBusyTimeoutMs,
+    checkpointIntervalMs: config.dbCheckpointIntervalMs,
+    checkpointTransactionCount: config.dbCheckpointTransactionCount,
+    walWarningThresholdBytes: config.dbWalWarningThresholdBytes,
+    backupIntervalMs: config.dbBackupIntervalMs,
+    retryCount: config.dbRetryCount,
+    retryBaseDelayMs: config.dbRetryBaseDelayMs,
+    retryMaxDelayMs: config.dbRetryMaxDelayMs,
+  });
+  initWalResilience(database, dbFile);
   
   // SECURITY: Enable strict mode if available (better-sqlite3 v8+)
   try {
@@ -701,6 +745,67 @@ export function initDb(dbPath?: string): DatabaseType {
     CREATE INDEX IF NOT EXISTS idx_auth_audit_client_id ON auth_token_audit(client_id);
     CREATE INDEX IF NOT EXISTS idx_auth_audit_action ON auth_token_audit(action);
     CREATE INDEX IF NOT EXISTS idx_auth_audit_created_at ON auth_token_audit(created_at);
+    CREATE TABLE IF NOT EXISTS proof_commitments (
+      commitment_hash TEXT PRIMARY KEY,
+      nullifier TEXT NOT NULL,
+      dao_id INTEGER NOT NULL,
+      proposal_id INTEGER NOT NULL,
+      wallet_address TEXT,
+      timestamp INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_commitments_nullifier ON proof_commitments(nullifier);
+    CREATE INDEX IF NOT EXISTS idx_commitments_wallet ON proof_commitments(wallet_address);
+    -- Append-only, tamper-evident audit trail for privileged/administrative
+    -- actions. Each row's hash covers its own fields plus the previous row's
+    -- hash (hash chain), so any edit or reordering breaks verifyAuditChain().
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      action TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      auth_token_id TEXT,
+      ip_hash TEXT,
+      request_id TEXT,
+      params TEXT,
+      status_code INTEGER,
+      prev_hash TEXT,
+      hash TEXT NOT NULL,
+      archived_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_archived ON audit_log(archived_at);
+
+    -- Core fields are immutable once written; only archived_at (set by the
+    -- rotation job after export) may be updated.
+    CREATE TRIGGER IF NOT EXISTS audit_log_immutable_core
+    BEFORE UPDATE ON audit_log
+    WHEN NEW.id IS NOT OLD.id
+      OR NEW.timestamp IS NOT OLD.timestamp
+      OR NEW.action IS NOT OLD.action
+      OR NEW.endpoint IS NOT OLD.endpoint
+      OR NEW.auth_token_id IS NOT OLD.auth_token_id
+      OR NEW.ip_hash IS NOT OLD.ip_hash
+      OR NEW.request_id IS NOT OLD.request_id
+      OR NEW.params IS NOT OLD.params
+      OR NEW.status_code IS NOT OLD.status_code
+      OR NEW.prev_hash IS NOT OLD.prev_hash
+      OR NEW.hash IS NOT OLD.hash
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_log: core fields are immutable');
+    END;
+
+    -- Rows may only be deleted after being archived (exported to cold storage).
+    CREATE TRIGGER IF NOT EXISTS audit_log_no_unarchived_delete
+    BEFORE DELETE ON audit_log
+    WHEN OLD.archived_at IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'audit_log: entry must be archived before deletion');
+    END;
 
     -- Keep the old events table temporarily during migration,
     -- then drop it once migration completes.
@@ -761,7 +866,8 @@ export function initDb(dbPath?: string): DatabaseType {
     });
   }
 
-  // Populate knownPartitions from the registry
+  // Populate knownPartitions from the active database registry.
+  knownPartitions.clear();
   const rows = database
     .prepare("SELECT dao_id FROM partition_registry")
     .all() as Array<{ dao_id: number }>;
@@ -800,9 +906,7 @@ export function initDb(dbPath?: string): DatabaseType {
     }
   }
 
-  if (!dbPath) {
-    db = database;
-  }
+  db = database;
 
   log("info", "db_initialized", {
     path: dbFile,
@@ -810,6 +914,20 @@ export function initDb(dbPath?: string): DatabaseType {
   });
   // feat: events partitioning, db monitoring, migration framework, and data integrity constraints
   return database;
+}
+
+/**
+ * Return the initialized database instance, initializing it if needed.
+ * Get active database instance or initialize default.
+ * Return the initialized database instance (initializing it if needed).
+ * archival.ts and backup.ts import this; it was missing from this module's
+ * exports, which broke every route that transitively imports either of them
+ * (e.g. GET /health -> services/backup.ts) at startup. Unrelated to
+ * #193/#195/#194/#201, but fixed here since it otherwise blocks the backend
+ * from booting at all, including for verifying the changes in this PR.
+ */
+export function getDb(): DatabaseType {
+  return initDb();
 }
 
 /**
@@ -1001,16 +1119,22 @@ export function getMetadata<T>(key: string): T | null {
  */
 export function setMetadata<T>(key: string, value: T): void {
   const database = initDb();
+  const compiled = kysely
+    .insertInto("metadata")
+    .values({ key, value: JSON.stringify(value) })
+    .onConflict((oc) =>
+      oc.column("key").doUpdateSet({ value: JSON.stringify(value) }),
+    )
+    .compile();
+
   timeQuery(
     "setMetadata",
-    () =>
-      database
-        .prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)")
-        .run(key, JSON.stringify(value)),
+    () => database.prepare(compiled.sql).run(...compiled.parameters),
     { key },
   );
   // Invalidate any cached queries that depend on metadata
   invalidateCachePrefix("metadata");
+  incrementTransactionCounter();
 }
 
 // ============================================
@@ -1066,25 +1190,24 @@ export function addEvent(event: EventInput): boolean {
     throw new Error(`Invalid event type: ${event.type}`);
   }
 
-  const query = `
-    INSERT INTO ${tableName} (type, data, ledger, tx_hash, timestamp, verified)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `;
-  const params = [
-    event.type,
-    JSON.stringify(event.data),
-    event.ledger ?? null,
-    event.txHash ?? null,
-    event.timestamp ?? new Date().toISOString(),
-    event.verified ? 1 : 0,
-  ];
+  const queryObj = kysely
+    .insertInto(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .values({
+      type: event.type,
+      data: JSON.stringify(event.data),
+      ledger: event.ledger ?? null,
+      tx_hash: event.txHash ?? null,
+      timestamp: event.timestamp ?? new Date().toISOString(),
+      verified: event.verified ? 1 : 0,
+    });
+  const compiled = queryObj.compile();
 
   const result = timeQuery(
     "addEvent",
     () => {
       try {
-        logQuery(query, params, 'add_event');
-        database.prepare(query).run(...params);
+        logQuery(compiled.sql, compiled.parameters as any[], "add_event");
+        database.prepare(compiled.sql).run(...compiled.parameters);
         return true;
       } catch (err) {
         const error = err as { code?: string };
@@ -1101,6 +1224,7 @@ export function addEvent(event: EventInput): boolean {
   if (result) {
     invalidateCachePrefix(`indexedDaos`);
     invalidateCachePrefix(`dbStatus`);
+    incrementTransactionCounter();
   }
 
   return result;
@@ -1132,6 +1256,15 @@ export function addPendingEvent(
  * SECURITY: Uses parameterized queries and validates inputs.
  */
 export function verifyEvent(txHash: string, ledger: number): void {
+  if (
+    typeof txHash !== "string" ||
+    txHash.length === 0 ||
+    txHash.length > 128 ||
+    !/^[A-Za-z0-9_-]+$/.test(txHash)
+  ) {
+    throw new Error("Invalid transaction hash");
+  }
+
   // SECURITY: Basic input validation
   if (typeof txHash !== 'string' || txHash.length === 0 || txHash.length > 128) {
     throw new Error(`Invalid txHash: ${txHash}`);
@@ -1156,6 +1289,7 @@ export function verifyEvent(txHash: string, ledger: number): void {
 
 /**
  * Get events for a DAO (from its partition).
+ * Supports both cursor-based and offset-based pagination.
  * SECURITY: Uses parameterized queries and validates all inputs.
  */
 export function getEventsForDao(
@@ -1167,12 +1301,14 @@ export function getEventsForDao(
   ensurePartitionTable(daoId);
 
   const {
-    limit = 50,
+    limit = 100,
     offset = 0,
     types = null,
     verifiedOnly = false,
     orderBy = 'timestamp',
-    orderDirection = 'DESC'
+    orderDirection = 'DESC',
+    cursor,
+    cursorField = 'id',
   } = options;
 
   // SECURITY: Validate limit and offset
@@ -1182,44 +1318,62 @@ export function getEventsForDao(
   // SECURITY: Validate ORDER BY parameters
   const { column: orderColumn, direction } = validateOrderBy(orderBy, orderDirection);
 
-  let query = `SELECT * FROM ${tableName} WHERE 1=1`;
-  const params: (number | string)[] = [];
+  let query = kysely
+    .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .selectAll();
 
   if (types && types.length > 0) {
-    // SECURITY: Validate event types against allowlist
     const validatedTypes = validateEventTypes(types);
-    query += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
-    params.push(...validatedTypes);
+    query = query.where("type", "in", validatedTypes);
   }
 
   if (verifiedOnly) {
-    query += " AND verified = 1";
+    query = query.where("verified", "=", 1);
   }
 
-  query += ` ORDER BY ${orderColumn} ${direction}, ledger DESC LIMIT ? OFFSET ?`;
-  params.push(validLimit, validOffset);
+  // Cursor-based pagination: filter for records after the cursor position
+  if (cursor) {
+    const decoded = decodeCursor(cursor, cursorField);
+    if (cursorField === "id") {
+      query = query.where("id", ">", decoded.i as number);
+    } else if (cursorField === "ledger") {
+      query = query.where("ledger", ">", decoded.l as number);
+    } else if (cursorField === "timestamp") {
+      query = query.where("timestamp", ">", decoded.t as string);
+    }
+  } else {
+    query = query.offset(validOffset);
+  }
 
-  logQuery(query, params, 'get_events_for_dao');
-  const events = database.prepare(query).all(...params) as EventRow[];
+  query = query
+    .orderBy(orderColumn as any, direction.toLowerCase() as any)
+    .orderBy("ledger", "desc")
+    .limit(validLimit);
+
+  const compiled = query.compile();
+
+  logQuery(compiled.sql, compiled.parameters as any[], "get_events_for_dao");
+  const events = database.prepare(compiled.sql).all(...compiled.parameters) as EventRow[];
 
   // Add dao_id to each row (partition tables don't store it)
   const enrichedEvents = events.map((e) => ({ ...e, dao_id: daoId }));
 
-  let countQuery = `SELECT COUNT(*) as total FROM ${tableName} WHERE 1=1`;
-  const countParams: (number | string)[] = [];
+  let countQuery = kysely
+    .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
+    .select(sql<number>`COUNT(*)`.as("total"));
+
   if (types && types.length > 0) {
-    const validatedTypes = validateEventTypes(types);
-    countQuery += ` AND type IN (${validatedTypes.map(() => "?").join(",")})`;
-    countParams.push(...validatedTypes);
+    countQuery = countQuery.where("type", "in", validateEventTypes(types));
   }
   if (verifiedOnly) {
-    countQuery += " AND verified = 1";
+    countQuery = countQuery.where("verified", "=", 1);
   }
 
-  logQuery(countQuery, countParams, 'count_events_for_dao');
+  const countCompiled = countQuery.compile();
+  logQuery(countCompiled.sql, countCompiled.parameters as any[], "count_events_for_dao");
   const countResult = database
-    .prepare(countQuery)
-    .get(...countParams) as CountRow;
+    .prepare(countCompiled.sql)
+    .get(...countCompiled.parameters) as CountRow;
 
   return {
     events: enrichedEvents.map(rowToEvent),
@@ -1369,6 +1523,7 @@ export function recordTransactionLog(
          updated_at = CURRENT_TIMESTAMP`,
     )
     .run(nullifierHash, txHash, status);
+  incrementTransactionCounter();
 }
 
 /**
@@ -1405,6 +1560,200 @@ export function cleanupTransactionLog(maxAgeMs = 86400000): number {
     .prepare("DELETE FROM transaction_log WHERE updated_at < ?")
     .run(cutoff);
   return result.changes;
+}
+
+// ============================================
+// AUDIT LOG (append-only, hash-chained)
+// ============================================
+
+export interface AuditLogInput {
+  timestamp: string;
+  action: string;
+  endpoint: string;
+  authTokenId: string | null;
+  ipHash: string | null;
+  requestId: string | null;
+  params: string | null;
+  statusCode: number | null;
+}
+
+export interface AuditLogRow {
+  id: number;
+  timestamp: string;
+  action: string;
+  endpoint: string;
+  auth_token_id: string | null;
+  ip_hash: string | null;
+  request_id: string | null;
+  params: string | null;
+  status_code: number | null;
+  prev_hash: string | null;
+  hash: string;
+  archived_at: string | null;
+}
+
+export interface AuditLogQueryOptions {
+  limit?: number;
+  offset?: number;
+  action?: string;
+}
+
+/**
+ * Insert an audit log entry, chaining its hash to the previous entry's hash.
+ * Read-then-write happens inside a single better-sqlite3 transaction (and,
+ * since better-sqlite3 calls are synchronous, without any await in between),
+ * so concurrent inserts can't interleave and desync the chain.
+ */
+export function insertAuditLog(entry: AuditLogInput): AuditLogRow {
+  const database = initDb();
+
+  const insert = database.transaction((e: AuditLogInput): AuditLogRow => {
+    const last = database
+      .prepare("SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1")
+      .get() as { hash: string } | undefined;
+    const prevHash = last?.hash ?? "genesis";
+
+    const hash = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify({
+          timestamp: e.timestamp,
+          action: e.action,
+          endpoint: e.endpoint,
+          authTokenId: e.authTokenId,
+          ipHash: e.ipHash,
+          requestId: e.requestId,
+          params: e.params,
+          statusCode: e.statusCode,
+          prevHash,
+        }),
+      )
+      .digest("hex");
+
+    const result = database
+      .prepare(
+        `INSERT INTO audit_log
+          (timestamp, action, endpoint, auth_token_id, ip_hash, request_id, params, status_code, prev_hash, hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        e.timestamp,
+        e.action,
+        e.endpoint,
+        e.authTokenId,
+        e.ipHash,
+        e.requestId,
+        e.params,
+        e.statusCode,
+        prevHash,
+        hash,
+      );
+
+    return {
+      id: result.lastInsertRowid as number,
+      timestamp: e.timestamp,
+      action: e.action,
+      endpoint: e.endpoint,
+      auth_token_id: e.authTokenId,
+      ip_hash: e.ipHash,
+      request_id: e.requestId,
+      params: e.params,
+      status_code: e.statusCode,
+      prev_hash: prevHash,
+      hash,
+      archived_at: null,
+    };
+  });
+
+  return insert(entry);
+}
+
+/**
+ * Paginated audit log query (newest first), optionally filtered by action.
+ */
+export function getAuditLogs(
+  options: AuditLogQueryOptions = {},
+): { logs: AuditLogRow[]; total: number } {
+  const database = initDb();
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
+  const offset = Math.max(0, options.offset ?? 0);
+
+  let where = "";
+  const params: unknown[] = [];
+  if (options.action) {
+    where = " WHERE action = ?";
+    params.push(options.action);
+  }
+
+  const logs = database
+    .prepare(
+      `SELECT * FROM audit_log${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as AuditLogRow[];
+
+  const total = (
+    database
+      .prepare(`SELECT COUNT(*) as total FROM audit_log${where}`)
+      .get(...params) as { total: number }
+  ).total;
+
+  return { logs, total };
+}
+
+/**
+ * All audit log rows in insertion order, for hash-chain verification.
+ */
+export function getAllAuditLogsOrdered(): AuditLogRow[] {
+  const database = initDb();
+  return database
+    .prepare("SELECT * FROM audit_log ORDER BY id ASC")
+    .all() as AuditLogRow[];
+}
+
+/**
+ * Unarchived rows older than the given ISO cutoff — candidates for rotation.
+ */
+export function getUnarchivedAuditLogsOlderThan(
+  cutoffIso: string,
+): AuditLogRow[] {
+  const database = initDb();
+  return database
+    .prepare(
+      "SELECT * FROM audit_log WHERE archived_at IS NULL AND timestamp < ? ORDER BY id ASC",
+    )
+    .all(cutoffIso) as AuditLogRow[];
+}
+
+/**
+ * Mark rows as archived (allowed by the immutable-core trigger, which only
+ * blocks changes to fields other than archived_at).
+ */
+export function markAuditLogsArchived(ids: number[], archivedAt: string): void {
+  if (ids.length === 0) return;
+  const database = initDb();
+  const stmt = database.prepare(
+    "UPDATE audit_log SET archived_at = ? WHERE id = ?",
+  );
+  const run = database.transaction((rowIds: number[]) => {
+    for (const id of rowIds) stmt.run(archivedAt, id);
+  });
+  run(ids);
+}
+
+/**
+ * Delete rows from the hot table. Only succeeds for rows already marked
+ * archived_at — enforced by the audit_log_no_unarchived_delete trigger.
+ */
+export function deleteAuditLogs(ids: number[]): number {
+  if (ids.length === 0) return 0;
+  const database = initDb();
+  const stmt = database.prepare("DELETE FROM audit_log WHERE id = ?");
+  const run = database.transaction((rowIds: number[]) => {
+    let deleted = 0;
+    for (const id of rowIds) deleted += stmt.run(id).changes;
+    return deleted;
+  });
+  return run(ids);
 }
 
 /**
@@ -1626,10 +1975,16 @@ export function migrateFromJson(jsonPath: string): number {
 
             // SECURITY: Validate timestamp format if provided
             const timestamp = event.timestamp ?? new Date().toISOString();
-            if (event.timestamp && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp)) {
-              log("warn", "json_migration_invalid_timestamp", { 
-                timestamp: event.timestamp, 
-                daoId 
+            if (
+              event.timestamp &&
+              (
+                !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp) ||
+                Number.isNaN(Date.parse(event.timestamp))
+              )
+            ) {
+              log("warn", "json_migration_invalid_timestamp", {
+                timestamp: event.timestamp,
+                daoId,
               });
               continue;
             }
@@ -1764,6 +2119,7 @@ export function upsertDao(dao: DaoInput): void {
       dao.metadata_cid ?? null,
       dao.member_count ?? 0,
     );
+  incrementTransactionCounter();
 }
 
 /**
@@ -1799,6 +2155,7 @@ export function upsertDaos(daos: DaoInput[]): void {
   })();
 
   log("info", "daos_upserted", { count: daos.length });
+  incrementTransactionCounter();
 }
 
 /**
@@ -2314,6 +2671,55 @@ function rowToAuditEntry(row: Record<string, unknown>): AuthTokenAuditEntry {
     ipHash: (row.ip_hash as string) ?? null,
     success: !!row.success,
     errorMessage: (row.error_message as string) ?? null,
+// PROOF COMMITMENT STORAGE
+// ============================================
+
+export interface ProofCommitmentRecord {
+  commitmentHash: string;
+  nullifier: string;
+  daoId: number;
+  proposalId: number;
+  walletAddress?: string | null;
+  timestamp: number;
+  status: "COMMITTED" | "REVEALED" | "EXPIRED";
+  createdAt: string;
+}
+
+export function recordProofCommitment(
+  commitmentHash: string,
+  nullifier: string,
+  daoId: number,
+  proposalId: number,
+  timestamp: number,
+  walletAddress?: string | null,
+): void {
+  const database = initDb();
+  const createdAt = new Date().toISOString();
+  database
+    .prepare(
+      `INSERT INTO proof_commitments (commitment_hash, nullifier, dao_id, proposal_id, wallet_address, timestamp, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'COMMITTED', ?)
+       ON CONFLICT(commitment_hash) DO UPDATE SET timestamp = excluded.timestamp, status = 'COMMITTED'`,
+    )
+    .run(commitmentHash, nullifier, daoId, proposalId, walletAddress || null, timestamp, createdAt);
+}
+
+export function getProofCommitment(commitmentHash: string): ProofCommitmentRecord | null {
+  const database = initDb();
+  const row = database
+    .prepare("SELECT * FROM proof_commitments WHERE commitment_hash = ?")
+    .get(commitmentHash) as Record<string, unknown> | undefined;
+
+  if (!row) return null;
+
+  return {
+    commitmentHash: row.commitment_hash as string,
+    nullifier: row.nullifier as string,
+    daoId: row.dao_id as number,
+    proposalId: row.proposal_id as number,
+    walletAddress: row.wallet_address as string | null,
+    timestamp: row.timestamp as number,
+    status: row.status as "COMMITTED" | "REVEALED" | "EXPIRED",
     createdAt: row.created_at as string,
   };
 }
@@ -2389,3 +2795,13 @@ export function cleanupAuditLog(maxAgeMs = 15_552_000_000): number {
     .run(cutoff);
   return result.changes;
 }
+export function updateProofCommitmentStatus(
+  commitmentHash: string,
+  status: "COMMITTED" | "REVEALED" | "EXPIRED",
+): void {
+  const database = initDb();
+  database
+    .prepare("UPDATE proof_commitments SET status = ? WHERE commitment_hash = ?")
+    .run(status, commitmentHash);
+}
+

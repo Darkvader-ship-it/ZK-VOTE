@@ -34,7 +34,7 @@ const router = Router();
 // VALIDATION SCHEMAS
 // ============================================
 
-const bridgeVoteSchema = z.object({
+export const bridgeVoteSchema = z.object({
   daoId: z.number().int().positive(),
   proposalId: z.number().int().positive(),
   voteChoice: z.number().int().min(0).max(1),
@@ -234,6 +234,7 @@ router.get(
   queryLimiter,
   validateParams(nullifierParamsSchema),
   (async (req: Request, res: Response) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { daoId, proposalId, nullifier } = (req as any).validatedParams;
 
     try {

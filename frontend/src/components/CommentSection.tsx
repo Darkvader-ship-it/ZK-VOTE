@@ -56,6 +56,7 @@ export default function CommentSection({
   const [showRevisions, setShowRevisions] = useState<CommentWithContent | null>(
     null,
   );
+  const [visibleCount, setVisibleCount] = useState<number>(20);
 
   // Use React Query for comments
   const {
@@ -161,24 +162,37 @@ export default function CommentSection({
 
         {/* Comments list */}
         {!isLoading && !error && comments.length > 0 && (
-          <div className="divide-y divide-border">
-            {comments.map((comment) => (
-              <Comment
-                key={comment.id}
-                comment={comment}
-                daoId={daoId}
-                proposalId={proposalId}
-                publicKey={publicKey}
-                kit={kit}
-                hasMembership={hasMembership}
-                isRegistered={isRegistered}
-                eligibleRoot={eligibleRoot}
-                isAdmin={isAdmin}
-                nullifierMap={nullifierMap}
-                onRefresh={handleRefresh}
-                onShowRevisions={setShowRevisions}
-              />
-            ))}
+          <div className="space-y-4">
+            <div className="divide-y divide-border">
+              {comments.slice(0, visibleCount).map((comment) => (
+                <Comment
+                  key={comment.id}
+                  comment={comment}
+                  daoId={daoId}
+                  proposalId={proposalId}
+                  publicKey={publicKey}
+                  kit={kit}
+                  hasMembership={hasMembership}
+                  isRegistered={isRegistered}
+                  eligibleRoot={eligibleRoot}
+                  isAdmin={isAdmin}
+                  nullifierMap={nullifierMap}
+                  onRefresh={handleRefresh}
+                  onShowRevisions={setShowRevisions}
+                />
+              ))}
+            </div>
+            {comments.length > visibleCount && (
+              <div className="text-center pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVisibleCount((prev) => prev + 20)}
+                >
+                  Load more comments ({comments.length - visibleCount} remaining)
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

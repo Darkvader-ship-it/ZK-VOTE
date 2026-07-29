@@ -7,7 +7,7 @@
 import { Router, type Request, type Response } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
-import { config } from "../config.js";
+import { config, isValidContractId } from "../config.js";
 import { log } from "../services/logger.js";
 import {
   server,
@@ -19,20 +19,25 @@ import {
   u256ToScVal,
   proofToScVal,
 } from "../services/stellar.js";
+import { verifyMembership } from "../services/sync.js";
 import {
   authGuard,
+  auditLog,
   commentLimiter,
   queryLimiter,
   validateBody,
   validateParams,
+  noteDegraded,
+  sendPartial,
+  validateQuery,
 } from "../middleware/index.js";
 import {
   anonymousCommentSchema,
   flagCommentSchema,
-  challengeQuerySchema,
   commentParamsSchema,
   proposalParamsSchema,
   commitmentParamsSchema,
+  commentCountQuerySchema,
 } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 import { generateChallenge, verifyChallenge } from "../services/pow.js";
@@ -42,8 +47,56 @@ import {
   flagComment,
   getHiddenCommentIds,
 } from "../services/anti-spam.js";
+import { commentsSubmitted } from "../services/metrics.js";
+import {
+  markDegraded,
+  markHealthy,
+  markUnavailable,
+  setLkg,
+  getLkg,
+  commentsLkgKey,
+} from "../services/service-health.js";
 
 const router = Router();
+
+/**
+ * Real-time membership gate for address-authenticated writes (edit/delete).
+ * Anonymous vote/comment paths already get a stronger, real-time guarantee
+ * from their ZK merkle-root proof verified on-chain, so this only applies to
+ * routes that identify the caller by address. No-op when the Membership SBT
+ * contract isn't configured (feature not deployed for this DAO/deployment).
+ */
+async function enforceCurrentMembership(
+  daoId: number,
+  address: string,
+  res: Response,
+  event: string,
+): Promise<boolean> {
+  if (
+    !config.membershipSbtContractId ||
+    !isValidContractId(config.membershipSbtContractId)
+  ) {
+    return true;
+  }
+  try {
+    const isMember = await verifyMembership(daoId, address);
+    if (!isMember) {
+      log("warn", `${event}_membership_denied`, { daoId });
+      res.status(403).json({ error: "Author is not a current DAO member" });
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log("error", `${event}_membership_check_failed`, {
+      daoId,
+      error: (err as Error).message,
+    });
+    res
+      .status(503)
+      .json({ error: "Membership verification unavailable, please retry" });
+    return false;
+  }
+}
 
 // ============================================
 // PROOF-OF-WORK CHALLENGE
@@ -56,6 +109,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commit
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { commitment } = (req as any).validatedParams;
 
   const challenge = generateChallenge(commitment, {
@@ -80,6 +134,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commit
 router.post(
   "/comment/anonymous",
   authGuard,
+  auditLog("comment_anonymous_relay"),
   commentLimiter,
   validateBody(anonymousCommentSchema),
   (async (req: Request, res: Response) => {
@@ -237,6 +292,7 @@ router.post(
       );
 
       if (result.status === "SUCCESS") {
+        commentsSubmitted.inc({ status: "success" });
         log("info", "comment_anonymous_success", {
           daoId,
           proposalId,
@@ -254,6 +310,7 @@ router.post(
 
         res.json({ success: true, commentId, txHash: sendResult.hash });
       } else {
+        commentsSubmitted.inc({ status: "failed" });
         // Log the actual failure reason
         const resultXdr = "resultXdr" in result ? result.resultXdr : undefined;
         log("error", "comment_anonymous_tx_failed", {
@@ -319,6 +376,7 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(pr
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { daoId, proposalId } = (req as any).validatedParams;
   const { commitment } = req.query;
 
@@ -386,14 +444,14 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(pr
 // ============================================
 
 /**
- * GET /comments/:daoId/:proposalId - Get comments for a proposal
+ * GET /comments/:daoId/:proposalId - Get comments for a proposal with pagination
  */
-router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), (async (
+router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), validateQuery(commentCountQuerySchema), (async (
   req: Request,
   res: Response,
 ) => {
   const { daoId, proposalId } = (req as any).validatedParams;
-  const { limit = "50", offset = "0" } = req.query;
+  const { limit, offset } = (req as any).validatedQuery;
 
   try {
     const contract = new StellarSdk.Contract(config.commentsContractId!);
@@ -402,7 +460,7 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposal
       StellarSdk.nativeToScVal(daoId, { type: "u64" }),
       StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
       StellarSdk.nativeToScVal(parseInt(offset as string), { type: "u64" }),
-      StellarSdk.nativeToScVal(Math.min(parseInt(limit as string), 100), {
+      StellarSdk.nativeToScVal(Math.min(parseInt(limit as string), 500), {
         type: "u64",
       }),
     ];
@@ -454,20 +512,76 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposal
           hidden: hiddenIds.has(c.id),
         }));
 
-        res.json({ comments: filtered, total: filtered.length });
+        const payload = { comments: filtered, total: filtered.length };
+        setLkg(commentsLkgKey(daoId, proposalId), payload);
+        markHealthy("comments");
+        res.json(payload);
+        const total = filtered.length;
+        const hasMore = total === limit;
+
+        res.json({
+          data: filtered,
+          pagination: {
+            cursor: hasMore ? String(offset + limit) : undefined,
+            hasMore,
+            total,
+          },
+        });
       } else {
-        res.json({ comments: [], total: 0 });
+        res.json({
+          data: [],
+          pagination: {
+            cursor: undefined,
+            hasMore: false,
+            total: 0,
+          },
+        });
       }
     } else {
       res.status(400).json({ error: "Failed to get comments" });
     }
   } catch (err) {
+    const message = (err as Error).message;
     log("error", "get_comments_failed", {
       daoId,
       proposalId,
-      error: (err as Error).message,
+      error: message,
     });
-    res.status(500).json({ error: "Failed to fetch comments" });
+
+    // Disable comments UX when contract/RPC unavailable — serve LKG if present
+    if (!config.commentsContractId) {
+      markUnavailable("comments", "comments contract not configured");
+      noteDegraded("comments");
+      return res.status(503).json({
+        error: "Comments system unavailable",
+        disabled: true,
+      });
+    }
+
+    markDegraded("comments", message);
+    noteDegraded("comments");
+    const cached = getLkg<{ comments: unknown[]; total: number }>(
+      commentsLkgKey(daoId, proposalId),
+    );
+    if (cached) {
+      return sendPartial(
+        res,
+        {
+          comments: cached.comments,
+          total: cached.total,
+          stale: true,
+          source: "last_known_good",
+        },
+        ["comments"],
+      );
+    }
+
+    res.status(503).json({
+      error: "Comments temporarily unavailable",
+      disabled: true,
+      comments: [],
+      total: 0,
+    });
   }
 }) as AsyncHandler);
 
@@ -574,6 +688,10 @@ router.post("/comment/edit", authGuard, commentLimiter, (async (
     return res.status(400).json({ error: "Missing required fields" });
   }
 
+  if (!(await enforceCurrentMembership(daoId, author, res, "comment_edit"))) {
+    return;
+  }
+
   try {
     log("info", "comment_edit_request", { daoId, proposalId, commentId });
 
@@ -678,6 +796,10 @@ router.post("/comment/delete", authGuard, commentLimiter, (async (
     !author
   ) {
     return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  if (!(await enforceCurrentMembership(daoId, author, res, "comment_delete"))) {
+    return;
   }
 
   try {

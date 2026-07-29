@@ -4,7 +4,8 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none min-h-[48px] sm:min-h-[36px]",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none touch-manipulation active:scale-[0.98]",
   {
     variants: {
       variant: {
@@ -21,10 +22,14 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline disabled:opacity-50",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-9 rounded-md px-3",
-        lg: "h-11 rounded-md px-8",
-        icon: "h-10 w-10",
+        default: "min-h-[48px] px-4 py-2 sm:h-10 sm:min-h-0",
+        sm: "min-h-[48px] px-3.5 sm:h-9 sm:min-h-0 rounded-md",
+        lg: "min-h-[48px] px-8 sm:h-11 sm:min-h-0 rounded-md",
+        icon: "min-h-[48px] min-w-[48px] sm:h-10 sm:w-10 sm:min-h-0 sm:min-w-0 p-2",
+        default: "min-h-[44px] h-11 px-4 py-2 sm:h-10 sm:min-h-0",
+        sm: "min-h-[44px] h-10 rounded-md px-3 sm:h-9 sm:min-h-0",
+        lg: "min-h-[48px] h-12 rounded-md px-8 sm:h-11",
+        icon: "min-h-[44px] min-w-[44px] h-11 w-11 sm:h-10 sm:w-10 sm:min-h-0 sm:min-w-0",
       },
     },
     defaultVariants: {

@@ -3,6 +3,8 @@ import { truncateAddress } from "../lib/utils";
 import { useMounted } from "../hooks/useMounted";
 import { Button } from "./ui/Button";
 import { Moon, Sun, Wallet, LogOut, Menu, X } from "lucide-react";
+import LanguageSwitcher from "./LanguageSwitcher";
+import { useTranslation } from "../i18n/I18nContext";
 
 interface NavbarProps {
   onConnect: () => void;
@@ -33,6 +35,7 @@ export default function Navbar({
 }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mounted = useMounted();
+  const { t } = useTranslation();
 
   const handleNavigate = (view: "home" | "browse" | "votes" | "docs") => {
     onNavigate(view);
@@ -45,19 +48,20 @@ export default function Navbar({
         {/* Mobile menu button */}
         <button
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="mr-2 p-2 lg:hidden"
+          className="mr-2 p-3 min-h-[48px] min-w-[48px] flex items-center justify-center rounded-md hover:bg-muted focus:outline-none lg:hidden"
+          aria-label="Toggle Navigation Menu"
         >
           {mobileMenuOpen ? (
-            <X className="h-5 w-5" />
+            <X className="h-6 w-6 text-foreground" />
           ) : (
-            <Menu className="h-5 w-5" />
+            <Menu className="h-6 w-6 text-foreground" />
           )}
         </button>
 
         {/* Logo - visible on all screens */}
         <button
           onClick={() => handleNavigate("home")}
-          className="mr-4 lg:mr-8 flex items-center space-x-2"
+          className="mr-3 lg:mr-8 flex items-center space-x-2 shrink-0 py-2 min-h-[48px]"
         >
           <svg
             className="h-5 w-auto"
@@ -83,7 +87,7 @@ export default function Navbar({
                 : "text-foreground/60"
             }`}
           >
-            Browse DAOs
+            {t("nav.browse")}
           </button>
           <button
             onClick={() => handleNavigate("votes")}
@@ -91,7 +95,7 @@ export default function Navbar({
               currentView === "votes" ? "text-foreground" : "text-foreground/60"
             }`}
           >
-            Public Votes
+            {t("nav.publicVotes")}
           </button>
           <button
             onClick={() => handleNavigate("docs")}
@@ -99,12 +103,14 @@ export default function Navbar({
               currentView === "docs" ? "text-foreground" : "text-foreground/60"
             }`}
           >
-            Docs
+            {t("nav.docs")}
           </button>
         </nav>
 
         <div className="flex flex-1 items-center justify-end space-x-2">
           <div className="flex items-center gap-2">
+            <LanguageSwitcher />
+
             {relayerStatus && (
               <div className="hidden sm:flex items-center px-2 py-1 rounded-md bg-muted text-xs font-medium">
                 <div
@@ -124,7 +130,7 @@ export default function Navbar({
               variant="ghost"
               size="icon"
               onClick={onToggleTheme}
-              className="h-9 w-9"
+              className="h-10 w-10 sm:h-9 sm:w-9"
             >
               {theme === "light" ? (
                 <Moon className="h-4 w-4 transition-all" />
@@ -134,19 +140,40 @@ export default function Navbar({
               <span className="sr-only">Toggle theme</span>
             </Button>
 
-            {mounted && (isConnected && publicKey ? (
-              <div className="flex items-center gap-2">
-                <div className="hidden sm:flex items-center h-9 px-4 rounded-md border bg-muted/50 font-mono text-xs">
-                  {truncateAddress(publicKey, 6, 4)}
+            {mounted &&
+              (isConnected && publicKey ? (
+                <div className="flex items-center gap-2">
+                  <div className="hidden sm:flex items-center h-9 px-4 rounded-md border bg-muted/50 font-mono text-xs">
+                    {truncateAddress(publicKey, 6, 4)}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onDisconnect}
+                    className="h-9"
+                  >
+                    <LogOut className="mr-2 h-3.5 w-3.5" />
+                    Disconnect
+                  </Button>
                 </div>
+              ) : (
                 <Button
-                  variant="outline"
+                  onClick={onConnect}
+                  disabled={connecting}
                   size="sm"
-                  onClick={onDisconnect}
                   className="h-9"
                 >
+                  <Wallet className="mr-2 h-3.5 w-3.5" />
+                  {connecting ? "Connecting..." : "Connect Wallet"}
+                </Button>
+              ))}
+                  onClick={onDisconnect}
+                  className="min-h-[48px] sm:min-h-0 sm:h-9"
+                >
+                  <LogOut className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                  <span className="text-xs sm:text-sm">Disconnect</span>
                   <LogOut className="mr-2 h-3.5 w-3.5" />
-                  Disconnect
+                  {t("nav.disconnect")}
                 </Button>
               </div>
             ) : (
@@ -154,10 +181,14 @@ export default function Navbar({
                 onClick={onConnect}
                 disabled={connecting}
                 size="sm"
-                className="h-9"
+                className="min-h-[48px] sm:min-h-0 sm:h-9 px-3 sm:px-4"
               >
+                <Wallet className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                <span className="text-xs sm:text-sm">
+                  {connecting ? "Connecting..." : "Connect Wallet"}
+                </span>
                 <Wallet className="mr-2 h-3.5 w-3.5" />
-                {connecting ? "Connecting..." : "Connect Wallet"}
+                {connecting ? t("nav.connecting") : t("nav.connectWallet")}
               </Button>
             ))}
           </div>
@@ -166,34 +197,34 @@ export default function Navbar({
 
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="lg:hidden border-b bg-background">
-          <div className="container mx-auto px-4 py-4 space-y-3">
+        <div className="lg:hidden border-b bg-background shadow-lg animate-slide-in-from-top">
+          <div className="container mx-auto px-4 py-3 space-y-2">
             <button
               onClick={() => handleNavigate("browse")}
-              className={`block w-full text-left px-3 py-2 rounded-md transition-colors ${
+              className={`flex items-center w-full text-left px-4 min-h-[48px] rounded-md text-base font-medium transition-colors ${
                 currentView === "browse"
                   ? "bg-muted text-foreground"
-                  : "text-foreground/60 hover:bg-muted/50"
+                  : "text-foreground/70 hover:bg-muted/50"
               }`}
             >
               Browse DAOs
             </button>
             <button
               onClick={() => handleNavigate("votes")}
-              className={`block w-full text-left px-3 py-2 rounded-md transition-colors ${
+              className={`flex items-center w-full text-left px-4 min-h-[48px] rounded-md text-base font-medium transition-colors ${
                 currentView === "votes"
                   ? "bg-muted text-foreground"
-                  : "text-foreground/60 hover:bg-muted/50"
+                  : "text-foreground/70 hover:bg-muted/50"
               }`}
             >
               Public Votes
             </button>
             <button
               onClick={() => handleNavigate("docs")}
-              className={`block w-full text-left px-3 py-2 rounded-md transition-colors ${
+              className={`flex items-center w-full text-left px-4 min-h-[48px] rounded-md text-base font-medium transition-colors ${
                 currentView === "docs"
                   ? "bg-muted text-foreground"
-                  : "text-foreground/60 hover:bg-muted/50"
+                  : "text-foreground/70 hover:bg-muted/50"
               }`}
             >
               Docs
