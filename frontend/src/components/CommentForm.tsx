@@ -23,9 +23,13 @@ import {
   calculateNullifier,
   type VoteProofInput,
 } from "../lib/zkproof";
+import { fetchWithProgress } from "../lib/fetchWithProgress";
 import { getMerklePath } from "../lib/merkletree";
 import { initializeContractClients } from "../lib/contracts";
 import { relayerFetch } from "../lib/api";
+import { useOptimisticComment } from "../queries/commentQueries";
+import type { CommentWithContent } from "../lib/comments";
+import { relayerFetch, parseApiError } from "../lib/api";
 
 interface CommentFormProps {
   daoId: number;
@@ -59,6 +63,7 @@ export default function CommentForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const { addOptimisticComment, clearPendingComment } = useOptimisticComment();
 
   // Public comments require wallet (direct signing), anonymous requires registration
   const canComment = hasMembership && (isAnonymous ? isRegistered : !!kit);
@@ -142,11 +147,22 @@ export default function CommentForm({
           proposalId.toString(),
         );
 
+        // Download circuit artifacts with progress (the proving key is
+        // several MB and is the main bottleneck for perceived performance)
+        const zkey = await fetchWithProgress(
+          "/circuits/vote_final.zkey",
+          ({ loadedBytes, totalBytes }) => {
+            const pct = totalBytes
+              ? Math.round((loadedBytes / totalBytes) * 100)
+              : 0;
+            setProgress(`Downloading proving key... ${pct}%`);
+          },
+        );
+        const wasm = await fetchWithProgress("/circuits/vote.wasm");
+
         // Generate ZK proof using vote circuit (same circuit for voting and comments)
         // For comments, we just use voteChoice=false (0) - the contract ignores it
         setProgress("Generating ZK proof...");
-        const wasmPath = "/circuits/vote.wasm";
-        const zkeyPath = "/circuits/vote_final.zkey";
 
         const proofInput: VoteProofInput = {
           root: root.toString(),
@@ -167,20 +183,72 @@ export default function CommentForm({
 
         const { proof } = await generateVoteProof(
           proofInput,
-          wasmPath,
-          zkeyPath,
+          wasm,
+          zkey,
         );
 
         // Format proof for Soroban
         const { proof_a, proof_b, proof_c } = formatProofForSoroban(proof);
 
-        // Submit anonymous comment via relayer
-        setProgress("Submitting comment...");
-        const response = await relayerFetch("/comment/anonymous", {
+        const requestBody = JSON.stringify({
+          daoId,
+          proposalId,
+          contentCid: cid,
+          parentId: parentId ?? null,
+          voteChoice: false, // Arbitrary - contract ignores this for comments
+          nullifier: toHexBE(nullifier),
+          root: toHexBE(root),
+          proof: {
+            a: proof_a,
+            b: proof_b,
+            c: proof_c,
+          },
+        });
+
+        // Create optimistic comment
+        const optimisticComment: CommentWithContent = {
+          id: -Math.floor(Math.random() * 1000000), // temp ID
+          author: null,
+          contentCid: cid,
+          parentId: parentId ?? null,
+          createdAt: Math.floor(Date.now() / 1000),
+          updatedAt: Math.floor(Date.now() / 1000),
+          revisionCids: [],
+          deleted: false,
+          deletedBy: null,
+          nullifier: nullifier.toString(),
+          content: {
+            version: 1,
+            body: body.trim(),
+            createdAt: new Date().toISOString(),
+          },
+          replies: [],
+          isCollapsed: false,
+          isPending: true,
+        };
+
+        const revertOptimistic = addOptimisticComment(daoId, proposalId, optimisticComment);
+
+        // Clear form immediately
+        setBody("");
+        setProgress("");
+        onSubmit();
+
+        // Submit anonymous comment via relayer in background
+        relayerFetch("/comment/anonymous", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
+          body: requestBody,
+        })
+        .then(async (response) => {
+          const data = await response.json();
+          if (!response.ok) {
+            revertOptimistic();
+            alert("Failed to submit anonymous comment: " + (data.error || ""));
+            return;
+          }
           body: JSON.stringify({
             daoId,
             proposalId,
@@ -199,15 +267,22 @@ export default function CommentForm({
 
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data.error || "Failed to submit anonymous comment");
+          throw new Error(parseApiError(data) || "Failed to submit anonymous comment");
         }
 
-        // Save anonymous comment record for edit/delete capability
-        saveAnonymousComment({
-          commentId: data.commentId,
-          proposalId,
-          daoId,
-          nullifier,
+          // Save anonymous comment record for edit/delete capability
+          saveAnonymousComment({
+            commentId: data.commentId,
+            proposalId,
+            daoId,
+            nullifier: nullifier.toString(),
+          });
+          
+          clearPendingComment(daoId, proposalId);
+        })
+        .catch((err) => {
+          revertOptimistic();
+          alert("Network error submitting comment");
         });
       } else {
         // Submit public comment via direct wallet signing
@@ -235,12 +310,12 @@ export default function CommentForm({
         await tx.signAndSend({
           signTransaction: kit.signTransaction.bind(kit),
         });
-      }
 
-      // Success - clear form and notify parent
-      setBody("");
-      setProgress("");
-      onSubmit();
+        // Success - clear form and notify parent
+        setBody("");
+        setProgress("");
+        onSubmit();
+      }
     } catch (err) {
       console.error("Failed to submit comment:", err);
       setError(err instanceof Error ? err.message : "Failed to submit comment");

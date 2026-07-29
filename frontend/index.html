@@ -4,10 +4,23 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
     <link rel="shortcut icon" href="/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Zero-knowledge governance for decentralized organizations on Stellar. Vote anonymously with cryptographic proofs." />
     <title>ZKVote - Anonymous Governance</title>
 
+    <!-- Anti-clickjacking Frame Busting Fallback -->
+    <script>
+      if (window.top !== window.self) {
+        try {
+          if (window.top) {
+            window.top.location = window.self.location;
+          }
+        } catch {
+          document.documentElement.innerHTML = "";
+          document.documentElement.innerText = "Clickjacking protection: framing is disabled.";
+        }
+      }
+    </script>
     <!-- Google Fonts for Stellar Design System -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

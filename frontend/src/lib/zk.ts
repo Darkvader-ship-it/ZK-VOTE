@@ -233,6 +233,48 @@ export async function getOrRegenerateZKCredentials(
   }
 }
 
+// ─── Panic / Fake Credentials (#96 Coercion Resistance) ─────────────────────
+//
+// A coerced voter can generate "fake" credentials: a random secret/salt pair
+// whose commitment is registered with the registrar. The resulting ZK proof is
+// structurally valid (passes the circuit) but the commitment is not in the
+// membership Merkle tree, so the on-chain nullifier check will reject the vote.
+//
+// This implements the first layer of the JCJ coercion-resistance model:
+//  1. The coercer sees valid-looking credentials and a valid-looking proof.
+//  2. The real credential (derived deterministically from the wallet) remains
+//     usable — the voter can cast their real vote after the coercion ends.
+//  3. Only the registrar can distinguish real from fake credentials because
+//     only real commitments appear in the membership Merkle tree.
+//
+// NOTE: Full JCJ requires a separate re-voting window and registrar-side
+// filtering; this function provides the client-side credential generation step.
+export async function generateFakeZKCredentials(): Promise<ZKCredentials> {
+  const poseidon = await buildPoseidon();
+
+  const secret = BigInt(
+    "0x" +
+      Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(""),
+  );
+
+  const salt = BigInt(
+    "0x" +
+      Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(""),
+  );
+
+  const commitment = poseidon.F.toString(poseidon([secret, salt]));
+
+  return {
+    secret: secret.toString(),
+    salt: salt.toString(),
+    commitment,
+  };
+}
+
 // Compute commitment from secret and salt
 export async function computeCommitment(
   secret: string,

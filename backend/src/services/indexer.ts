@@ -10,6 +10,13 @@ import path from "path";
 import { fileURLToPath } from "url";
 import * as db from "./db.js";
 import type { Event, EventInput, EventQueryOptions, DbStatus } from "./db.js";
+import {
+  serviceLastRunTime,
+  serviceErrors,
+  serviceRunning,
+  indexerEventsProcessed,
+  indexerLag as indexerLagGauge,
+} from "./metrics.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +60,10 @@ interface ParsedEvent {
 /** Indexer status response */
 export interface IndexerStatus extends DbStatus {
   isRunning: boolean;
+  indexerLag: number;
+  hasGap: boolean;
+  catchUpMode: boolean;
+  checkpoint: string | null;
 }
 
 /** DAO data for synthetic events */
@@ -81,6 +92,9 @@ export type { Event, EventQueryOptions };
 
 let isPolling = false;
 let rpcServer: StellarSdk.rpc.Server | null = null;
+let indexerLag = 0;
+let hasGap = false;
+let catchUpMode = false;
 
 // ============================================
 // LOGGER
@@ -171,15 +185,29 @@ async function pollEvents(
     const currentLedger = latestLedger.sequence;
 
     if (startLedger >= currentLedger) {
+      indexerLag = 0;
+      catchUpMode = false;
       return startLedger;
+    }
+
+    indexerLag = currentLedger - startLedger;
+    indexerLagGauge.set(indexerLag);
+
+    // Detect gap or large lag (> 100 ledgers)
+    let targetEndLedger = currentLedger;
+    if (indexerLag > 100) {
+      catchUpMode = true;
+      hasGap = true;
+      targetEndLedger = startLedger + 100;
+    } else {
+      catchUpMode = false;
     }
 
     for (const contractId of contracts) {
       try {
-        // The SDK now requires endLedger
         const events = await server.getEvents({
           startLedger: startLedger + 1,
-          endLedger: currentLedger,
+          endLedger: targetEndLedger,
           filters: [
             {
               type: "contract",
@@ -208,10 +236,11 @@ async function pollEvents(
             }
           }
           if (addedCount > 0) {
+            indexerEventsProcessed.inc({ event_type: "indexed" }, addedCount);
             log("info", "events_indexed", {
               contract: contractId.slice(0, 8) + "...",
               count: addedCount,
-              latestLedger: currentLedger,
+              latestLedger: targetEndLedger,
             });
           }
         }
@@ -226,7 +255,8 @@ async function pollEvents(
       }
     }
 
-    return currentLedger;
+    db.setMetadata("indexerCheckpoint", new Date().toISOString());
+    return targetEndLedger;
   } catch (err) {
     log("error", "poll_events_failed", { error: (err as Error).message });
     return startLedger;
@@ -282,6 +312,8 @@ async function verifyEventOnChain(event: Event): Promise<boolean> {
  * Background job to verify pending events
  */
 async function verifyPendingEvents(): Promise<void> {
+  // Cleanup expired unverified pending events older than 15 mins
+  db.cleanupExpiredPendingEvents(15 * 60 * 1000);
   const unverified = db.getUnverifiedEvents(10);
   for (const event of unverified) {
     await verifyEventOnChain(event);
@@ -309,11 +341,19 @@ export async function startIndexer(
 
   isPolling = true;
   rpcServer = server as StellarSdk.rpc.Server;
+  serviceRunning.set({ service: "indexer" }, 1);
 
   // Initialize database and migrate from JSON if exists
   db.initDb();
   const jsonPath = path.join(__dirname, "..", "..", "data", "events.json");
   db.migrateFromJson(jsonPath);
+
+  // Migrate from monolithic events table to per-DAO partitions
+  // Idempotent — safe to run on every startup until migration is complete
+  const migrated = db.migrateToPartitions();
+  if (migrated > 0) {
+    log("info", "partition_migration_complete", { migrated });
+  }
 
   let lastLedger = db.getMetadata<number>("lastLedger") ?? 0;
 
@@ -341,9 +381,11 @@ export async function startIndexer(
       // Also verify any pending events
       await verifyPendingEvents();
     } catch (err) {
+      serviceErrors.inc({ service: "indexer" });
       log("error", "poll_failed", { error: (err as Error).message });
     }
 
+    serviceLastRunTime.set({ service: "indexer" }, Date.now() / 1000);
     setTimeout(poll, pollIntervalMs);
   };
 
@@ -355,6 +397,7 @@ export async function startIndexer(
  */
 export function stopIndexer(): void {
   isPolling = false;
+  serviceRunning.set({ service: "indexer" }, 0);
   db.closeDb();
   log("info", "indexer_stopped");
 }
@@ -391,6 +434,10 @@ export function getIndexerStatus(): IndexerStatus {
   const status = db.getDbStatus();
   return {
     isRunning: isPolling,
+    indexerLag,
+    hasGap,
+    catchUpMode,
+    checkpoint: db.getMetadata<string>("indexerCheckpoint") ?? null,
     ...status,
   };
 }

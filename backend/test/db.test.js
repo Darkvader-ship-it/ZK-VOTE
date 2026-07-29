@@ -118,7 +118,7 @@ test("migrated database still works for queries", async () => {
 
   db.prepare(
     "INSERT INTO events (dao_id, type, timestamp) VALUES (?, ?, ?)",
-  ).run(1, "test", "2024-01-01T00:00:00.000Z");
+  ).run(1, "dao_create", "2024-01-01T00:00:00.000Z");
   db.close();
 
   const { initDb } = await import("../src/services/db.ts");
@@ -128,7 +128,7 @@ test("migrated database still works for queries", async () => {
     .prepare("SELECT * FROM events WHERE dao_id = ?")
     .get(1);
   assert.ok(row);
-  assert.equal(row.type, "test");
+  assert.equal(row.type, "dao_create");
 
   const countRow = database
     .prepare("SELECT COUNT(*) as total FROM events WHERE dao_id = ?")

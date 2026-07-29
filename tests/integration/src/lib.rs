@@ -5,16 +5,13 @@
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use soroban_sdk::{
-        testutils::{Address as _, Ledger as _},
-        Address, BytesN, Env, String, Symbol, Vec, U256,
-    };
+    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec, U256};
 
     // Import actual contract clients
     use dao_registry::DaoRegistryClient;
     use membership_sbt::MembershipSbtClient;
     use membership_tree::MembershipTreeClient;
-    use voting::{Proof, VerificationKey, VoteMode, VotingClient, ELECTION_CREATION_COOLDOWN};
+    use voting::{Proof, VerificationKey, VoteMode, VotingClient};
 
     /// Helper to setup the full DaoVote system
     struct DaoVoteSystem {
@@ -79,9 +76,9 @@ mod tests {
                 gamma: g2_gen.clone(),
                 delta: g2_gen.clone(),
                 // IC vector: IC[0] + one for each public signal
-                // Public signals: [root, nullifier, daoId, proposalId, voteChoice] = 5 signals
+                // Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates] = 6 signals
                 // (commitment is now PRIVATE, not public)
-                // So IC needs 6 elements
+                // So IC needs 7 elements
                 ic: Vec::from_array(
                     &self.env,
                     [
@@ -91,6 +88,7 @@ mod tests {
                         g1_gen.clone(), // IC[3] for daoId
                         g1_gen.clone(), // IC[4] for proposalId
                         g1_gen.clone(), // IC[5] for voteChoice
+                        g1_gen.clone(), // IC[6] for numCandidates
                     ],
                 ),
             }
@@ -1015,10 +1013,6 @@ mod tests {
         ic0[31] = 9;
         vk2.ic.set(0, BytesN::from_array(&system.env, &ic0));
         system.voting_client().set_vk(&dao_id, &vk2, &admin);
-        system
-            .env
-            .ledger()
-            .with_mut(|li| li.timestamp += ELECTION_CREATION_COOLDOWN);
         let proposal2 = system.voting_client().create_proposal(
             &dao_id,
             &String::from_str(&system.env, "P2"),
@@ -1132,8 +1126,8 @@ mod tests {
             cpu_delta,
             mem_delta
         );
-        assert!(cpu_delta <= 600_000, "create_proposal cpu too high");
-        assert!(mem_delta <= 225_000, "create_proposal mem too high");
+        assert!(cpu_delta <= 500_000, "create_proposal cpu too high");
+        assert!(mem_delta <= 200_000, "create_proposal mem too high");
 
         // --- vote ---
         let root = system.tree_client().get_root(&dao_id);
@@ -1279,5 +1273,60 @@ mod tests {
 
         let prop = system.voting_client().get_proposal(&dao_id, &proposal_id);
         assert_eq!(prop.yes_votes + prop.no_votes, 19);
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError")]
+    fn test_invalid_candidate_index_rejected() {
+        let system = DaoVoteSystem::new();
+
+        let admin = Address::generate(&system.env);
+        let member = Address::generate(&system.env);
+
+        let dao_id = system.registry_client().create_dao(
+            &String::from_str(&system.env, "Candidate Test DAO"),
+            &admin,
+            &false,
+            &true,
+            &None,
+        );
+
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
+        system.sbt_client().mint(&dao_id, &member, &admin, &None);
+
+        let commitment = U256::from_u32(&system.env, 55555);
+        system
+            .tree_client()
+            .register_with_caller(&dao_id, &commitment, &member);
+
+        let root = system.tree_client().current_root(&dao_id);
+
+        let vk = system.create_test_vk();
+        system.voting_client().set_vk(&dao_id, &vk, &admin);
+
+        let now = system.env.ledger().timestamp();
+        let proposal_id = system.voting_client().create_proposal(
+            &dao_id,
+            &String::from_str(&system.env, "Candidate Bound Test"),
+            &String::from_str(&system.env, ""),
+            &(now + 86400),
+            &member,
+            &VoteMode::Fixed,
+        );
+
+        // Set num_candidates=1: only candidate index 0 is valid
+        system
+            .voting_client()
+            .set_election_config(&dao_id, &proposal_id, &0, &0, &1u32);
+
+        let proof = system.create_test_proof();
+        let nullifier = U256::from_u32(&system.env, 77777);
+
+        // vote_choice=true -> index 1 >= num_candidates(1) -> should panic
+        system
+            .voting_client()
+            .vote(&dao_id, &proposal_id, &true, &nullifier, &root, &proof);
     }
 }

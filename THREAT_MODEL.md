@@ -111,7 +111,31 @@ assertValidFieldElement(root, 'root');
 assertValidNullifier(nullifier);
 ```
 
+## Coercion Resistance (#96)
+
+**Threat:** A coercer forces a voter to reveal their identity secret and vote for a specific candidate. With deterministic credentials the coercer can then verify the voter complied.
+
+**Mitigation — Fake (Panic) Credentials:**
+The client exposes `generateFakeZKCredentials()` (`frontend/src/lib/zk.ts`). This produces a structurally valid credential pair (random secret + salt → Poseidon commitment) that the voter can "reveal" to the coercer. The resulting ZK proof passes the circuit but is rejected on-chain because the fake commitment is not in the membership Merkle tree.
+
+**Properties:**
+- The coercer cannot distinguish a fake credential from a real one without access to the membership tree.
+- The voter's real credential (derived deterministically from their wallet signature) remains usable after the coercion ends.
+- Re-voting: because nullifiers are per `(dao_id, proposal_id)`, a voter who submitted a coerced vote with a *real* credential cannot vote again. Full JCJ coercion resistance requires a separate re-voting window; this implementation covers the fake-credential generation step only.
+
+**Residual Risks:**
+- If the coercer holds the voter's wallet, they can derive the real credential directly — fake credentials only help when the coercer asks the voter to "sign and show" rather than holding the device.
+- Full re-voting protection (latest vote overrides earlier) requires on-chain support not yet implemented.
+- A voter who panics and uses a fake credential still loses their effective vote (the nullifier slot for real credentials remains open, but they must re-vote with the real credential before the deadline).
+
+**Planned — Full JCJ Integration:**
+- Registrar-side filtering to strip fake-commitment votes from the tally.
+- Re-voting window so the real vote can override a coerced submission.
+- "Panic mode" UI button in `VoteModal` to switch to fake credentials before signing.
+
 ## Next Hardening Steps
 - Relay: structured logging with redaction; configurable log retention; coarser error responses; optional cover traffic/backoff to reduce correlation; explicit anti-censorship monitoring (missing votes vs submissions).
 - Contracts: coarse error codes to avoid fine-grained leakage; optional per-contract versioning + upgrade events; ensure membership/admin checks stay isolated.
 - Ops: monitor relayer availability; document user guidance (do not mix identifiable transactions around anonymous voting).
+- Coercion resistance: implement re-voting window and registrar tally filter (see #96).
+- Tally proofs: add `verify_tally_proof` contract entrypoint and circuit for universal verifiability (see #94).

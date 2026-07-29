@@ -12,13 +12,32 @@ import { log } from "../services/logger.js";
 import * as ipfsService from "../services/ipfs.js";
 import {
   authGuard,
+  auditLog,
   queryLimiter,
   ipfsUploadLimiter,
   ipfsReadLimiter,
+  validateParams,
 } from "../middleware/index.js";
+import { cidParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
+import { detectMimeType } from "../utils/magic-bytes.js";
 
 const router = Router();
+
+// ============================================
+// IPFS SECURITY MIDDLEWARE
+// ============================================
+
+router.use(["/ipfs/:cid", "/ipfs/image/:cid"], (req, res, next) => {
+  // Origin isolation
+  if (config.ipfsSubdomain && req.hostname !== config.ipfsSubdomain && !config.testMode) {
+    return res.status(403).json({ error: "IPFS content must be served from the dedicated IPFS subdomain" });
+  }
+
+  // Security headers for all IPFS responses
+  res.set("X-Content-Type-Options", "nosniff");
+  next();
+});
 
 // ============================================
 // MULTER CONFIGURATION (FILE UPLOADS)
@@ -152,6 +171,7 @@ router.post(
   // the token is shipped in the public frontend bundle — keeps random
   // internet attackers off the multer parser + Pinata bill.
   authGuard,
+  auditLog("ipfs_upload_image"),
   ipfsUploadLimiter,
   (req, res, next) => {
     upload.single("image")(req, res, (err: any) => {
@@ -219,7 +239,7 @@ router.post(
  * POST /ipfs/metadata - Upload JSON metadata to IPFS
  */
 // N1 hardening: was unauthenticated — see /ipfs/image rationale.
-router.post("/ipfs/metadata", authGuard, ipfsUploadLimiter, (async (
+router.post("/ipfs/metadata", authGuard, auditLog("ipfs_upload_metadata"), ipfsUploadLimiter, (async (
   req: Request,
   res: Response,
 ) => {
@@ -281,7 +301,7 @@ router.post("/ipfs/metadata", authGuard, ipfsUploadLimiter, (async (
 /**
  * GET /ipfs/:cid - Fetch content from IPFS (JSON)
  */
-router.get("/ipfs/:cid", ipfsReadLimiter, (async (
+router.get("/ipfs/:cid", ipfsReadLimiter, validateParams(cidParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
@@ -289,11 +309,7 @@ router.get("/ipfs/:cid", ipfsReadLimiter, (async (
     return res.status(503).json({ error: "IPFS service not configured" });
   }
 
-  const { cid } = req.params;
-
-  if (!ipfsService.isValidCid(cid)) {
-    return res.status(400).json({ error: "Invalid CID format" });
-  }
+  const { cid } = (req as any).validatedParams;
 
   const cached = getCachedContent(cid);
   if (cached) {
@@ -310,6 +326,9 @@ router.get("/ipfs/:cid", ipfsReadLimiter, (async (
 
     log("info", "ipfs_fetch_success", { cid });
 
+    res.set("Content-Security-Policy", "default-src 'none'");
+    res.set("Content-Disposition", "attachment");
+
     if (typeof result.data === "object") {
       res.json(result.data);
     } else {
@@ -324,7 +343,7 @@ router.get("/ipfs/:cid", ipfsReadLimiter, (async (
 /**
  * GET /ipfs/image/:cid - Fetch raw image from IPFS
  */
-router.get("/ipfs/image/:cid", ipfsReadLimiter, (async (
+router.get("/ipfs/image/:cid", ipfsReadLimiter, validateParams(cidParamsSchema), (async (
   req: Request,
   res: Response,
 ) => {
@@ -332,25 +351,41 @@ router.get("/ipfs/image/:cid", ipfsReadLimiter, (async (
     return res.status(503).json({ error: "IPFS service not configured" });
   }
 
-  const { cid } = req.params;
-
-  if (!ipfsService.isValidCid(cid)) {
-    return res.status(400).json({ error: "Invalid CID format" });
-  }
+  const { cid } = (req as any).validatedParams;
 
   try {
     log("info", "ipfs_fetch_image", { cid });
 
     const result = await ipfsService.fetchRawContent(cid);
 
+    const detectedMime = detectMimeType(result.buffer);
+    const finalMimeType = detectedMime || result.contentType;
+
+    if (
+      finalMimeType.includes("html") ||
+      finalMimeType.includes("svg") ||
+      finalMimeType.includes("javascript") ||
+      finalMimeType.includes("xml")
+    ) {
+      return res.status(403).json({ error: "Forbidden content type" });
+    }
+
     log("info", "ipfs_fetch_image_success", {
       cid,
-      contentType: result.contentType,
+      contentType: finalMimeType,
     });
 
-    res.set("Content-Type", result.contentType);
+    res.set("Content-Type", finalMimeType);
     res.set("Cache-Control", "public, max-age=31536000, immutable");
     res.set("Cross-Origin-Resource-Policy", "cross-origin");
+
+    if (finalMimeType.startsWith("image/")) {
+      res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'");
+    } else {
+      res.set("Content-Security-Policy", "default-src 'none'");
+      res.set("Content-Disposition", "attachment");
+    }
+
     res.send(result.buffer);
   } catch (err) {
     log("error", "ipfs_fetch_image_failed", {
