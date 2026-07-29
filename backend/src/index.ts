@@ -53,6 +53,7 @@ import { closeDb } from "./services/db.js";
 // Middleware
 import {
   csrfGuard,
+  csrfTokenMiddleware,
   requestLogger,
   errorHandler,
   graduatedSlowDown,
@@ -70,6 +71,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  quadraticRoutes,
   metricsRoutes,
   remediationRoutes,
   novaRoutes,
@@ -120,7 +122,7 @@ const corsOrigins = config.corsOrigins === "*" ? "*" : config.corsOrigins;
 const corsOptions: cors.CorsOptions = {
   origin: corsOrigins,
   methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth", "X-CSRF-Token"],
   maxAge: 86400, // 24 hours
 };
 app.use(cors(corsOptions));
@@ -134,7 +136,10 @@ app.use(requestLogger);
 // Graduated throttling (delays before a client is hard rate-limited)
 app.use(graduatedSlowDown);
 
-// CSRF protection (applied globally)
+// CSRF token generation for safe methods (GET, HEAD, OPTIONS)
+app.use(csrfTokenMiddleware);
+
+// CSRF protection (applied globally for write methods)
 app.use(csrfGuard);
 
 // ============================================
@@ -156,6 +161,7 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(quadraticRoutes);
 app.use("/api/v1/nova", novaRoutes);
 app.use(adminRoutes);
 app.use(thresholdRoutes);
