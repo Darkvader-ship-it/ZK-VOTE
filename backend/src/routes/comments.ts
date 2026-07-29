@@ -27,14 +27,15 @@ import {
   queryLimiter,
   validateBody,
   validateParams,
+  validateQuery,
 } from "../middleware/index.js";
 import {
   anonymousCommentSchema,
   flagCommentSchema,
-  challengeQuerySchema,
   commentParamsSchema,
   proposalParamsSchema,
   commitmentParamsSchema,
+  commentCountQuerySchema,
 } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 import { generateChallenge, verifyChallenge } from "../services/pow.js";
@@ -98,6 +99,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commit
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { commitment } = (req as any).validatedParams;
 
   const challenge = generateChallenge(commitment, {
@@ -364,6 +366,7 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(pr
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { daoId, proposalId } = (req as any).validatedParams;
   const { commitment } = req.query;
 
@@ -431,14 +434,14 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(pr
 // ============================================
 
 /**
- * GET /comments/:daoId/:proposalId - Get comments for a proposal
+ * GET /comments/:daoId/:proposalId - Get comments for a proposal with pagination
  */
-router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), (async (
+router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), validateQuery(commentCountQuerySchema), (async (
   req: Request,
   res: Response,
 ) => {
   const { daoId, proposalId } = (req as any).validatedParams;
-  const { limit = "50", offset = "0" } = req.query;
+  const { limit, offset } = (req as any).validatedQuery;
 
   try {
     const contract = new StellarSdk.Contract(config.commentsContractId!);
@@ -447,7 +450,7 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposal
       StellarSdk.nativeToScVal(daoId, { type: "u64" }),
       StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
       StellarSdk.nativeToScVal(parseInt(offset as string), { type: "u64" }),
-      StellarSdk.nativeToScVal(Math.min(parseInt(limit as string), 100), {
+      StellarSdk.nativeToScVal(Math.min(parseInt(limit as string), 500), {
         type: "u64",
       }),
     ];
@@ -499,9 +502,26 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposal
           hidden: hiddenIds.has(c.id),
         }));
 
-        res.json({ comments: filtered, total: filtered.length });
+        const total = filtered.length;
+        const hasMore = total === limit;
+
+        res.json({
+          data: filtered,
+          pagination: {
+            cursor: hasMore ? String(offset + limit) : undefined,
+            hasMore,
+            total,
+          },
+        });
       } else {
-        res.json({ comments: [], total: 0 });
+        res.json({
+          data: [],
+          pagination: {
+            cursor: undefined,
+            hasMore: false,
+            total: 0,
+          },
+        });
       }
     } else {
       res.status(400).json({ error: "Failed to get comments" });
