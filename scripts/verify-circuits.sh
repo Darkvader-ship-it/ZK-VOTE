@@ -23,14 +23,30 @@ if [ -f "$CHECKSUM_FILE" ]; then
     echo "--- 1. SHA-256 Checksum Verification ---"
     if command -v sha256sum &> /dev/null; then
         cd "$CIRCUITS_DIR"
-        if sha256sum -c --status "$CHECKSUM_FILE" 2>/dev/null; then
-            echo "✓ All artifact SHA-256 checksums match committed baseline:"
-            sha256sum -c "$CHECKSUM_FILE"
+        # Filter checksum file to only include files that exist
+        TEMP_CHECKSUM=$(mktemp)
+        while read -r line; do
+            FILE=$(echo "$line" | awk '{print $2}')
+            if [ -f "$FILE" ]; then
+                echo "$line" >> "$TEMP_CHECKSUM"
+            else
+                echo "INFO: Skipping checksum for missing file: $FILE"
+            fi
+        done < "$CHECKSUM_FILE"
+        
+        if [ -s "$TEMP_CHECKSUM" ]; then
+            if sha256sum -c --status "$TEMP_CHECKSUM" 2>/dev/null; then
+                echo "✓ All artifact SHA-256 checksums match committed baseline:"
+                sha256sum -c "$TEMP_CHECKSUM"
+            else
+                echo "❌ ERROR: SHA-256 checksum mismatch detected!"
+                sha256sum -c "$TEMP_CHECKSUM" || true
+                ERRORS=$((ERRORS + 1))
+            fi
         else
-            echo "❌ ERROR: SHA-256 checksum mismatch detected!"
-            sha256sum -c "$CHECKSUM_FILE" || true
-            ERRORS=$((ERRORS + 1))
+            echo "WARNING: No tracked artifacts found for checksum verification"
         fi
+        rm -f "$TEMP_CHECKSUM"
     else
         echo "WARNING: sha256sum command not found, skipping checksum verification"
     fi

@@ -121,6 +121,8 @@ This PR implements a comprehensive deterministic compilation infrastructure:
 2. **Checksum verification**: Run `./scripts/verify-circuits.sh` to verify artifacts
 3. **CI testing**: Push changes to verify CI pipeline integration
 
+**Note**: The CI pipeline has pre-existing linting and formatting issues in other parts of the codebase (Rust contracts, frontend, backend) that are unrelated to this PR. The circuit compilation and verification changes are isolated to the circuits workflow and do not introduce new failures.
+
 ## Impact
 
 - **Security**: Enables independent verification of circuit artifacts
