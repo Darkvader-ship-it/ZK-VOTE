@@ -7,6 +7,7 @@
  */
 
 import dotenv from "dotenv";
+import os from "node:os";
 import fs from "fs";
 import path from "path";
 
@@ -61,6 +62,21 @@ export function isValidContractId(
 export const config = {
   // Server
   port: Number(process.env.PORT || 3001),
+
+  // Clustering
+  clusterEnabled: process.env.CLUSTER_ENABLED === "true",
+  clusterWorkers: Math.max(
+    1,
+    Number(
+      process.env.CLUSTER_WORKERS ||
+        process.env.WORKER_COUNT ||
+        process.env.WEB_CONCURRENCY ||
+        (typeof os.availableParallelism === "function"
+          ? os.availableParallelism()
+          : os.cpus().length) ||
+        2,
+    ),
+  ),
 
   // Soroban RPC
   rpcUrl: process.env.SOROBAN_RPC_URL || "http://localhost:8000/soroban/rpc",

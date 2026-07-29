@@ -8,10 +8,20 @@
 import rateLimit from "express-rate-limit";
 import slowDown from "express-slow-down";
 import crypto from "crypto";
+import cluster from "node:cluster";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { config } from "../config.js";
 import { log } from "../services/logger.js";
+import { ClusterRateLimitStore } from "../services/cluster.js";
 
 const isTestMode = process.env.RELAYER_TEST_MODE === "true";
+
+function getStore(name: string) {
+  if (config.clusterEnabled && cluster.isWorker) {
+    return new ClusterRateLimitStore(name);
+  }
+  return undefined;
+}
 
 // N11 hardening: RELAYER_TEST_MODE neuters auth + rate limits AND stubs the
 // relayer keypair (stellar.ts). Refusing to start in this configuration in
@@ -171,6 +181,7 @@ export const voteLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 10,
         ...headerOptions,
+        store: getStore("vote"),
         keyGenerator,
         handler: makeHandler(
           "vote",
@@ -191,6 +202,7 @@ export const queryLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 60,
         ...headerOptions,
+        store: getStore("query"),
         keyGenerator,
         handler: makeHandler(
           "query",
@@ -211,6 +223,7 @@ export const ipfsUploadLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 10,
         ...headerOptions,
+        store: getStore("ipfsUpload"),
         keyGenerator,
         handler: makeHandler(
           "ipfsUpload",
@@ -231,6 +244,7 @@ export const ipfsReadLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 200,
         ...headerOptions,
+        store: getStore("ipfsRead"),
         keyGenerator,
         handler: makeHandler(
           "ipfsRead",
@@ -251,6 +265,7 @@ export const commentLimiter = isTestMode
         windowMs: 60 * 1000, // 1 minute
         max: 20,
         ...headerOptions,
+        store: getStore("comment"),
         keyGenerator,
         handler: makeHandler(
           "comment",
@@ -271,6 +286,7 @@ export const graduatedSlowDown = isTestMode
       delayAfter: 40,
       delayMs: (used: number) => Math.min((used - 40) * 100, 3000),
       maxDelayMs: 3000,
+      store: getStore("slowDown"),
       keyGenerator,
       validate: { delayMs: false },
     });

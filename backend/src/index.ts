@@ -3,8 +3,10 @@
  *
  * TypeScript backend relayer for anonymous voting on Stellar/Soroban.
  * Provides vote submission, IPFS integration, event indexing, and DAO caching.
+ * Supports backend process clustering for multi-core utilization.
  */
 
+import cluster from "node:cluster";
 import express, { type Express } from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -14,6 +16,15 @@ import { buildOpenApiDocument } from "./openapi.js";
 
 // Configuration and types
 import { config, validateEnv, isValidContractId } from "./config.js";
+
+// Cluster Service
+import {
+  startClusterMaster,
+  initWorkerIpc,
+  isLeaderWorker,
+  onLeaderChange,
+  registerWorkerShutdownHandler,
+} from "./services/cluster.js";
 
 // Services
 import { log, logger } from "./services/logger.js";
@@ -59,6 +70,7 @@ import {
   graduatedSlowDown,
   metricsMiddleware,
 } from "./middleware/index.js";
+import { metricsMiddleware } from "./middleware/metrics.js";
 
 // Routes
 import {
@@ -81,6 +93,8 @@ import {
   remediationRoutes,
   thresholdRoutes,
 } from "./routes/index.js";
+import metricsRoutes from "./routes/metrics.js";
+import remediationRoutes from "./routes/remediation.js";
 import { registerShutdownHandler } from "./routes/admin.js";
 
 // ============================================
@@ -192,112 +206,43 @@ app.use(
 app.use(errorHandler);
 
 // ============================================
-// SERVER STARTUP
+// BACKGROUND SERVICES MANAGEMENT
 // ============================================
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const PORT = config.port;
+let backgroundServicesStarted = false;
 
-  const httpServer = app.listen(PORT, async () => {
-    logger.info("server_started", {
-      port: PORT,
-      network: config.networkPassphrase,
-      rpcUrl: config.rpcUrl,
-      relayer: relayerKeypair.publicKey(),
-    });
+async function startBackgroundServices(): Promise<void> {
+  if (backgroundServicesStarted) return;
+  backgroundServicesStarted = true;
 
-    // Keep the startup banner on stdout for human-readable output
-    console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
+  log("info", "starting_background_services", { pid: process.pid, isLeader: isLeaderWorker() });
 
-    logger.info("endpoints_registered", {
-      core: [
-        "/health",
-        "/ready",
-        "/config",
-        "/vote",
-        "/proposal/:dao/:prop",
-        "/root/:dao",
-        "/events/:daoId",
-        "/events/notify",
-        "/indexer/status",
-      ],
-      comments: [
-        "/comment/anonymous",
-        "/comments/:dao/:prop",
-        "/comments/:dao/:prop/nonce",
-        "/comment/:dao/:prop/:id",
-        "/comment/edit",
-        "/comment/delete",
-      ],
-      bridge: [
-        "/bridge/vote",
-        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
-        "/bridge/relay",
-      ],
-      ipfs: config.ipfsEnabled
-        ? [
-            "/ipfs/image",
-            "/ipfs/metadata",
-            "/ipfs/:cid",
-            "/ipfs/image/:cid",
-            "/ipfs/health",
-          ]
-        : [],
-    });
+  // Initialize Pinata and IPFS redundancy layer
+  if (config.ipfsEnabled && config.pinataJwt) {
+    try {
+      ipfsService.initPinata(config.pinataJwt, config.pinataGateway);
+      log("info", "pinata_initialized");
 
-    // Initialize Pinata and IPFS redundancy layer
-    if (config.ipfsEnabled && config.pinataJwt) {
+      // Initialize pin manager (local backup + secondary pinning)
       try {
-        ipfsService.initPinata(config.pinataJwt, config.pinataGateway);
-        log("info", "pinata_initialized");
+        initPinManager(config.ipfsBackupDir, config.web3StorageToken);
+        log("info", "pin_manager_initialized", {
+          backupDir: config.ipfsBackupDir,
+          hasWeb3Storage: !!config.web3StorageToken,
+        });
 
-        // Initialize pin manager (local backup + secondary pinning)
-        try {
-          initPinManager(config.ipfsBackupDir, config.web3StorageToken);
-          log("info", "pin_manager_initialized", {
-            backupDir: config.ipfsBackupDir,
-            hasWeb3Storage: !!config.web3StorageToken,
-          });
-
-          // Start pin verification monitor
-          startPinMonitor({
-            scanIntervalMs: config.pinVerifyIntervalMs,
-            alertThreshold: config.pinAlertThreshold,
-            autoRepin: config.pinAutoRepin,
-            repinFn: ipfsService.repinCallback,
-          });
-          log("info", "pin_monitor_started", {
-            intervalMs: config.pinVerifyIntervalMs,
-            alertThreshold: config.pinAlertThreshold,
-            autoRepin: config.pinAutoRepin,
-          });
-        } catch (err) {
-          log("warn", "pin_manager_init_failed", {
-            error: (err as Error).message,
-          });
-        }
-      } catch (err) {
-        log("error", "pinata_init_failed", { error: (err as Error).message });
-      }
-    }
-
-    // Start event indexer
-    if (config.indexerEnabled) {
-      const contractIds = [config.votingContractId!, config.treeContractId!];
-      if (
-        config.daoRegistryContractId &&
-        isValidContractId(config.daoRegistryContractId)
-      ) {
-        contractIds.push(config.daoRegistryContractId);
-      }
-      if (
-        config.membershipSbtContractId &&
-        isValidContractId(config.membershipSbtContractId)
-      ) {
-        contractIds.push(config.membershipSbtContractId);
-      }
-
-      try {
+        // Start pin verification monitor
+        startPinMonitor({
+          scanIntervalMs: config.pinVerifyIntervalMs,
+          alertThreshold: config.pinAlertThreshold,
+          autoRepin: config.pinAutoRepin,
+          repinFn: ipfsService.repinCallback,
+        });
+        log("info", "pin_monitor_started", {
+          intervalMs: config.pinVerifyIntervalMs,
+          alertThreshold: config.pinAlertThreshold,
+          autoRepin: config.pinAutoRepin,
+        });
         await startIndexer(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           server as any,
@@ -306,36 +251,75 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         );
         log("info", "indexer_enabled", { contracts: contractIds.length });
       } catch (err) {
-        log("warn", "indexer_start_failed", { error: (err as Error).message });
+        log("warn", "pin_manager_init_failed", {
+          error: (err as Error).message,
+        });
       }
+    } catch (err) {
+      log("error", "pinata_init_failed", { error: (err as Error).message });
     }
+  }
 
-    // Start DAO sync
+  // Start event indexer
+  if (config.indexerEnabled) {
+    const contractIds = [config.votingContractId!, config.treeContractId!];
     if (
       config.daoRegistryContractId &&
       isValidContractId(config.daoRegistryContractId)
     ) {
-      console.log("\nDAO Cache Endpoints:");
-      console.log("  GET  /daos                - Get all DAOs (cached)");
-      console.log(
-        "  GET  /daos?user=ADDRESS   - Get DAOs with membership info",
-      );
-      console.log("  GET  /dao/:daoId          - Get single DAO (cached)");
-      console.log("  POST /daos/sync           - Trigger DAO sync (admin)");
-      startDaoSync();
-
-      // Start membership sync
-      if (
-        config.membershipSbtContractId &&
-        isValidContractId(config.membershipSbtContractId)
-      ) {
-        startMembershipSync();
-      }
+      contractIds.push(config.daoRegistryContractId);
+    }
+    if (
+      config.membershipSbtContractId &&
+      isValidContractId(config.membershipSbtContractId)
+    ) {
+      contractIds.push(config.membershipSbtContractId);
     }
 
-    // Start TTL renewal service (prevents contract data from expiring)
-    startTTLRenewal();
+    try {
+      await startIndexer(
+        server as any,
+        contractIds,
+        config.indexerPollIntervalMs,
+      );
+      log("info", "indexer_enabled", { contracts: contractIds.length });
+    } catch (err) {
+      log("warn", "indexer_start_failed", { error: (err as Error).message });
+    }
+  }
 
+  // Start DAO sync
+  if (
+    config.daoRegistryContractId &&
+    isValidContractId(config.daoRegistryContractId)
+  ) {
+    console.log("\nDAO Cache Endpoints:");
+    console.log("  GET  /daos                - Get all DAOs (cached)");
+    console.log(
+      "  GET  /daos?user=ADDRESS   - Get DAOs with membership info",
+    );
+    console.log("  GET  /dao/:daoId          - Get single DAO (cached)");
+    console.log("  POST /daos/sync           - Trigger DAO sync (admin)");
+    startDaoSync();
+
+    // Start membership sync
+    if (
+      config.membershipSbtContractId &&
+      isValidContractId(config.membershipSbtContractId)
+    ) {
+      startMembershipSync();
+    }
+  }
+
+  // Start TTL renewal service (prevents contract data from expiring)
+  startTTLRenewal();
+
+  // Start periodic memory monitoring
+  startMemoryMonitor(() => {
+    log("warn", "memory_threshold_exceeded_triggering_shutdown", { pid: process.pid });
+    if (config.clusterEnabled && process.exit) {
+      process.exit(1); // Master will restart worker automatically
+    }
     // Start WAL resilience services (checkpointing, monitoring, backups)
     try {
       const database = getDb();
@@ -355,7 +339,99 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       void gracefulShutdown("memory_threshold");
     });
   });
+}
 
+function stopBackgroundServices(): void {
+  if (!backgroundServicesStarted) return;
+  backgroundServicesStarted = false;
+
+  log("info", "stopping_background_services", { pid: process.pid });
+
+  stopIndexer();
+  stopDaoSync();
+  stopMembershipSync();
+  stopTTLRenewal();
+  stopPinMonitor();
+  stopMemoryMonitor();
+}
+
+// ============================================
+// SERVER STARTUP & CLUSTER CONTROLLER
+// ============================================
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  if (config.clusterEnabled && cluster.isPrimary) {
+    startClusterMaster();
+  } else {
+    initWorkerIpc();
+    const PORT = config.port;
+
+    const httpServer = app.listen(PORT, async () => {
+      logger.info("server_started", {
+        port: PORT,
+        pid: process.pid,
+        isCluster: config.clusterEnabled,
+        isLeader: isLeaderWorker(),
+        network: config.networkPassphrase,
+        rpcUrl: config.rpcUrl,
+        relayer: relayerKeypair.publicKey(),
+      });
+
+      console.log(`\nZKVote Relayer worker (${process.pid}) running on http://localhost:${PORT}`);
+
+      if (config.clusterEnabled) {
+        onLeaderChange(async (isLeader) => {
+          if (isLeader) {
+            log("info", "worker_elected_as_primary_starting_background_services", { pid: process.pid });
+            await startBackgroundServices();
+          } else {
+            log("info", "worker_demoted_stopping_background_services", { pid: process.pid });
+            stopBackgroundServices();
+          }
+        });
+
+        if (isLeaderWorker()) {
+          await startBackgroundServices();
+        }
+      } else {
+        // Single process mode - start background services directly
+        await startBackgroundServices();
+      }
+    });
+
+    const DRAIN_TIMEOUT_MS = 25_000;
+    let shuttingDown = false;
+
+    function gracefulShutdown(reason: string): void {
+      if (shuttingDown) return;
+      shuttingDown = true;
+
+      log("info", "shutdown_start", { reason, pid: process.pid });
+
+      stopBackgroundServices();
+
+      const forceExitTimer = setTimeout(() => {
+        log("warn", "shutdown_forced", { reason, timeoutMs: DRAIN_TIMEOUT_MS, pid: process.pid });
+        process.exit(1);
+      }, DRAIN_TIMEOUT_MS);
+      forceExitTimer.unref();
+
+      httpServer.close((err) => {
+        if (err) {
+          log("error", "shutdown_close_error", { error: err.message, pid: process.pid });
+        } else {
+          log("info", "shutdown_complete", { reason, pid: process.pid });
+        }
+        clearTimeout(forceExitTimer);
+        process.exit(0);
+      });
+    }
+
+    registerWorkerShutdownHandler((reason) => gracefulShutdown(reason));
+
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  }
   // ============================================
   // GRACEFUL SHUTDOWN (zero-downtime deploys, see #190)
   // ============================================
