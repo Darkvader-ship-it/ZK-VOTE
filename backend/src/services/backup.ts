@@ -11,7 +11,7 @@ import path from "path";
 import crypto from "crypto";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import { fileURLToPath } from "url";
-import { getDb, initDb } from "./db.js";
+import { getDb, initDb, closeDb } from "./db.js";
 import { log } from "./logger.js";
 import { config } from "../config.js";
 
@@ -221,14 +221,11 @@ export async function restoreFromBackup(
     const defaultDbPath = path.join(__dirname, "..", "..", "data", "zkvote.db");
     const destinationPath = targetDbPath || defaultDbPath;
 
-    // Step 2: Close current database connection if open
-    const currentDb = getDb();
-    if (currentDb) {
-      try {
-        currentDb.close();
-      } catch (err) {
-        log("warn", "db_close_before_restore_warn", { error: (err as Error).message });
-      }
+    // Step 2: Close current database connections if open
+    try {
+      closeDb();
+    } catch (err) {
+      log("warn", "db_close_before_restore_warn", { error: (err as Error).message });
     }
 
     // Remove old DB file and any WAL / SHM files

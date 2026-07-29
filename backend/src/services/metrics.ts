@@ -176,6 +176,25 @@ export const dbCacheHitRate = new Gauge({
   registers: [register],
 });
 
+export const dbReadLagMs = new Gauge({
+  name: "zkvote_db_read_lag_ms",
+  help: "Estimated lag of the read connection behind the write connection in milliseconds",
+  registers: [register],
+});
+
+export const dbWriteFailoverTotal = new Counter({
+  name: "zkvote_db_write_failover_total",
+  help: "Write connection failover / reconnect attempts",
+  labelNames: ["result"] as const,
+  registers: [register],
+});
+
+export const dbWriteHealthy = new Gauge({
+  name: "zkvote_db_write_healthy",
+  help: "1 if the write SQLite connection is healthy, else 0",
+  registers: [register],
+});
+
 // ============================================
 // IPFS METRICS
 // ============================================
