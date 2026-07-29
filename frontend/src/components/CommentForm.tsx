@@ -29,6 +29,7 @@ import { initializeContractClients } from "../lib/contracts";
 import { relayerFetch } from "../lib/api";
 import { useOptimisticComment } from "../queries/commentQueries";
 import type { CommentWithContent } from "../lib/comments";
+import { relayerFetch, parseApiError } from "../lib/api";
 
 interface CommentFormProps {
   daoId: number;
@@ -248,6 +249,26 @@ export default function CommentForm({
             alert("Failed to submit anonymous comment: " + (data.error || ""));
             return;
           }
+          body: JSON.stringify({
+            daoId,
+            proposalId,
+            contentCid: cid,
+            parentId: parentId ?? null,
+            voteChoice: false, // Arbitrary - contract ignores this for comments
+            nullifier: toHexBE(nullifier),
+            root: toHexBE(root),
+            proof: {
+              a: proof_a,
+              b: proof_b,
+              c: proof_c,
+            },
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(parseApiError(data) || "Failed to submit anonymous comment");
+        }
 
           // Save anonymous comment record for edit/delete capability
           saveAnonymousComment({
