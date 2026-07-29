@@ -73,20 +73,58 @@ export const relayerKeypair = _relayerKeypair;
  * Promise-based mutex to serialize transaction submissions.
  * Prevents nonce race conditions when multiple requests try to
  * build+submit transactions concurrently using the same relayer account.
+ * Uses IPC distributed sequence lock when running in cluster mode.
  */
 let sequenceLock: Promise<void> = Promise.resolve();
 
+// Count of sequence-lock operations currently queued or executing. A vote
+// submission holds the lock across build+simulate+send+confirm, which can
+// outlive its HTTP response, so shutdown must wait on this, not just on
+// httpServer.close().
+let inFlightLockOps = 0;
+
+export function getPendingSequenceLockOps(): number {
+  return inFlightLockOps;
+}
+
+/**
+ * Wait until all in-flight withSequenceLock operations drain, or until
+ * timeoutMs elapses. Resolves true if drained cleanly, false on timeout
+ * with work still outstanding.
+ */
+export async function waitForSequenceLockIdle(
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (inFlightLockOps > 0) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return true;
+}
+
 export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (config.clusterEnabled && cluster.isWorker) {
+    await acquireClusterSequenceLock();
+    try {
+      return await fn();
+    } finally {
+      await releaseClusterSequenceLock();
+    }
+  }
+
   const previous = sequenceLock;
   let resolve: () => void;
   sequenceLock = new Promise<void>((r) => {
     resolve = r;
   });
+  inFlightLockOps++;
   await previous;
   try {
     return await fn();
   } finally {
     resolve!();
+    inFlightLockOps--;
   }
 }
 
@@ -272,13 +310,22 @@ export async function callWithTimeout<T>(
   fn: () => Promise<T>,
   label: string,
 ): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
       () => reject(new Error(`Timeout: ${label} (${config.rpcTimeoutMs}ms)`)),
       config.rpcTimeoutMs,
-    ),
-  );
-  return Promise.race([fn(), timeout]);
+    );
+  });
+
+  try {
+    return await Promise.race([fn(), timeout]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 /**

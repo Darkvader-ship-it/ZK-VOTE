@@ -15,12 +15,14 @@ import PublicVotes from "./components/PublicVotes";
 import ProposalPage from "./components/ProposalPage";
 import { ErrorBoundary, RouteErrorBoundary } from "./components/ErrorBoundary";
 import { CreateDAOForm } from "./components/CreateDAOForm";
+import Profile from "./components/Profile";
 import { useWallet } from "./hooks/useWallet";
 import { useTheme } from "./hooks/useTheme";
 import { useDaoInfoQuery, useRelayerStatusQuery } from "./queries";
 import { truncateText, toIdSlug, parseIdFromSlug } from "./lib/utils";
 import { validateStaticConfig } from "./config/guardrails";
 import { RelayerStatusBanner } from "./components/RelayerStatusBanner";
+import { ServiceDegradationBanner } from "./components/ServiceDegradationBanner";
 import { Button } from "./components/ui/Button";
 import { I18nProvider } from "./i18n/I18nContext";
 
@@ -107,10 +109,11 @@ function App() {
   }, []);
 
   // Determine current view from URL path
-  const getCurrentView = (): "home" | "browse" | "votes" | "docs" => {
+  const getCurrentView = (): "home" | "browse" | "votes" | "docs" | "profile" => {
     if (location.pathname.startsWith("/daos/")) return "browse";
     if (location.pathname === "/public-votes/") return "votes";
     if (location.pathname === "/docs/") return "docs";
+    if (location.pathname === "/profile/") return "profile";
     return "home";
   };
 
@@ -142,6 +145,11 @@ function App() {
         description:
           "Learn how ZKVote enables anonymous DAO governance using zero-knowledge proofs, Poseidon Merkle trees, and Stellar smart contracts.",
       },
+      profile: {
+        title: "ZKVote - Profile",
+        description:
+          "Manage your anonymous voting receipts and verify them on-chain.",
+      },
     };
     const meta = pageMeta[currentView] || pageMeta.home;
     document.title = meta.title;
@@ -159,11 +167,12 @@ function App() {
       ? "ready"
       : relayerStatusState?.message || null;
 
-  const handleNavigate = (view: "home" | "browse" | "votes" | "docs") => {
+  const handleNavigate = (view: "home" | "browse" | "votes" | "docs" | "profile") => {
     if (view === "home") navigate("/");
     else if (view === "browse") navigate("/daos/");
     else if (view === "votes") navigate("/public-votes/");
     else if (view === "docs") navigate("/docs/");
+    else if (view === "profile") navigate("/profile/");
   };
 
   const handleSelectDao = (daoId: number, daoName?: string) => {
@@ -196,6 +205,7 @@ function App() {
 
       {/* Relayer Status Banner */}
       <RelayerStatusBanner />
+      <ServiceDegradationBanner />
 
       {/* Main Content */}
       <main className="container mx-auto py-8 md:py-24 px-4 sm:px-6 lg:px-8">
@@ -217,6 +227,16 @@ function App() {
               element={
                 <RouteErrorBoundary>
                   <Docs />
+                </RouteErrorBoundary>
+              }
+            />
+
+            {/* Profile Route */}
+            <Route
+              path="/profile/"
+              element={
+                <RouteErrorBoundary>
+                  <Profile publicKey={publicKey} isConnected={isConnected} />
                 </RouteErrorBoundary>
               }
             />

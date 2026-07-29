@@ -63,6 +63,32 @@ export const httpResponseSize = new Histogram({
 });
 
 // ============================================
+// COALESCING METRICS
+// ============================================
+
+export const coalescingHitsTotal = new Counter({
+  name: "zkvote_coalescing_hits_total",
+  help: "Total request coalescing hits",
+  labelNames: ["key"] as const,
+  registers: [register],
+});
+
+export const coalescingMissesTotal = new Counter({
+  name: "zkvote_coalescing_misses_total",
+  help: "Total request coalescing misses (original requests)",
+  labelNames: ["key"] as const,
+  registers: [register],
+});
+
+export const coalescingWaitTime = new Histogram({
+  name: "zkvote_coalescing_wait_time_seconds",
+  help: "Time spent waiting for coalesced requests in seconds",
+  labelNames: ["key"] as const,
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+  registers: [register],
+});
+
+// ============================================
 // SOROBAN RPC METRICS
 // ============================================
 
