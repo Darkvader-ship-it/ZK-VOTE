@@ -10,7 +10,7 @@ include "merkle_tree.circom";
 // Adds numCandidates as a public signal to bind the election's candidate count
 // into the ZK proof, preventing circuit/contract candidate bound desync.
 //
-// Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates, chainId]
+// Public signals: [root, nullifier, familyNullifier, daoId, proposalId, voteChoice, numCandidates, chainId, nonce]
 // Private signals: secret, salt, pathElements, pathIndices
 //
 // chainId prevents replay attacks: a proof generated for one chain
@@ -18,12 +18,14 @@ include "merkle_tree.circom";
 template VoteV2(levels) {
     // Public inputs
     signal input root;              // Merkle tree root (verified on-chain)
-    signal input nullifier;         // Prevents double voting (domain-separated)
+    signal input nullifier;         // Unique per vote attempt
+    signal input familyNullifier;   // Links revotes of the same voter without revealing identity
     signal input daoId;             // DAO identifier (for domain separation)
     signal input proposalId;        // Which proposal this vote is for
     signal input voteChoice;        // Candidate index the voter selected
     signal input numCandidates;     // Total number of candidates (set by election config)
     signal input chainId;           // Chain identifier (prevents cross-chain replay)
+    signal input nonce;             // Auto-incremented for each revote
 
     // Private inputs
     signal input secret;            // Voter's secret (like password)
@@ -49,13 +51,24 @@ template VoteV2(levels) {
 
     root === merkleProof.root;
 
-    // 3. Compute nullifier: Poseidon(secret, daoId, proposalId, chainId)
-    // Includes chainId for domain separation across chains
-    component nullifierHasher = Poseidon(4);
+    // 3. Compute family nullifier: Poseidon(secret, daoId, proposalId, chainId)
+    // Links revotes together for the same proposal, preventing duplicate tallies.
+    component familyHasher = Poseidon(4);
+    familyHasher.inputs[0] <== secret;
+    familyHasher.inputs[1] <== daoId;
+    familyHasher.inputs[2] <== proposalId;
+    familyHasher.inputs[3] <== chainId;
+
+    familyNullifier === familyHasher.out;
+
+    // 4. Compute nullifier: Poseidon(secret, daoId, proposalId, chainId, nonce)
+    // Unique nullifier for each vote attempt
+    component nullifierHasher = Poseidon(5);
     nullifierHasher.inputs[0] <== secret;
     nullifierHasher.inputs[1] <== daoId;
     nullifierHasher.inputs[2] <== proposalId;
     nullifierHasher.inputs[3] <== chainId;
+    nullifierHasher.inputs[4] <== nonce;
 
     nullifier === nullifierHasher.out;
 
@@ -69,5 +82,5 @@ template VoteV2(levels) {
 }
 
 // Default tree depth of 18 (supports ~262K members)
-// Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates, chainId] - 7 signals
-component main {public [root, nullifier, daoId, proposalId, voteChoice, numCandidates, chainId]} = VoteV2(18);
+// Public signals: [root, nullifier, familyNullifier, daoId, proposalId, voteChoice, numCandidates, chainId, nonce] - 9 signals
+component main {public [root, nullifier, familyNullifier, daoId, proposalId, voteChoice, numCandidates, chainId, nonce]} = VoteV2(18);

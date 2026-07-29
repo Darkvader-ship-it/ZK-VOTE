@@ -31,7 +31,6 @@ import {
 import {
   anonymousCommentSchema,
   flagCommentSchema,
-  challengeQuerySchema,
   commentParamsSchema,
   proposalParamsSchema,
   commitmentParamsSchema,
@@ -98,6 +97,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commit
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { commitment } = (req as any).validatedParams;
 
   const challenge = generateChallenge(commitment, {
@@ -364,6 +364,7 @@ router.get("/comments/:daoId/:proposalId/nonce", queryLimiter, validateParams(pr
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { daoId, proposalId } = (req as any).validatedParams;
   const { commitment } = req.query;
 
