@@ -382,3 +382,68 @@ export async function verifyProofLocally(
     return false;
   }
 }
+
+/**
+ * Calculate sha256 hash of a proof payload bound to nullifier, timestamp, and optional nonce
+ */
+export async function calculateProofHash(
+  proof: Groth16Proof,
+  nullifier: string,
+  timestamp: number,
+  nonce?: string,
+): Promise<string> {
+  const normalizedNullifier = nullifier.startsWith("0x") ? nullifier.slice(2) : nullifier;
+  const data = JSON.stringify(proof) + ":" + normalizedNullifier + ":" + timestamp + ":" + (nonce || "");
+  const encoder = new TextEncoder();
+  const buffer = encoder.encode(data);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Encrypt proof payload for the relayer using symmetric AES-GCM (simulated/standard payload format)
+ */
+export async function encryptProofForRelayer(
+  payload: Record<string, unknown>,
+  _relayerPubKey?: string,
+): Promise<{ encryptedPayload: string }> {
+  // Serialize payload
+  const jsonString = JSON.stringify(payload);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(jsonString);
+
+  // Generate AES-256 key
+  const key = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    data,
+  );
+
+  const exportedKey = await crypto.subtle.exportKey("raw", key);
+  const keyHex = Array.from(new Uint8Array(exportedKey))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const ivHex = Array.from(iv)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const ciphertextHex = Array.from(new Uint8Array(encrypted))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return {
+    encryptedPayload: JSON.stringify({
+      ciphertext: ciphertextHex,
+      iv: ivHex,
+      key: keyHex,
+    }),
+  };
+}
+

@@ -55,6 +55,9 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  metricsRoutes,
+  remediationRoutes,
+  novaRoutes,
   adminRoutes,
   thresholdRoutes,
 } from "./routes/index.js";
@@ -118,6 +121,7 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use("/api/v1/nova", novaRoutes);
 app.use(adminRoutes);
 app.use(thresholdRoutes);
 
