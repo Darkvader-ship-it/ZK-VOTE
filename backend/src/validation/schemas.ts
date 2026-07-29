@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { BN254_MODULUS } from "../config.js";
+import { BN254_FQ_MODULUS } from "../types/index.js";
 
 // ============================================
 // PRIMITIVE VALIDATORS
@@ -54,38 +55,61 @@ const bn254Field = z.string().refine(
  * In a valid Groth16 proof, A, B, and C must NOT be the point at infinity.
  * Additional curve membership validation is performed on-chain by the host functions.
  */
+/**
+ * Splits a padded, even-length hex string into `count` equal-size
+ * coordinates and checks each is a valid BN254 base-field (Fq) element
+ * (i.e. < BN254_FQ_MODULUS). This rejects obviously-malformed proof
+ * coordinates before they ever reach the relayer or chain (#167); it does
+ * NOT perform curve/subgroup membership verification — that remains the
+ * Soroban host's job at proof-verification time (see module comment above).
+ */
+function coordinatesInFieldRange(paddedHex: string, count: number): boolean {
+  const coordHexLen = paddedHex.length / count;
+  for (let i = 0; i < count; i++) {
+    const coordHex = paddedHex.slice(i * coordHexLen, (i + 1) * coordHexLen);
+    if (BigInt("0x" + coordHex) >= BN254_FQ_MODULUS) return false;
+  }
+  return true;
+}
+
 const proofA = hexString(128).refine(
   (val) => {
     const hex = val.startsWith("0x") ? val.slice(2) : val;
+    const padded = hex.padStart(128, "0");
     // G1 point at infinity (all zeros) is invalid for proof.a
-    return !/^0*$/.test(hex.padStart(128, "0"));
+    if (/^0*$/.test(padded)) return false;
+    return coordinatesInFieldRange(padded, 2); // X, Y
   },
-  { message: "proof.a cannot be all zeros (point at infinity)" },
+  { message: "proof.a cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element" },
 );
 
 const proofB = hexString(256).refine(
   (val) => {
     const hex = val.startsWith("0x") ? val.slice(2) : val;
+    const padded = hex.padStart(256, "0");
     // G2 point at infinity (all zeros) is invalid for proof.b
     // Note: G2 has 4 field elements (X_c1, X_c0, Y_c1, Y_c0), all must be non-zero collectively
-    return !/^0*$/.test(hex.padStart(256, "0"));
+    if (/^0*$/.test(padded)) return false;
+    return coordinatesInFieldRange(padded, 4); // X_c1, X_c0, Y_c1, Y_c0
   },
-  { message: "proof.b cannot be all zeros (point at infinity)" },
+  { message: "proof.b cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element" },
 );
 
 const proofC = hexString(128).refine(
   (val) => {
     const hex = val.startsWith("0x") ? val.slice(2) : val;
+    const padded = hex.padStart(128, "0");
     // G1 point at infinity (all zeros) is invalid for proof.c
-    return !/^0*$/.test(hex.padStart(128, "0"));
+    if (/^0*$/.test(padded)) return false;
+    return coordinatesInFieldRange(padded, 2); // X, Y
   },
-  { message: "proof.c cannot be all zeros (point at infinity)" },
+  { message: "proof.c cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element" },
 );
 
 /**
  * Groth16 proof object
  */
-const groth16Proof = z.object({
+export const groth16Proof = z.object({
   a: proofA,
   b: proofB,
   c: proofC,

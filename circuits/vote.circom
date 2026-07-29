@@ -26,7 +26,8 @@ include "merkle_tree.circom";
 // the same candidate bound that the election was configured with. Without this binding,
 // a prover could supply a proof valid under one numCandidates value while the contract
 // tallies using a different (potentially larger) count.
-\n    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
+template Vote(levels) {
+    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
 
     // Public inputs
     signal input root;              // Merkle tree root (verified on-chain)
