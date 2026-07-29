@@ -119,6 +119,7 @@ export const config = {
   pinataJwt: process.env.PINATA_JWT,
   pinataGateway: process.env.PINATA_GATEWAY,
   ipfsEnabled: !!process.env.PINATA_JWT,
+  ipfsSubdomain: process.env.IPFS_SUBDOMAIN,
 
   // IPFS Pin Redundancy
   /** Local directory for content backups before pinning (default: ./data/ipfs-backup) */
