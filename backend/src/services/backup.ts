@@ -190,6 +190,9 @@ export async function verifyBackup(backupFilePath: string): Promise<Verification
     if (tempDb) {
       try {
         tempDb.close();
+      } catch (_) {
+        // best-effort close; nothing to recover
+      }
       } catch (_) { /* noop */ }
     }
   }

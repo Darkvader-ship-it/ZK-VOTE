@@ -84,6 +84,7 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
+// eslint-disable-next-line react-refresh/only-export-components -- exported hook is required by consuming components
 export function useTranslation(): I18nContextType {
   const context = useContext(I18nContext);
   if (!context) {

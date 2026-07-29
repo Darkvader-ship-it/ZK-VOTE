@@ -3122,6 +3122,122 @@ fn test_archived_is_terminal() {
     assert!(!ProposalState::Archived.is_valid_transition(ProposalState::Archived));
 }
 
+// ── Reentrancy Guard Tests ─────────────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_reentrancy_lock_prevents_reentrant_vote() {
+    // Verify that setting the reentrancy lock (simulating a reentrant call)
+    // causes the vote function to panic with ReentrantCall.
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    let root = U256::from_u32(&env, 12345);
+    tree_client.set_root(&1u64, &root);
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Reentrant test"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // Simulate a reentrant call by manually setting the ReentrancyLock flag
+    env.as_contract(&voting_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyLock, &true);
+    });
+
+    // This should panic because the lock is already set
+    let proposal = voting_client.get_proposal(&1u64, &proposal_id);
+    let nullifier = U256::from_u32(&env, 77777);
+    let proof = create_dummy_proof(&env);
+
+    voting_client.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &nullifier,
+        &proposal.eligible_root,
+        &proof,
+    );
+}
+
+#[test]
+fn test_successful_vote_clears_reentrancy_lock() {
+    // Verify that after a successful vote, the reentrancy lock is cleared,
+    // allowing a subsequent vote with a different nullifier.
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    let root = U256::from_u32(&env, 12345);
+    tree_client.set_root(&1u64, &root);
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Lock clear test"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    let proposal = voting_client.get_proposal(&1u64, &proposal_id);
+
+    // First vote should succeed
+    let nullifier1 = U256::from_u32(&env, 1001);
+    let proof = create_dummy_proof(&env);
+    voting_client.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &nullifier1,
+        &proposal.eligible_root,
+        &proof,
+    );
+
+    // Verify lock is cleared by checking the ReentrancyLock key doesn't exist
+    let lock_cleared = env.as_contract(&voting_id, || {
+        !env.storage().instance().has(&DataKey::ReentrancyLock)
+    });
+    assert!(
+        lock_cleared,
+        "Reentrancy lock should be cleared after successful vote"
+    );
+
+    // Second vote with different nullifier should also succeed (lock was cleared)
+    let nullifier2 = U256::from_u32(&env, 1002);
+    voting_client.vote(
+        &1u64,
+        &proposal_id,
+        &false,
+        &nullifier2,
+        &proposal.eligible_root,
+        &proof,
+    );
+
+    let updated = voting_client.get_proposal(&1u64, &proposal_id);
+    assert_eq!(updated.yes_votes, 1);
+    assert_eq!(updated.no_votes, 1);
 #[test]
 fn test_recursive_tally_submission() {
     let env = Env::default();

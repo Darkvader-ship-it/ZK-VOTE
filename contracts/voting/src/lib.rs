@@ -106,6 +106,8 @@ pub enum VotingError {
     RandomnessParticipantLimit = 39,
     /// Candidate index >= numCandidates configured for this election
     InvalidCandidateIndex = 40,
+    /// Reentrant call detected (defense-in-depth against cross-contract reentrancy)
+    ReentrantCall = 41,
     /// VDF proof verification failed
     VdfVerificationFailed = 41,
     /// VDF output already submitted for this election
@@ -179,6 +181,9 @@ pub enum DataKey {
     RandomnessCommit(u64, u64, Address),
     RandomnessReveal(u64, u64, Address),
     RandomnessCommitters(u64, u64),
+    /// Reentrancy guard: contract-level lock to prevent reentrant calls
+    /// into vote/vote_bls381 during proof verification or cross-contract calls.
+    ReentrancyLock,
     /// VDF output for election randomness
     VdfOutput(u64, u64),
     /// VDF proof (checkpoints for on-chain verification)
@@ -1173,9 +1178,62 @@ impl Voting {
         env.crypto().sha256(&data).into()
     }
 
+    // ── Reentrancy Guard ────────────────────────────────────────────────────
+    //
+    // REENTRANCY MODEL:
+    // =================
+    //
+    // Soroban's transaction model provides atomic execution: if a function panics,
+    // all storage mutations within that invocation are rolled back. This means
+    // a panicking call cannot leave the contract in an inconsistent state.
+    //
+    // However, defense-in-depth requires two additional protections:
+    //
+    // 1. CHECKS-EFFECTS-INTERACTIONS PATTERN:
+    //    The nullifier is marked as used BEFORE proof verification and any
+    //    cross-contract calls (e.g., to the tree contract for root validation
+    //    in Trailing mode). This prevents TOCTOU attacks where an attacker
+    //    could re-enter between proof verification and nullifier marking.
+    //
+    // 2. CONTRACT-LEVEL REENTRANCY LOCK:
+    //    A storage flag (DataKey::ReentrancyLock) prevents reentrant calls
+    //    into vote/vote_bls381. While Soroban's execution model makes
+    //    cross-contract reentrancy harder than EVM, this guard provides
+    //    defense-in-depth against potential future changes to the execution
+    //    model or unexpected call chains through multiple contracts.
+    //
+    // Both guards are applied consistently across vote() and vote_bls381().
+
+    /// Set the reentrancy lock. Panics if already locked (reentrant call detected).
+    fn set_reentrancy_lock(env: &Env) {
+        let lock_key = DataKey::ReentrancyLock;
+        if env.storage().instance().has(&lock_key) {
+            panic_with_error!(env, VotingError::ReentrantCall);
+        }
+        env.storage().instance().set(&lock_key, &true);
+    }
+
+    /// Clear the reentrancy lock after successful execution.
+    fn clear_reentrancy_lock(env: &Env) {
+        env.storage().instance().remove(&DataKey::ReentrancyLock);
+    }
+
     /// Submit a vote with ZK proof
-    /// Privacy-preserving: commitment is NOT a public parameter
-    /// Revocation is enforced by zeroing leaves in the Merkle tree
+    ///
+    /// REENTRANCY MODEL:
+    /// This function follows the checks-effects-interactions pattern with a
+    /// contract-level reentrancy lock for defense-in-depth:
+    ///
+    ///   Checks:  validate inputs, verify proposal is Active, nullifier unused,
+    ///            root is valid for vote mode
+    ///   Effects: mark nullifier as used (BEFORE any external calls)
+    ///   Interactions: verify Groth16 proof, cross-contract tree lookups
+    ///
+    /// The nullifier is domain-separated by (dao_id, proposal_id), so the same
+    /// secret produces different nullifiers across DAOs and proposals.
+    ///
+    /// Privacy-preserving: commitment is NOT a public parameter.
+    /// Revocation is enforced by zeroing leaves in the Merkle tree.
     pub fn vote(
         env: Env,
         dao_id: u64,
@@ -1187,6 +1245,10 @@ impl Voting {
     ) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
+
+        // ── DEFENSE-IN-DEPTH: Set reentrancy lock BEFORE any state mutations ──
+        Self::set_reentrancy_lock(&env);
+
         // SECURITY: Validate public signals are within BN254 scalar field FIRST
         // This prevents modular reduction attacks where values >= r verify identically
         // to their reduced equivalents but are stored as different keys.
@@ -1226,7 +1288,15 @@ impl Voting {
         // A revoked member's commitment is zeroed, so their proof won't verify
         // against any root that includes the zeroed leaf. No timestamp checks needed.
 
+        // ── CHECKS-EFFECTS-INTERACTIONS: Mark nullifier as used BEFORE ──
+        // ── cross-contract calls or proof verification. This prevents      ──
+        // ── double-vote reentrancy attacks even if the execution model     ──
+        // ── allows reentrant calls.                                       ──
+        env.storage().persistent().set(&null_key, &true);
+        Self::bump_persistent(&env, &null_key);
+
         // Verify root based on vote mode
+        // (May involve cross-contract calls to tree contract in Trailing mode)
         match proposal.vote_mode {
             VoteMode::Fixed => {
                 // Fixed mode: root must exactly match the snapshot at proposal creation
@@ -1341,11 +1411,7 @@ impl Voting {
             panic_with_error!(&env, VotingError::InvalidProof);
         }
 
-        // Mark nullifier as used
-        env.storage().persistent().set(&null_key, &true);
-        Self::bump_persistent(&env, &null_key);
-
-        // Update vote count
+        // Update vote count (nullifier already marked above per CEI pattern)
         if vote_choice {
             proposal.yes_votes += 1;
         } else {
@@ -1353,6 +1419,9 @@ impl Voting {
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
+
+        // Clear reentrancy lock before emitting event
+        Self::clear_reentrancy_lock(&env);
 
         VoteEvent {
             dao_id,
@@ -1364,6 +1433,9 @@ impl Voting {
     }
 
     /// Submit a vote with BLS12-381 ZK proof
+    ///
+    /// REENTRANCY MODEL: same as vote() — follows the checks-effects-interactions
+    /// pattern with a contract-level reentrancy lock. See vote() for full docs.
     pub fn vote_bls381(
         env: Env,
         dao_id: u64,
@@ -1375,6 +1447,10 @@ impl Voting {
     ) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
+
+        // ── DEFENSE-IN-DEPTH: Set reentrancy lock BEFORE any state mutations ──
+        Self::set_reentrancy_lock(&env);
+
         Self::assert_in_field_bls381(&env, &nullifier);
         Self::assert_in_field_bls381(&env, &root);
 
@@ -1401,6 +1477,11 @@ impl Voting {
         if proposal.end_time != 0 && now > proposal.end_time {
             panic_with_error!(&env, VotingError::VotingClosed);
         }
+
+        // ── CHECKS-EFFECTS-INTERACTIONS: Mark nullifier as used BEFORE ──
+        // ── cross-contract calls or proof verification.                   ──
+        env.storage().persistent().set(&null_key, &true);
+        Self::bump_persistent(&env, &null_key);
 
         match proposal.vote_mode {
             VoteMode::Fixed => {
@@ -1499,9 +1580,7 @@ impl Voting {
             panic_with_error!(&env, VotingError::InvalidProof);
         }
 
-        env.storage().persistent().set(&null_key, &true);
-        Self::bump_persistent(&env, &null_key);
-
+        // Update vote count (nullifier already marked above per CEI pattern)
         if vote_choice {
             proposal.yes_votes += 1;
         } else {
@@ -1509,6 +1588,9 @@ impl Voting {
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
+
+        // Clear reentrancy lock before emitting event
+        Self::clear_reentrancy_lock(&env);
 
         VoteEvent {
             dao_id,

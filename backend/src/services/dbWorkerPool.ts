@@ -205,6 +205,9 @@ export class DbWorkerPool {
 
     try {
       crashedWorker.terminate();
+    } catch (_) {
+      // worker already dead; nothing to recover
+    }
     } catch (_) { /* noop */ }
 
     // Reject and remove any requests that were in flight on the crashed
