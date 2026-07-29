@@ -29,6 +29,7 @@ router.get("/circuits/:dao/:type/status", queryLimiter, validateParams(circuitPa
   req: Request,
   res: Response,
 ) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { dao: daoId, type } = (req as any).validatedParams;
 
   const circuitType = type === "comment" ? "Comment" : "Vote";

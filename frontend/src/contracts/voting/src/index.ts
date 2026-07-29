@@ -47,8 +47,7 @@ export type DataKey =
   | { tag: "VerifyOverride"; values: void };
 
 export type VoteMode =
-  | { tag: "Fixed"; values: void }
-  | { tag: "Trailing"; values: void };
+  { tag: "Fixed"; values: void } | { tag: "Trailing"; values: void };
 
 export const VotingError = {
   1: { message: "NotAdmin" },

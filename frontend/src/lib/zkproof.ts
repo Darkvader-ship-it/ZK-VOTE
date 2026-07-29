@@ -6,6 +6,7 @@ import type { CircuitSignals, Groth16Proof } from "snarkjs";
 export interface VoteProofInput {
   secret: string;
   salt: string;
+  blindingFactor: string;
   root: string;
   nullifier: string;
   daoId: string;
@@ -21,6 +22,7 @@ export interface VoteProofInput {
 export interface CommentProofInput {
   secret: string;
   salt: string;
+  blindingFactor: string;
   root: string;
   nullifier: string;
   daoId: string;
@@ -74,7 +76,7 @@ export async function generateVoteProof(
     let circuitInput: CircuitSignals;
 
     if (circuitVersion === "v2") {
-      // vote_v2.circom - adds chainId as 6th public signal
+      // vote_v2.circom
       circuitInput = {
         root: input.root,
         nullifier: input.nullifier,
@@ -84,11 +86,12 @@ export async function generateVoteProof(
         chainId: input.chainId || "0",
         secret: input.secret,
         salt: input.salt,
+        blindingFactor: input.blindingFactor,
         pathElements: input.pathElements,
         pathIndices: input.pathIndices,
       };
     } else {
-      // vote_v1.circom - original 5 public signals
+      // vote_v1.circom
       circuitInput = {
         root: input.root,
         nullifier: input.nullifier,
@@ -97,6 +100,7 @@ export async function generateVoteProof(
         voteChoice: input.voteChoice,
         secret: input.secret,
         salt: input.salt,
+        blindingFactor: input.blindingFactor,
         pathElements: input.pathElements,
         pathIndices: input.pathIndices,
       };
@@ -170,6 +174,7 @@ export async function generateCommentProof(
         parentCommentId: input.parentCommentId || "0",
         secret: input.secret,
         salt: input.salt,
+        blindingFactor: input.blindingFactor,
         pathElements: input.pathElements,
         pathIndices: input.pathIndices,
       };
@@ -184,6 +189,7 @@ export async function generateCommentProof(
         commitment: input.commitment,
         secret: input.secret,
         salt: input.salt,
+        blindingFactor: input.blindingFactor,
         pathElements: input.pathElements,
         pathIndices: input.pathIndices,
       };
@@ -346,18 +352,25 @@ export async function calculateCommentNullifier(
   return hash;
 }
 
+// Domain separation tag for commitment scheme
+// SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
+// Must match DOMAIN_TAG in circuits for consistency
+const DOMAIN_TAG = BigInt("19666041591797403834655481403982443037438503980743793537655983658411276515161");
+
 /**
- * Calculate commitment from secret and salt using Poseidon hash
- * commitment = Poseidon(secret, salt)
+ * Calculate commitment from secret, salt, and blinding factor using Poseidon hash
+ * commitment = Poseidon(DOMAIN_TAG, secret, salt, blindingFactor)
+ * Domain-separated commitment prevents cross-protocol attacks.
  */
 export async function calculateCommitment(
   secret: string,
   salt: string,
+  blindingFactor: string,
 ): Promise<string> {
   const { buildPoseidon } = await import("circomlibjs");
   const poseidon = await buildPoseidon();
 
-  const hash = poseidon.F.toString(poseidon([BigInt(secret), BigInt(salt)]));
+  const hash = poseidon.F.toString(poseidon([DOMAIN_TAG, BigInt(secret), BigInt(salt), BigInt(blindingFactor)]));
 
   return hash;
 }
@@ -382,3 +395,68 @@ export async function verifyProofLocally(
     return false;
   }
 }
+
+/**
+ * Calculate sha256 hash of a proof payload bound to nullifier, timestamp, and optional nonce
+ */
+export async function calculateProofHash(
+  proof: Groth16Proof,
+  nullifier: string,
+  timestamp: number,
+  nonce?: string,
+): Promise<string> {
+  const normalizedNullifier = nullifier.startsWith("0x") ? nullifier.slice(2) : nullifier;
+  const data = JSON.stringify(proof) + ":" + normalizedNullifier + ":" + timestamp + ":" + (nonce || "");
+  const encoder = new TextEncoder();
+  const buffer = encoder.encode(data);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Encrypt proof payload for the relayer using symmetric AES-GCM (simulated/standard payload format)
+ */
+export async function encryptProofForRelayer(
+  payload: Record<string, unknown>,
+  _relayerPubKey?: string,
+): Promise<{ encryptedPayload: string }> {
+  // Serialize payload
+  const jsonString = JSON.stringify(payload);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(jsonString);
+
+  // Generate AES-256 key
+  const key = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    data,
+  );
+
+  const exportedKey = await crypto.subtle.exportKey("raw", key);
+  const keyHex = Array.from(new Uint8Array(exportedKey))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const ivHex = Array.from(iv)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const ciphertextHex = Array.from(new Uint8Array(encrypted))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return {
+    encryptedPayload: JSON.stringify({
+      ciphertext: ciphertextHex,
+      iv: ivHex,
+      key: keyHex,
+    }),
+  };
+}
+

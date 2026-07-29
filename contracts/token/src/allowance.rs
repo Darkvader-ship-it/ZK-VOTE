@@ -58,9 +58,11 @@ pub fn write_allowance(
                 .persistent()
                 .extend_ttl(&key, ttl_threshold, ttl_extend);
         } else {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND);
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_TTL_THRESHOLD,
+                PERSISTENT_TTL_EXTEND,
+            );
         }
     }
 }

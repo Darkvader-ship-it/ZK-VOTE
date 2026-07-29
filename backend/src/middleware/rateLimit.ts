@@ -54,6 +54,7 @@ function hashIp(ip: string | undefined): string {
  * Key generator for rate limiters - uses hashed IP
  */
 const keyGenerator = (req: Express.Request): string =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   hashIp((req as any).ip || "");
 
 // ============================================
@@ -113,6 +114,7 @@ function withMetrics(name: string, limiter: RequestHandler): RequestHandler {
  */
 function makeHandler(name: string, message: string) {
   return (req: Request, res: Response): void => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const info = (req as any).rateLimit as
       | { limit: number; remaining: number; resetTime?: Date }
       | undefined;
@@ -143,6 +145,29 @@ const headerOptions = {
   standardHeaders: true as const,
   legacyHeaders: true,
 };
+
+/**
+ * Key generator for wallet address rate limiter
+ */
+const walletKeyGenerator = (req: Express.Request): string => {
+  const wallet = (req as any).body?.walletAddress || (req as any).headers?.["x-wallet-address"] || (req as any).ip || "";
+  return crypto.createHash("sha256").update(String(wallet)).digest("hex");
+};
+
+/**
+ * Rate limiter for vote submissions per wallet address
+ * Default 5 per minute per wallet address
+ */
+export const walletRateLimiter = isTestMode
+  ? noopMiddleware
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: 5,
+      message: { error: "Too many proof submissions for this wallet address, please try again later" },
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: walletKeyGenerator,
+    });
 
 /**
  * Rate limiter for vote submissions
