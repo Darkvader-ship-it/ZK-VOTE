@@ -327,13 +327,16 @@ export default function VoteModal({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="vote-modal-title"
         className="relative w-[calc(100%-2rem)] max-w-lg max-h-[85dvh] flex flex-col overflow-hidden bg-card border border-border rounded-xl shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header with inline close button */}
         <div className="flex items-start justify-between p-4 sm:p-6 border-b border-border/60 shrink-0">
           <div>
-            <h3 className="text-xl font-bold tracking-tight text-foreground">Cast Anonymous Vote</h3>
+            <h3 id="vote-modal-title" className="text-xl font-bold tracking-tight text-foreground">Cast Anonymous Vote</h3>
             <p className="text-xs sm:text-sm text-muted-foreground mt-1">
               Your vote will be verified using zero-knowledge proofs to ensure anonymity while proving membership.
             </p>
@@ -342,10 +345,10 @@ export default function VoteModal({
             variant="ghost"
             size="icon"
             onClick={onClose}
+            aria-label="Close voting dialog"
             className="h-10 w-10 min-h-[48px] min-w-[48px] sm:h-8 sm:w-8 sm:min-h-0 sm:min-w-0 p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted shrink-0 ml-2"
           >
-            <X className="h-5 w-5" />
-            <span className="sr-only">Close</span>
+            <X className="h-5 w-5" aria-hidden="true" />
           </Button>
         </div>
 
@@ -363,10 +366,11 @@ export default function VoteModal({
                 </Alert>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2" role="group" aria-label="Vote options">
                 <Button
                   onClick={() => handleVote(true)}
                   variant="outline"
+                  aria-label="Vote yes on this proposal"
                   className="min-h-[48px] text-base font-semibold border-green-500/40 text-green-600 dark:text-green-400 hover:bg-green-500/10"
                 >
                   Vote Yes
@@ -374,6 +378,7 @@ export default function VoteModal({
                 <Button
                   onClick={() => handleVote(false)}
                   variant="outline"
+                  aria-label="Vote no on this proposal"
                   className="min-h-[48px] text-base font-semibold border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10"
                 >
                   Vote No
@@ -418,7 +423,11 @@ export default function VoteModal({
                     ? "Generating Proof"
                     : "Submitting Vote"}
                 </h3>
-                <p className="text-sm text-muted-foreground max-w-[260px] mx-auto break-words">
+                <p
+                  className="text-sm text-muted-foreground max-w-[260px] mx-auto break-words"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
                   {progress}
                 </p>
               </div>
@@ -432,9 +441,9 @@ export default function VoteModal({
           )}
 
           {step === "success" && (
-            <div className="py-8 flex flex-col items-center text-center space-y-4">
+            <div className="py-8 flex flex-col items-center text-center space-y-4" aria-live="assertive" aria-atomic="true">
               <div className="h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-2">
-                <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
+                <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" aria-hidden="true" />
               </div>
               <div className="space-y-1">
                 <h3 className="font-bold text-xl">Vote Submitted!</h3>
