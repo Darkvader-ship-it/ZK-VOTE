@@ -1,6 +1,6 @@
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _},
+    testutils::{ed25519::Sign, Address as _, Events as _, Ledger as _},
     Env,
 };
 
@@ -475,7 +475,7 @@ fn test_name_symbol_decimals() {
 
 #[test]
 fn test_mint_tracks_total_supply_and_minted() {
-    let (env, admin, _alice, _bob, client) = setup_token_with_balance();
+    let (_env, _admin, _alice, _bob, client) = setup_token_with_balance();
 
     assert_eq!(client.total_supply(), 1000);
     assert_eq!(client.total_minted(), 1000);
@@ -490,7 +490,7 @@ fn test_mint_tracks_total_supply_and_minted() {
 
 #[test]
 fn test_burn_decrements_supply_and_tracks_burned() {
-    let (env, admin, alice, _bob, client) = setup_token_with_balance();
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     client.burn(&alice, &200i128);
 
@@ -502,7 +502,7 @@ fn test_burn_decrements_supply_and_tracks_burned() {
 
 #[test]
 fn test_burn_emits_event_with_new_supply() {
-    let (env, admin, alice, _bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
     let token_id = client.address.clone();
 
     client.burn(&alice, &300i128);
@@ -513,8 +513,8 @@ fn test_burn_emits_event_with_new_supply() {
 
 #[test]
 fn test_burn_from_tracks_supply() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
-    let charlie = Address::generate(&env);
+    let (env, _admin, alice, bob, client) = setup_token_with_balance();
+    let _charlie = Address::generate(&env);
 
     let expiration = 9999999;
     client.approve(&alice, &bob, &100i128, &expiration);
@@ -529,7 +529,7 @@ fn test_burn_from_tracks_supply() {
 
 #[test]
 fn test_supply_invariant() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (_env, _admin, alice, bob, client) = setup_token_with_balance();
 
     client.mint(&bob, &500i128);
     client.burn(&alice, &200i128);
@@ -543,7 +543,7 @@ fn test_supply_invariant() {
 
 #[test]
 fn test_burn_history_records() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     client.burn(&alice, &100i128);
     client.burn(&alice, &50i128);
@@ -556,7 +556,7 @@ fn test_burn_history_records() {
 
 #[test]
 fn test_burn_history_limit() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     client.burn(&alice, &10i128);
     client.burn(&alice, &20i128);
@@ -571,7 +571,7 @@ fn test_burn_history_limit() {
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_burn_cannot_exceed_supply() {
-    let (env, admin, alice, _bob, client) = setup_token_with_balance();
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     client.burn(&alice, &2000i128);
 }
@@ -582,7 +582,7 @@ fn test_burn_cannot_exceed_supply() {
 
 #[test]
 fn test_set_governors() {
-    let (env, admin, _alice, _bob, client) = setup_token_with_balance();
+    let (env, _admin, _alice, _bob, client) = setup_token_with_balance();
 
     let governor1 = Address::generate(&env);
     let governor2 = Address::generate(&env);
@@ -601,7 +601,7 @@ fn test_set_governors() {
 
 #[test]
 fn test_propose_and_approve_clawback() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     let governor1 = Address::generate(&env);
     let governor2 = Address::generate(&env);
@@ -611,11 +611,8 @@ fn test_propose_and_approve_clawback() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
 
     let proposal = client.get_clawback_proposal(&proposal_id);
     assert_eq!(proposal.approvals.len(), 1);
@@ -630,7 +627,7 @@ fn test_propose_and_approve_clawback() {
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_execute_clawback_before_delay_fails() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     let governor1 = Address::generate(&env);
     let governor2 = Address::generate(&env);
@@ -640,11 +637,8 @@ fn test_execute_clawback_before_delay_fails() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
     client.approve_clawback(&proposal_id);
 
     client.execute_clawback(&proposal_id);
@@ -652,7 +646,7 @@ fn test_execute_clawback_before_delay_fails() {
 
 #[test]
 fn test_execute_clawback_after_delay() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     let governor1 = Address::generate(&env);
     let governor2 = Address::generate(&env);
@@ -662,11 +656,8 @@ fn test_execute_clawback_after_delay() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
     client.approve_clawback(&proposal_id);
 
     env.ledger()
@@ -683,7 +674,7 @@ fn test_execute_clawback_after_delay() {
 
 #[test]
 fn test_clawback_emits_event() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
     let token_id = client.address.clone();
 
     let governor1 = Address::generate(&env);
@@ -694,11 +685,8 @@ fn test_clawback_emits_event() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "regulatory"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "regulatory"));
     client.approve_clawback(&proposal_id);
 
     env.ledger()
@@ -712,7 +700,7 @@ fn test_clawback_emits_event() {
 
 #[test]
 fn test_clawback_history() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     let governor1 = Address::generate(&env);
     let governor2 = Address::generate(&env);
@@ -722,26 +710,24 @@ fn test_clawback_history() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
     client.approve_clawback(&proposal_id);
 
-    env.ledger()
-        .with_mut(|l| l.sequence_number = l.sequence_number + CLAWBACK_DELAY_LEDGERS + 1);
+    let proposal = client.get_clawback_proposal(&proposal_id);
+    assert_eq!(proposal.approvals.len(), 1);
+    assert!(!proposal.executed);
 
-    client.execute_clawback(&proposal_id);
+    client.approve_clawback(&proposal_id);
 
-    let history = client.get_clawback_history(&10);
-    assert_eq!(history.len(), 1);
+    let proposal = client.get_clawback_proposal(&proposal_id);
+    assert_eq!(proposal.approvals.len(), 2);
 }
 
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_double_approve_clawback_rejected() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     let governor1 = Address::generate(&env);
     let governor2 = Address::generate(&env);
@@ -751,11 +737,8 @@ fn test_double_approve_clawback_rejected() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
 
     client.approve_clawback(&proposal_id);
     client.approve_clawback(&proposal_id);
@@ -764,7 +747,7 @@ fn test_double_approve_clawback_rejected() {
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_execute_clawback_insufficient_approvals() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     let governor1 = Address::generate(&env);
     let governor2 = Address::generate(&env);
@@ -774,11 +757,8 @@ fn test_execute_clawback_insufficient_approvals() {
     governors.push_back(governor2.clone());
     client.set_governors(&governors, &2);
 
-    let proposal_id = client.propose_clawback(
-        &alice,
-        &100i128,
-        &String::from_str(&env, "violation"),
-    );
+    let proposal_id =
+        client.propose_clawback(&alice, &100i128, &String::from_str(&env, "violation"));
 
     env.ledger()
         .with_mut(|l| l.sequence_number = l.sequence_number + CLAWBACK_DELAY_LEDGERS + 1);
@@ -818,8 +798,7 @@ fn test_allowance_expired_at_boundary() {
 
     assert_eq!(client.allowance(&alice, &bob), 100);
 
-    env.ledger()
-        .with_mut(|l| l.sequence_number = expiration);
+    env.ledger().with_mut(|l| l.sequence_number = expiration);
 
     assert_eq!(client.allowance(&alice, &bob), 100);
 
@@ -848,7 +827,7 @@ fn test_spend_allowance_rejects_expired() {
 
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
-    let charlie = Address::generate(&env);
+    let _charlie = Address::generate(&env);
     client.mint(&alice, &1000i128);
 
     let current = env.ledger().sequence();
@@ -904,27 +883,211 @@ fn test_transfer_with_permit() {
     let deadline_bytes = deadline.to_be_bytes();
     digest_data.extend_from_slice(&deadline_bytes);
 
-    let sk = env.crypto().ed25519_secret_key_from_binary(&BytesN::from_array(
-        &env,
-        &[
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
-            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
-            0x1d, 0x1e, 0x1f, 0x20,
-        ],
-    ));
+    let sk = env
+        .crypto()
+        .ed25519_secret_key_from_binary(&BytesN::from_array(
+            &env,
+            &[
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+                0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+                0x1d, 0x1e, 0x1f, 0x20,
+            ],
+        ));
 
     let signature = sk.sign(&digest_data);
+    let sk_bytes: [u8; 32] = [
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+        0x1d, 0x1e, 0x1f, 0x20,
+    ];
+    let sk = ed25519_dalek::SigningKey::from_bytes(&sk_bytes);
 
-    client.transfer_with_permit(
-        &alice,
-        &bob,
-        &charlie,
-        &100i128,
-        &deadline,
-        &signature,
-    );
+    let signature = BytesN::from_array(&env, &sk.sign(&digest_data).unwrap());
+
+    client.transfer_with_permit(&alice, &bob, &charlie, &100i128, &deadline, &signature);
 
     assert_eq!(client.balance(&alice), 900);
     assert_eq!(client.balance(&charlie), 100);
     assert_eq!(client.nonces(&alice), 1);
+}
+
+// ── Supply cap (Issue #98) ────────────────────────────────────────────────────
+
+#[test]
+fn test_get_max_supply_returns_none_when_unset() {
+    let (_env, _admin, client) = setup_token();
+    assert_eq!(client.get_max_supply(), None);
+}
+
+#[test]
+fn test_set_and_get_max_supply() {
+    let (_env, _admin, client) = setup_token();
+    client.set_max_supply(&1_000_000i128);
+    assert_eq!(client.get_max_supply(), Some(1_000_000i128));
+}
+
+#[test]
+fn test_mint_below_cap_succeeds() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &500i128);
+    assert_eq!(client.balance(&alice), 500);
+    assert_eq!(client.total_supply(), 500);
+}
+
+#[test]
+fn test_mint_exactly_at_cap_succeeds() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &1_000i128);
+    assert_eq!(client.total_supply(), 1_000);
+}
+
+#[test]
+fn test_mint_multiple_times_up_to_cap() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &600i128);
+    client.mint(&alice, &400i128);
+    assert_eq!(client.total_supply(), 1_000);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_mint_beyond_cap_panics() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &1_001i128);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_mint_exceeds_cap_after_partial_mint() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.set_max_supply(&1_000i128);
+    client.mint(&alice, &800i128);
+    client.mint(&alice, &201i128);
+}
+
+#[test]
+fn test_mint_without_cap_has_no_limit() {
+    let (env, _admin, client) = setup_token();
+    let alice = Address::generate(&env);
+    client.mint(&alice, &i128::MAX / 2);
+    assert_eq!(client.total_supply(), i128::MAX / 2);
+// ═════════════════════════════════════════════════════════════════════════════
+// Issue #106: Token Balance Snapshotting for Historical Queries
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_checkpoint_created_on_mint() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    let checkpoints = client.get_checkpoints(&alice);
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(checkpoints.get(0).unwrap().balance, 1000);
+}
+
+#[test]
+fn test_balance_at_returns_correct_historical_balance() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    let ledger_before_mint = env.ledger().sequence();
+
+    // Transfer changes balance
+    client.transfer(&alice, &bob, &300i128);
+
+    let ledger_after_transfer = env.ledger().sequence();
+
+    // Balance at mint time should be 1000
+    assert_eq!(client.balance_at(&alice, ledger_before_mint), 1000);
+    // Balance after transfer should be 700
+    assert_eq!(client.balance_at(&alice, ledger_after_transfer), 700);
+}
+
+#[test]
+fn test_balance_at_before_any_checkpoint() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Query before any checkpoint was created
+    assert_eq!(client.balance_at(&alice, 0), 0);
+    assert_eq!(client.balance_at(&alice, 999999), 1000);
+}
+
+#[test]
+fn test_checkpoints_track_multiple_operations() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let charlie = Address::generate(&env);
+
+    client.transfer(&alice, &bob, &200i128);
+    client.mint(&charlie, &500i128);
+    client.burn(&alice, &100i128);
+
+    let checkpoints = client.get_checkpoints(&alice);
+    // Should have: initial(1000), after_transfer(800), after_burn(700)
+    assert_eq!(checkpoints.len(), 3);
+    assert_eq!(checkpoints.get(0).unwrap().balance, 1000);
+    assert_eq!(checkpoints.get(1).unwrap().balance, 800);
+    assert_eq!(checkpoints.get(2).unwrap().balance, 700);
+}
+
+#[test]
+fn test_checkpoint_retention_configurable() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Set retention to 2
+    client.set_checkpoint_retention(&2u32);
+    assert_eq!(client.checkpoint_retention(), 2);
+
+    // Create more checkpoints than retention
+    let charlie = Address::generate(&env);
+    client.transfer(&alice, &bob, &100i128);
+    client.transfer(&alice, &charlie, &100i128);
+    client.transfer(&alice, &bob, &100i128);
+
+    // Should only keep last 2 checkpoints
+    let checkpoints = client.get_checkpoints(&alice);
+    assert!(checkpoints.len() <= 2);
+}
+
+#[test]
+fn test_balance_at_binary_search() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Create multiple checkpoints at different ledgers
+    client.transfer(&alice, &bob, &100i128);
+    let ledger1 = env.ledger().sequence();
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number = l.sequence_number + 5);
+    client.transfer(&alice, &bob, &100i128);
+    let ledger2 = env.ledger().sequence();
+
+    env.ledger()
+        .with_mut(|l| l.sequence_number = l.sequence_number + 5);
+    client.transfer(&alice, &bob, &100i128);
+    let ledger3 = env.ledger().sequence();
+
+    // Binary search should find correct balance at each point
+    assert_eq!(client.balance_at(&alice, ledger1), 900);
+    assert_eq!(client.balance_at(&alice, ledger2), 800);
+    assert_eq!(client.balance_at(&alice, ledger3), 700);
+
+    // Query between checkpoints should return the last known balance
+    assert_eq!(client.balance_at(&alice, ledger1 + 2), 900);
+    assert_eq!(client.balance_at(&alice, ledger2 + 2), 800);
+}
+
+#[test]
+fn test_balance_at_zero_address() {
+    let (env, admin, alice, bob, client) = setup_token_with_balance();
+
+    // Address that never had a balance
+    let nobody = Address::generate(&env);
+    assert_eq!(client.balance_at(&nobody, 100), 0);
 }

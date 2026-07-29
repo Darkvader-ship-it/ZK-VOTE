@@ -76,17 +76,45 @@ export const relayerKeypair = _relayerKeypair;
  */
 let sequenceLock: Promise<void> = Promise.resolve();
 
+// Count of sequence-lock operations currently queued or executing. A vote
+// submission holds the lock across build+simulate+send+confirm, which can
+// outlive its HTTP response, so shutdown must wait on this, not just on
+// httpServer.close().
+let inFlightLockOps = 0;
+
+export function getPendingSequenceLockOps(): number {
+  return inFlightLockOps;
+}
+
+/**
+ * Wait until all in-flight withSequenceLock operations drain, or until
+ * timeoutMs elapses. Resolves true if drained cleanly, false on timeout
+ * with work still outstanding.
+ */
+export async function waitForSequenceLockIdle(
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (inFlightLockOps > 0) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return true;
+}
+
 export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = sequenceLock;
   let resolve: () => void;
   sequenceLock = new Promise<void>((r) => {
     resolve = r;
   });
+  inFlightLockOps++;
   await previous;
   try {
     return await fn();
   } finally {
     resolve!();
+    inFlightLockOps--;
   }
 }
 

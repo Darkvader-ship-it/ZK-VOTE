@@ -20,8 +20,24 @@ import {
 } from "../middleware/index.js";
 import { cidParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
+import { detectMimeType } from "../utils/magic-bytes.js";
 
 const router = Router();
+
+// ============================================
+// IPFS SECURITY MIDDLEWARE
+// ============================================
+
+router.use(["/ipfs/:cid", "/ipfs/image/:cid"], (req, res, next) => {
+  // Origin isolation
+  if (config.ipfsSubdomain && req.hostname !== config.ipfsSubdomain && !config.testMode) {
+    return res.status(403).json({ error: "IPFS content must be served from the dedicated IPFS subdomain" });
+  }
+
+  // Security headers for all IPFS responses
+  res.set("X-Content-Type-Options", "nosniff");
+  next();
+});
 
 // ============================================
 // MULTER CONFIGURATION (FILE UPLOADS)
@@ -310,6 +326,9 @@ router.get("/ipfs/:cid", ipfsReadLimiter, validateParams(cidParamsSchema), (asyn
 
     log("info", "ipfs_fetch_success", { cid });
 
+    res.set("Content-Security-Policy", "default-src 'none'");
+    res.set("Content-Disposition", "attachment");
+
     if (typeof result.data === "object") {
       res.json(result.data);
     } else {
@@ -339,14 +358,34 @@ router.get("/ipfs/image/:cid", ipfsReadLimiter, validateParams(cidParamsSchema),
 
     const result = await ipfsService.fetchRawContent(cid);
 
+    const detectedMime = detectMimeType(result.buffer);
+    const finalMimeType = detectedMime || result.contentType;
+
+    if (
+      finalMimeType.includes("html") ||
+      finalMimeType.includes("svg") ||
+      finalMimeType.includes("javascript") ||
+      finalMimeType.includes("xml")
+    ) {
+      return res.status(403).json({ error: "Forbidden content type" });
+    }
+
     log("info", "ipfs_fetch_image_success", {
       cid,
-      contentType: result.contentType,
+      contentType: finalMimeType,
     });
 
-    res.set("Content-Type", result.contentType);
+    res.set("Content-Type", finalMimeType);
     res.set("Cache-Control", "public, max-age=31536000, immutable");
     res.set("Cross-Origin-Resource-Policy", "cross-origin");
+
+    if (finalMimeType.startsWith("image/")) {
+      res.set("Content-Security-Policy", "default-src 'none'; img-src 'self'");
+    } else {
+      res.set("Content-Security-Policy", "default-src 'none'");
+      res.set("Content-Disposition", "attachment");
+    }
+
     res.send(result.buffer);
   } catch (err) {
     log("error", "ipfs_fetch_image_failed", {

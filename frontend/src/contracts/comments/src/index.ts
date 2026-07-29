@@ -48,8 +48,7 @@ export type DataKey =
  * Vote mode for proposal eligibility (mirrors voting contract)
  */
 export type VoteMode =
-  | { tag: "Fixed"; values: void }
-  | { tag: "Trailing"; values: void };
+  { tag: "Fixed"; values: void } | { tag: "Trailing"; values: void };
 
 /**
  * Comment on a proposal
