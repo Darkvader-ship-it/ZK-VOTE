@@ -198,6 +198,8 @@ pub enum DataKey {
     RecursiveVk(u64), // dao_id -> Bytes
     /// Finalized recursive vote tally result
     RecursiveTally(u64, u64), // (dao_id, proposal_id) -> RecursiveTallyInfo
+    /// ZK proof of correct tally computation for universal verifiability (#94)
+    TallyProof(u64, u64), // (dao_id, proposal_id) -> Bytes (proof)
 }
 
 #[contracttype]
@@ -775,6 +777,11 @@ impl Voting {
         env.storage().persistent().set(&tally_key, &tally_info);
         Self::bump_persistent(&env, &tally_key);
 
+        // Store tally proof for independent verification (#94)
+        let proof_key = DataKey::TallyProof(dao_id, proposal_id);
+        env.storage().persistent().set(&proof_key, &proof);
+        Self::bump_persistent(&env, &proof_key);
+
         RecursiveTallySubmittedEvent {
             dao_id,
             proposal_id,
@@ -797,6 +804,25 @@ impl Voting {
         env.storage()
             .persistent()
             .get(&DataKey::RecursiveTally(dao_id, proposal_id))
+    }
+
+    /// Return the stored tally proof bytes, or None if not yet finalized.
+    ///
+    /// The returned bytes are the raw recursive proof submitted via
+    /// `submit_recursive_tally`. Any observer can call this function and
+    /// verify the proof off-chain against the recursive VK set for the DAO,
+    /// providing universal verifiability of the tally (#94).
+    ///
+    /// On-chain verification against the recursive VK will be added once a
+    /// tally-aggregation circuit is finalised.
+    pub fn verify_tally_proof(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> Option<Bytes> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TallyProof(dao_id, proposal_id))
     }
 
     /// Internal helper to fetch a BN254 VK by version or fail with a clear error
