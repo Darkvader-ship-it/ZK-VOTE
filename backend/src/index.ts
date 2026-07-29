@@ -19,11 +19,25 @@ import { config, validateEnv, isValidContractId } from "./config.js";
 import { log, logger } from "./services/logger.js";
 import * as ipfsService from "./services/ipfs.js";
 import { initPinManager } from "./services/ipfs-pin-manager.js";
+import { getDb } from "./services/db.js";
+import {
+  startWalCheckpointing,
+  stopWalResilience,
+  startWalMonitor,
+  startPeriodicBackups,
+  performInitialCheckpoint,
+  detectAndHandleWalIssue,
+} from "./services/walResilience.js";
 import {
   startMonitor as startPinMonitor,
   stopMonitor as stopPinMonitor,
 } from "./services/ipfs-monitor.js";
-import { server, relayerKeypair } from "./services/stellar.js";
+import {
+  server,
+  relayerKeypair,
+  getPendingSequenceLockOps,
+  waitForSequenceLockIdle,
+} from "./services/stellar.js";
 import {
   startDaoSync,
   stopDaoSync,
@@ -34,6 +48,7 @@ import {
 import { startIndexer, stopIndexer } from "./services/indexer.js";
 import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
 import { startMemoryMonitor, stopMemoryMonitor } from "./services/memory-monitor.js";
+import { closeDb } from "./services/db.js";
 
 // Middleware
 import {
@@ -55,8 +70,13 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  metricsRoutes,
+  remediationRoutes,
+  novaRoutes,
   adminRoutes,
+  thresholdRoutes,
 } from "./routes/index.js";
+import { registerShutdownHandler } from "./routes/admin.js";
 
 // ============================================
 // ENVIRONMENT VALIDATION
@@ -70,8 +90,27 @@ validateEnv();
 
 const app: Express = express();
 
-// Security: HTTP headers
-app.use(helmet());
+// Security: HTTP headers with CSP
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
+        connectSrc: ["'self'", "https:", "wss:", "blob:"],
+        fontSrc: ["'self'", "data:"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+        blockAllMixedContent: [],
+        upgradeInsecureRequests: [],
+      },
+    },
+  }),
+);
 
 // Metrics middleware (before other middleware to capture all requests)
 app.use(metricsMiddleware);
@@ -117,7 +156,9 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use("/api/v1/nova", novaRoutes);
 app.use(adminRoutes);
+app.use(thresholdRoutes);
 
 // OpenAPI spec + interactive docs
 const openApiDocument = buildOpenApiDocument();
@@ -249,6 +290,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
       try {
         await startIndexer(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           server as any,
           contractIds,
           config.indexerPollIntervalMs,
@@ -285,9 +327,24 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // Start TTL renewal service (prevents contract data from expiring)
     startTTLRenewal();
 
+    // Start WAL resilience services (checkpointing, monitoring, backups)
+    try {
+      const database = getDb();
+      const dbPath = database.name;
+      performInitialCheckpoint(database);
+      detectAndHandleWalIssue(database, dbPath);
+      startWalCheckpointing(database);
+      startWalMonitor(database, dbPath);
+      startPeriodicBackups(database, dbPath);
+    } catch (err) {
+      log("warn", "wal_resilience_start_failed", { error: (err as Error).message });
+    }
+
     // Start periodic memory monitoring; triggers a graceful restart if
     // usage crosses the critical threshold (see #191).
-    startMemoryMonitor(() => gracefulShutdown("memory_threshold"));
+    startMemoryMonitor(() => {
+      void gracefulShutdown("memory_threshold");
+    });
   });
 
   // ============================================
@@ -296,48 +353,104 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   //
   // Stops accepting new connections and lets in-flight requests finish
   // (draining) before exiting, instead of killing the process immediately.
-  // Fly.io's [http_service.checks] fail the instance out of rotation
-  // before SIGTERM is sent, so no new traffic should arrive during drain;
-  // this still protects requests already in flight. `kill_timeout` in
-  // fly.toml must be >= DRAIN_TIMEOUT_MS below or the platform will
-  // SIGKILL before the drain completes.
-  const DRAIN_TIMEOUT_MS = 25_000;
+  // A vote submission holds a sequence lock across build+simulate+send+
+  // confirm, which can outlive its HTTP response, so we also wait for the
+  // sequence lock to go idle -- otherwise a proof could be accepted but
+  // never submitted to the chain.
+  //
+  // Fly.io's [http_service.checks] fail the instance out of rotation before
+  // SIGTERM is sent, so no new traffic should arrive during drain; this
+  // still protects work already in flight. `kill_timeout` in fly.toml must
+  // be >= SHUTDOWN_DRAIN_TIMEOUT_MS or the platform will SIGKILL before the
+  // drain completes.
+  const DRAIN_TIMEOUT_MS = config.shutdownDrainTimeoutMs;
   let shuttingDown = false;
 
-  function gracefulShutdown(reason: string): void {
+  async function gracefulShutdown(reason: string): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    log("info", "shutdown_start", { reason });
+    log("info", "shutdown_start", { reason, drainTimeoutMs: DRAIN_TIMEOUT_MS });
 
-    // Stop background interval services immediately — they don't need to
-    // finish an in-flight cycle, and stopping them frees timers/handles.
-    stopIndexer();
-    stopDaoSync();
-    stopMembershipSync();
-    stopTTLRenewal();
-    stopPinMonitor();
-    stopMemoryMonitor();
-
+    // Hard deadline: if drain overruns, exit non-zero so the platform knows
+    // the shutdown was not clean. unref() so this timer can't keep us alive.
     const forceExitTimer = setTimeout(() => {
-      log("warn", "shutdown_forced", { reason, timeoutMs: DRAIN_TIMEOUT_MS });
+      log("warn", "shutdown_forced", {
+        reason,
+        timeoutMs: DRAIN_TIMEOUT_MS,
+        pendingSequenceLockOps: getPendingSequenceLockOps(),
+      });
       process.exit(1);
     }, DRAIN_TIMEOUT_MS);
     forceExitTimer.unref();
 
-    httpServer.close((err) => {
-      if (err) {
-        log("error", "shutdown_close_error", { error: err.message });
-      } else {
-        log("info", "shutdown_complete", { reason });
-      }
-      clearTimeout(forceExitTimer);
-      process.exit(0);
+    // 1. Stop accepting new connections; existing sockets keep draining.
+    const httpClosed = new Promise<void>((resolve) => {
+      httpServer.close((err) => {
+        if (err) {
+          log("error", "shutdown_http_close_error", { error: err.message });
+        } else {
+          log("info", "shutdown_component_stopped", { component: "http_server" });
+        }
+        resolve();
+      });
     });
+
+    // 2. Stop background interval services. They don't need to finish a
+    //    cycle, and stopping them releases timers/handles.
+    stopIndexer();
+    log("info", "shutdown_component_stopped", { component: "indexer" });
+    stopDaoSync();
+    log("info", "shutdown_component_stopped", { component: "dao_sync" });
+    stopMembershipSync();
+    log("info", "shutdown_component_stopped", { component: "membership_sync" });
+    stopTTLRenewal();
+    log("info", "shutdown_component_stopped", { component: "ttl_renewal" });
+    stopPinMonitor();
+    log("info", "shutdown_component_stopped", { component: "pin_monitor" });
+    stopMemoryMonitor();
+    stopWalResilience();
+    log("info", "shutdown_component_stopped", { component: "memory_monitor" });
+
+    // 3. Drain in-flight HTTP requests and any sequence-locked chain
+    //    submissions. Both must settle before we close the DB and exit.
+    await httpClosed;
+
+    const pending = getPendingSequenceLockOps();
+    if (pending > 0) {
+      log("info", "shutdown_draining_sequence_lock", { pending });
+    }
+    const drained = await waitForSequenceLockIdle(DRAIN_TIMEOUT_MS);
+    log(drained ? "info" : "warn", "shutdown_sequence_lock_drained", {
+      drained,
+      remaining: getPendingSequenceLockOps(),
+    });
+
+    // 4. Close the SQLite connection cleanly (checkpoints WAL, avoids
+    //    corruption on restart).
+    try {
+      closeDb();
+      log("info", "shutdown_component_stopped", { component: "database" });
+    } catch (err) {
+      log("error", "shutdown_db_close_error", {
+        error: (err as Error).message,
+      });
+    }
+
+    clearTimeout(forceExitTimer);
+    log("info", "shutdown_complete", { reason, cleanDrain: drained });
+    process.exit(drained ? 0 : 1);
   }
 
-  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  // Wire the /admin/shutdown route to the shutdown routine.
+  registerShutdownHandler(gracefulShutdown);
+
+  process.on("SIGTERM", () => {
+    void gracefulShutdown("SIGTERM");
+  });
+  process.on("SIGINT", () => {
+    void gracefulShutdown("SIGINT");
+  });
 }
 
 export { app };

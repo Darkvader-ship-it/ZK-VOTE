@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { workspace = true }
 zkvote-groth16 = { path = "../zkvote-groth16" }
+vdf = { path = "../vdf" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
