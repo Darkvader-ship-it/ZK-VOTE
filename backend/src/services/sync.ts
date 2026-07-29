@@ -29,6 +29,7 @@ import {
   membershipSyncsTotal,
 } from "./metrics.js";
 import { markDegraded, markHealthy } from "./service-health.js";
+import { sharedSingleFlight } from "../utils/singleflight.js";
 
 // ============================================
 // IMMUTABLE CACHE SNAPSHOT & CONCURRENCY STATE
@@ -241,136 +242,138 @@ export const daoAdminsCache = new Proxy(new Map<number, string>(), {
  * Sync all DAOs from the DAO Registry contract to local cache
  */
 export async function syncDaosFromContract(): Promise<number> {
-  if (
-    !config.daoRegistryContractId ||
-    !isValidContractId(config.daoRegistryContractId)
-  ) {
-    log("warn", "dao_sync_skipped", {
-      reason: "DAO_REGISTRY_CONTRACT_ID not configured",
-    });
-    return 0;
-  }
-
-  try {
-    log("info", "dao_sync_start");
-
-    const contract = new StellarSdk.Contract(config.daoRegistryContractId);
-    const account = await (server as StellarSdk.rpc.Server).getAccount(
-      relayerKeypair.publicKey(),
-    );
-
-    // Get DAO count
-    const countOp = contract.call("dao_count");
-    const countTx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100",
-      networkPassphrase: config.networkPassphrase,
-    })
-      .addOperation(countOp)
-      .setTimeout(30)
-      .build();
-
-    const countSimResult = await callWithTimeout(
-      () =>
-        simulateWithBackoff(() =>
-          (server as StellarSdk.rpc.Server).simulateTransaction(countTx),
-        ),
-      "simulate_dao_count",
-    );
-
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(countSimResult)) {
-      log("warn", "dao_count_failed", { error: countSimResult.error });
+  return sharedSingleFlight.do("daos", async () => {
+    if (
+      !config.daoRegistryContractId ||
+      !isValidContractId(config.daoRegistryContractId)
+    ) {
+      log("warn", "dao_sync_skipped", {
+        reason: "DAO_REGISTRY_CONTRACT_ID not configured",
+      });
       return 0;
     }
 
-    const daoCount = Number(
-      StellarSdk.scValToNative(countSimResult.result!.retval!),
-    );
-    log("info", "dao_count_fetched", { count: daoCount });
+    try {
+      log("info", "dao_sync_start");
 
-    if (daoCount === 0) {
-      dbService.setDaosSyncTime(new Date().toISOString());
-      return 0;
-    }
+      const contract = new StellarSdk.Contract(config.daoRegistryContractId);
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
 
-    // Fetch each DAO with bounded parallelism
-    const daos: Dao[] = [];
-    const daoIds = Array.from({ length: daoCount }, (_, i) => i + 1);
-    const DAO_CHUNK_SIZE = 5;
+      // Get DAO count
+      const countOp = contract.call("dao_count");
+      const countTx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(countOp)
+        .setTimeout(30)
+        .build();
 
-    const fetchDao = async (i: number): Promise<void> => {
-      try {
-        const daoAccount = await (server as StellarSdk.rpc.Server).getAccount(
-          relayerKeypair.publicKey(),
-        );
-        const getOp = contract.call(
-          "get_dao",
-          StellarSdk.nativeToScVal(i, { type: "u64" }),
-        );
-        const getTx = new StellarSdk.TransactionBuilder(daoAccount, {
-          fee: "100",
-          networkPassphrase: config.networkPassphrase,
-        })
-          .addOperation(getOp)
-          .setTimeout(30)
-          .build();
+      const countSimResult = await callWithTimeout(
+        () =>
+          simulateWithBackoff(() =>
+            (server as StellarSdk.rpc.Server).simulateTransaction(countTx),
+          ),
+        "simulate_dao_count",
+      );
 
-        const getSimResult = await callWithTimeout(
-          () =>
-            simulateWithBackoff(() =>
-              (server as StellarSdk.rpc.Server).simulateTransaction(getTx),
-            ),
-          `simulate_get_dao_${i}`,
-        );
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(countSimResult)) {
+        log("warn", "dao_count_failed", { error: countSimResult.error });
+        return 0;
+      }
 
-        if (
-          StellarSdk.rpc.Api.isSimulationSuccess(getSimResult) &&
-          getSimResult.result?.retval
-        ) {
-          const daoData = StellarSdk.scValToNative(getSimResult.result.retval);
-          daos.push({
-            id: i,
-            name: daoData.name || `DAO ${i}`,
-            creator: daoData.creator || "",
-            membership_open: daoData.membership_open !== false,
-            members_can_propose: daoData.members_can_propose === true,
-            metadata_cid: daoData.metadata_cid || null,
-            member_count: Number(daoData.member_count || 0),
+      const daoCount = Number(
+        StellarSdk.scValToNative(countSimResult.result!.retval!),
+      );
+      log("info", "dao_count_fetched", { count: daoCount });
+
+      if (daoCount === 0) {
+        dbService.setDaosSyncTime(new Date().toISOString());
+        return 0;
+      }
+
+      // Fetch each DAO with bounded parallelism
+      const daos: Dao[] = [];
+      const daoIds = Array.from({ length: daoCount }, (_, i) => i + 1);
+      const DAO_CHUNK_SIZE = 5;
+
+      const fetchDao = async (i: number): Promise<void> => {
+        try {
+          const daoAccount = await (server as StellarSdk.rpc.Server).getAccount(
+            relayerKeypair.publicKey(),
+          );
+          const getOp = contract.call(
+            "get_dao",
+            StellarSdk.nativeToScVal(i, { type: "u64" }),
+          );
+          const getTx = new StellarSdk.TransactionBuilder(daoAccount, {
+            fee: "100",
+            networkPassphrase: config.networkPassphrase,
+          })
+            .addOperation(getOp)
+            .setTimeout(30)
+            .build();
+
+          const getSimResult = await callWithTimeout(
+            () =>
+              simulateWithBackoff(() =>
+                (server as StellarSdk.rpc.Server).simulateTransaction(getTx),
+              ),
+            `simulate_get_dao_${i}`,
+          );
+
+          if (
+            StellarSdk.rpc.Api.isSimulationSuccess(getSimResult) &&
+            getSimResult.result?.retval
+          ) {
+            const daoData = StellarSdk.scValToNative(getSimResult.result.retval);
+            daos.push({
+              id: i,
+              name: daoData.name || `DAO ${i}`,
+              creator: daoData.creator || "",
+              membership_open: daoData.membership_open !== false,
+              members_can_propose: daoData.members_can_propose === true,
+              metadata_cid: daoData.metadata_cid || null,
+              member_count: Number(daoData.member_count || 0),
+            });
+          }
+        } catch (err) {
+          log("warn", "dao_fetch_failed", {
+            daoId: i,
+            error: (err as Error).message,
           });
         }
-      } catch (err) {
-        log("warn", "dao_fetch_failed", {
-          daoId: i,
-          error: (err as Error).message,
-        });
+      };
+
+      for (let i = 0; i < daoIds.length; i += DAO_CHUNK_SIZE) {
+        const chunk = daoIds.slice(i, i + DAO_CHUNK_SIZE);
+        await Promise.all(chunk.map((id) => fetchDao(id)));
       }
-    };
 
-    for (let i = 0; i < daoIds.length; i += DAO_CHUNK_SIZE) {
-      const chunk = daoIds.slice(i, i + DAO_CHUNK_SIZE);
-      await Promise.all(chunk.map((id) => fetchDao(id)));
-    }
+      // Save to database
+      if (daos.length > 0) {
+        dbService.upsertDaos(daos);
 
-    // Save to database
-    if (daos.length > 0) {
-      dbService.upsertDaos(daos);
-
-      // Ensure dao_create events exist
-      for (const dao of daos) {
-        ensureDaoCreateEvent(dao.id, dao);
+        // Ensure dao_create events exist
+        for (const dao of daos) {
+          ensureDaoCreateEvent(dao.id, dao);
+        }
       }
+
+      dbService.setDaosSyncTime(new Date().toISOString());
+      daosSynced.inc(daos.length);
+      serviceLastRunTime.set({ service: "dao_sync" }, Date.now() / 1000);
+      log("info", "dao_sync_complete", { synced: daos.length, total: daoCount });
+
+      return daos.length;
+    } catch (err) {
+      serviceErrors.inc({ service: "dao_sync" });
+      log("error", "dao_sync_error", { error: (err as Error).message });
+      return 0;
     }
-
-    dbService.setDaosSyncTime(new Date().toISOString());
-    daosSynced.inc(daos.length);
-    serviceLastRunTime.set({ service: "dao_sync" }, Date.now() / 1000);
-    log("info", "dao_sync_complete", { synced: daos.length, total: daoCount });
-
-    return daos.length;
-  } catch (err) {
-    serviceErrors.inc({ service: "dao_sync" });
-    log("error", "dao_sync_error", { error: (err as Error).message });
-    return 0;
-  }
+  });
 }
 
 let daoSyncInterval: NodeJS.Timeout | null = null;

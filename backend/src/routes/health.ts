@@ -11,9 +11,9 @@ import { extractAuthToken } from "../middleware/auth.js";
 import { getRateLimitMetrics } from "../middleware/rateLimit.js";
 import { getMembershipVerificationMetrics } from "../services/sync.js";
 import { log } from "../services/logger.js";
-import { getDbDiagnostics, getDbStatus } from "../services/db.js";
+import { getDbDiagnostics, getDbStatus, getDb } from "../services/db.js";
 import { getBackupStatus } from "../services/backup.js";
-import { checkRotationHealth, getSecretBackend } from "../services/secrets/index.js";
+import { getWalHealth } from "../services/walResilience.js";
 
 import { rpcPoolManager } from "../services/stellar.js";
 import { getAllCircuitBreakerMetrics } from "../services/circuit-breaker.js";
@@ -137,13 +137,30 @@ router.get("/health", async (req: Request, res: Response) => {
 router.get("/ready", async (req: Request, res: Response) => {
   try {
     const rpcStatus = await rpcHealth();
-    if (!rpcStatus.ok) {
-      return res.status(503).json({ status: "degraded", rpc: rpcStatus });
+    let dbHealth: Record<string, unknown> = { available: false };
+
+    try {
+      const database = getDb();
+      dbHealth = {
+        ...getWalHealth(database, ""),
+        status: getDbStatus(),
+      };
+    } catch (dbErr) {
+      dbHealth = { available: false, error: (dbErr as Error).message };
     }
 
-    const base: Record<string, unknown> = { status: "ready" };
+    const isRpcOk = rpcStatus.ok;
+    const isDbOk = dbHealth.available !== false;
 
-    // Only expose details if auth token provided
+    const overallStatus = isRpcOk && isDbOk ? "ready" : "degraded";
+    const httpStatus = isRpcOk && isDbOk ? 200 : 503;
+
+    const base: Record<string, unknown> = {
+      status: overallStatus,
+      rpc: rpcStatus,
+      db: dbHealth,
+    };
+
     if (config.healthExposeDetails) {
       const token = extractAuthToken(req);
       if (token === config.relayerAuthToken) {
@@ -154,7 +171,7 @@ router.get("/ready", async (req: Request, res: Response) => {
       }
     }
 
-    return res.json(base);
+    return res.status(httpStatus).json(base);
   } catch (err) {
     log("error", "ready_check_failed", { error: (err as Error).message });
     return res
@@ -210,6 +227,22 @@ router.get("/db/stats", async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /csp-report
+ * Content Security Policy violation reporting endpoint
+ * Receives CSP violation reports from browsers and logs them for monitoring
+ */
+router.post("/csp-report", (req: Request, res: Response) => {
+  try {
+    const report = req.body;
+    log("warn", "csp_violation", {
+      "csp-report": report["csp-report"] || report,
+      userAgent: req.get("user-agent"),
+      ip: req.ip,
+    });
+    res.status(204).send();
+  } catch (err) {
+    log("error", "csp_report_failed", { error: (err as Error).message });
+    res.status(400).json({ error: "Invalid CSP report" });
  * GET /debug/heap
  * Writes a V8 heap snapshot and returns it for download (admin only).
  * Used to diagnose memory leaks in the long-running relayer process.

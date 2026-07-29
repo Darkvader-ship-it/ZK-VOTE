@@ -11,6 +11,9 @@ import type {
   ErrorRequestHandler,
 } from "express";
 import { log } from "../services/logger.js";
+import { ErrorCode, type StructuredError } from "../types/index.js";
+import { ApiError } from "../utils/errors.js";
+import { config } from "../config.js";
 
 /**
  * Global error handler middleware (must be last)
@@ -24,7 +27,35 @@ export const errorHandler: ErrorRequestHandler = (
   log("error", "unhandled_error", {
     path: req.path,
     message: err.message,
+    stack: err.stack,
   });
 
-  res.status(500).json({ error: "Internal server error" });
+  const requestId = req.ctx || "unknown";
+  const timestamp = new Date().toISOString();
+
+  if (err instanceof ApiError) {
+    const errorResponse: StructuredError = {
+      code: err.code,
+      message: err.message,
+      requestId,
+      timestamp,
+    };
+
+    if (!config.genericErrors && err.details) {
+      errorResponse.details = err.details;
+    }
+
+    res.status(err.statusCode).json({ error: errorResponse });
+    return;
+  }
+
+  // Handle generic errors
+  const errorResponse: StructuredError = {
+    code: ErrorCode.INTERNAL_ERROR,
+    message: "Internal server error",
+    requestId,
+    timestamp,
+  };
+
+  res.status(500).json({ error: errorResponse });
 };

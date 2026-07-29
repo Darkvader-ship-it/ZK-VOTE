@@ -1325,13 +1325,8 @@ mod tests {
         let nullifier = U256::from_u32(&system.env, 77777);
 
         // vote_choice=true -> index 1 >= num_candidates(1) -> should panic
-        system.voting_client().vote(
-            &dao_id,
-            &proposal_id,
-            &true,
-            &nullifier,
-            &root,
-            &proof,
-        );
+        system
+            .voting_client()
+            .vote(&dao_id, &proposal_id, &true, &nullifier, &root, &proof);
     }
 }

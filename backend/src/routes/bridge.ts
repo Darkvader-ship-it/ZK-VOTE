@@ -234,6 +234,7 @@ router.get(
   queryLimiter,
   validateParams(nullifierParamsSchema),
   (async (req: Request, res: Response) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { daoId, proposalId, nullifier } = (req as any).validatedParams;
 
     try {
