@@ -22,26 +22,46 @@ import {
 } from "../services/stellar.js";
 import {
   authGuard,
+  tlsClientCertGuard,
   auditLog,
   voteLimiter,
+  walletRateLimiter,
   queryLimiter,
   validateBody,
   validateParams,
 } from "../middleware/index.js";
-import { voteSchema, proposalParamsSchema, daoParamsSchema } from "../validation/schemas.js";
+import {
+  voteSchema,
+  commitSchema,
+  proposalParamsSchema,
+  daoParamsSchema,
+} from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 import {
   getTransactionLog,
   recordTransactionLog,
   updateTransactionLogStatus,
+  recordProofCommitment,
+  getProofCommitment,
+  updateProofCommitmentStatus,
 } from "../services/db.js";
+import {
+  calculateProofHash,
+  decryptProofPayload,
+  createSubmissionReceipt,
+  getRelayerPublicKey,
+} from "../services/proof-encryption.js";
 import { votesProcessed } from "../services/metrics.js";
+import { sharedSingleFlight } from "../utils/singleflight.js";
 
 const router = Router();
 
 /**
- * POST /vote - Submit anonymous vote with ZK proof
+ * GET /relayer/pubkey - Get relayer public key for proof encryption
  */
+router.get("/relayer/pubkey", (_req: Request, res: Response) => {
+  res.json({ publicKey: getRelayerPublicKey() });
+});
 router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBody(voteSchema), (async (
   req: Request,
   res: Response,
@@ -50,162 +70,277 @@ router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBod
   const { daoId, proposalId, choice, nullifier, root, proof } =
     config.stripRequestBodies ? {} : req.body;
 
-  try {
-    log("info", "vote_request", { daoId, proposalId });
+/**
+ * POST /vote/commit - Commit to a proof hash before revealing
+ */
+router.post(
+  "/vote/commit",
+  authGuard,
+  tlsClientCertGuard,
+  walletRateLimiter,
+  validateBody(commitSchema),
+  (async (req: Request, res: Response) => {
+    const { daoId, proposalId, nullifier, commitmentHash, timestamp, walletAddress } = req.body;
 
-    // Replay protection: check local transaction log
-    if (nullifier) {
-      const existingTx = getTransactionLog(nullifier);
-      if (existingTx && (existingTx.status === "SUCCESS" || existingTx.status === "PENDING")) {
-        log("info", "vote_replay_prevented", { nullifier, txHash: existingTx.tx_hash, status: existingTx.status });
-        return res.json({
-          success: true,
-          txHash: existingTx.tx_hash,
-          status: existingTx.status === "SUCCESS" ? "SUCCESS" : "PENDING",
-          replayed: true,
-        });
+    const now = Date.now();
+    const ageSeconds = (now - timestamp) / 1000;
+
+    if (ageSeconds > config.maxProofAgeSeconds) {
+      return res.status(400).json({ error: "Proof expired: submission timestamp is too old" });
+    }
+
+    if (timestamp > now + 10000) {
+      return res.status(400).json({ error: "Invalid timestamp: timestamp is in the future" });
+    }
+
+    const existingCommitment = getProofCommitment(commitmentHash);
+    if (existingCommitment && existingCommitment.status === "REVEALED") {
+      return res.status(400).json({ error: "Proof commitment already revealed" });
+    }
+
+    recordProofCommitment(commitmentHash, nullifier, daoId, proposalId, timestamp, walletAddress);
+
+    log("info", "proof_committed", { daoId, proposalId, nullifier, commitmentHash });
+
+    res.json({
+      success: true,
+      commitmentHash,
+      status: "COMMITTED",
+      expiresAt: new Date(timestamp + config.maxProofAgeSeconds * 1000).toISOString(),
+    });
+  }) as AsyncHandler,
+);
+
+router.post(
+  "/vote",
+  authGuard,
+  tlsClientCertGuard,
+  walletRateLimiter,
+  voteLimiter,
+  validateBody(voteSchema),
+  (async (req: Request, res: Response) => {
+    let body = config.stripRequestBodies ? {} : req.body;
+
+    if (body.encryptedPayload) {
+      try {
+        body = decryptProofPayload(body.encryptedPayload);
+      } catch (err) {
+        return res.status(400).json({ error: "Failed to decrypt proof payload" });
       }
     }
 
-    // Convert inputs to Soroban types
-    let scNullifier: StellarSdk.xdr.ScVal;
-    let scRoot: StellarSdk.xdr.ScVal;
-    let scProof: StellarSdk.xdr.ScVal;
+    const { daoId, proposalId, choice, nullifier, root, proof, nonce, timestamp } = body;
+
     try {
-      scNullifier = u256ToScVal(nullifier);
-      scRoot = u256ToScVal(root);
-      scProof = proofToScVal(proof);
-    } catch (err) {
-      return res.status(400).json({ error: (err as Error).message });
-    }
+      log("info", "vote_request", { daoId, proposalId });
 
-    if (config.testMode) {
-      return res.status(400).json({ error: "Simulation failed (test mode)" });
-    }
+      // Proof freshness validation
+      if (timestamp) {
+        const now = Date.now();
+        const ageSeconds = (now - timestamp) / 1000;
+        if (ageSeconds > config.maxProofAgeSeconds) {
+          return res
+            .status(400)
+            .json({ error: "Proof expired: submission timestamp is too old" });
+        }
+        if (timestamp > now + 10000) {
+          return res
+            .status(400)
+            .json({ error: "Invalid timestamp: timestamp is in the future" });
+        }
+      }
 
-    // Build contract call
-    const contract = new StellarSdk.Contract(config.votingContractId!);
-
-    const args = [
-      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
-      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
-      StellarSdk.nativeToScVal(choice, { type: "bool" }),
-      scNullifier,
-      scRoot,
-      scProof,
-    ];
-
-    const operation = contract.call("vote", ...args);
-
-    // Serialize account fetch + build + simulate + sign + submit under sequence lock
-    // to prevent nonce race conditions between concurrent requests
-    const { sendResult, result } = await withSequenceLock(async () => {
-      // Get relayer account
-      const account = await (server as StellarSdk.rpc.Server).getAccount(
-        relayerKeypair.publicKey(),
-      );
-
-      // Build transaction
-      const tx = new StellarSdk.TransactionBuilder(account, {
-        fee: "100000",
-        networkPassphrase: config.networkPassphrase,
-      })
-        .addOperation(operation)
-        .setTimeout(30)
-        .build();
-
-      // Simulate
-      log("info", "simulate_vote", { daoId, proposalId });
-      const simResult = await callWithTimeout(
-        () =>
-          simulateWithBackoff(() =>
-            (server as StellarSdk.rpc.Server).simulateTransaction(tx),
-          ),
-        "simulate_vote",
-      );
-
-      if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
-        log("warn", "simulation_failed", {
-          daoId,
-          proposalId,
-          error: simResult.error,
-        });
-
-        let errorMessage = "Transaction simulation failed";
-        if (simResult.error) {
-          const errorStr = JSON.stringify(simResult.error);
-          if (errorStr.includes("already voted")) {
-            errorMessage = "You have already voted on this proposal";
-          } else if (errorStr.includes("voting period closed")) {
-            errorMessage = "Voting period has ended";
-          } else if (errorStr.includes("invalid proof")) {
-            errorMessage = "Invalid vote proof";
-          } else if (errorStr.includes("root must match")) {
-            errorMessage = "You are not eligible to vote on this proposal";
-          } else if (errorStr.includes("proposal not found")) {
-            errorMessage = "Proposal not found";
-          } else if (errorStr.includes("UnreachableCodeReached")) {
-            errorMessage =
-              "Invalid proof or contract error (proof verification failed)";
+      // Proof commitment validation
+      let commitmentHash: string | undefined;
+      if (proof && nullifier && timestamp) {
+        commitmentHash = calculateProofHash(proof, nullifier, timestamp, nonce);
+        const commitmentRecord = getProofCommitment(commitmentHash);
+        if (commitmentRecord) {
+          if (commitmentRecord.status === "REVEALED") {
+            return res
+              .status(400)
+              .json({ error: "Proof commitment already revealed" });
           }
+          updateProofCommitmentStatus(commitmentHash, "REVEALED");
+        }
+      }
+
+      // Replay protection: check local transaction log
+      if (nullifier) {
+        const existingTx = getTransactionLog(nullifier);
+        if (
+          existingTx &&
+          (existingTx.status === "SUCCESS" || existingTx.status === "PENDING")
+        ) {
+          log("info", "vote_replay_prevented", {
+            nullifier,
+            txHash: existingTx.tx_hash,
+            status: existingTx.status,
+          });
+          const receipt = createSubmissionReceipt(
+            existingTx.tx_hash,
+            nullifier,
+            daoId,
+            proposalId,
+            commitmentHash || nullifier,
+          );
+          return res.json({
+            success: true,
+            txHash: existingTx.tx_hash,
+            status: existingTx.status === "SUCCESS" ? "SUCCESS" : "PENDING",
+            replayed: true,
+            receipt,
+          });
+        }
+      }
+
+      // Convert inputs to Soroban types
+      let scNullifier: StellarSdk.xdr.ScVal;
+      let scRoot: StellarSdk.xdr.ScVal;
+      let scProof: StellarSdk.xdr.ScVal;
+      try {
+        scNullifier = u256ToScVal(nullifier);
+        scRoot = u256ToScVal(root);
+        scProof = proofToScVal(proof);
+      } catch (err) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+
+      if (config.testMode) {
+        return res.status(400).json({ error: "Simulation failed (test mode)" });
+      }
+
+      // Build contract call
+      const contract = new StellarSdk.Contract(config.votingContractId!);
+
+      const args = [
+        StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+        StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
+        StellarSdk.nativeToScVal(choice, { type: "bool" }),
+        scNullifier,
+        scRoot,
+        scProof,
+      ];
+
+      const operation = contract.call("vote", ...args);
+
+      // Serialize account fetch + build + simulate + sign + submit under sequence lock
+      // to prevent nonce race conditions between concurrent requests
+      const { sendResult, result } = await withSequenceLock(async () => {
+        // Get relayer account
+        const account = await (server as StellarSdk.rpc.Server).getAccount(
+          relayerKeypair.publicKey(),
+        );
+
+        // Build transaction
+        const tx = new StellarSdk.TransactionBuilder(account, {
+          fee: "100000",
+          networkPassphrase: config.networkPassphrase,
+        })
+          .addOperation(operation)
+          .setTimeout(30)
+          .build();
+
+        // Simulate
+        log("info", "simulate_vote", { daoId, proposalId });
+        const simResult = await callWithTimeout(
+          () =>
+            simulateWithBackoff(() =>
+              (server as StellarSdk.rpc.Server).simulateTransaction(tx),
+            ),
+          "simulate_vote",
+        );
+
+        if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+          log("warn", "simulation_failed", {
+            daoId,
+            proposalId,
+            error: simResult.error,
+          });
+
+          let errorMessage = "Transaction simulation failed";
+          if (simResult.error) {
+            const errorStr = JSON.stringify(simResult.error);
+            if (errorStr.includes("already voted")) {
+              errorMessage = "You have already voted on this proposal";
+            } else if (errorStr.includes("voting period closed")) {
+              errorMessage = "Voting period has ended";
+            } else if (errorStr.includes("invalid proof")) {
+              errorMessage = "Invalid vote proof";
+            } else if (errorStr.includes("root must match")) {
+              errorMessage = "You are not eligible to vote on this proposal";
+            } else if (errorStr.includes("proposal not found")) {
+              errorMessage = "Proposal not found";
+            } else if (errorStr.includes("UnreachableCodeReached")) {
+              errorMessage =
+                "Invalid proof or contract error (proof verification failed)";
+            }
+          }
+
+          throw new Error(`SIMULATION_FAILED:${errorMessage}`);
         }
 
-        throw new Error(`SIMULATION_FAILED:${errorMessage}`);
-      }
+        // Prepare and sign
+        const preparedTx = StellarSdk.rpc
+          .assembleTransaction(tx, simResult)
+          .build();
+        preparedTx.sign(relayerKeypair as StellarSdk.Keypair);
 
-      // Prepare and sign
-      const preparedTx = StellarSdk.rpc
-        .assembleTransaction(tx, simResult)
-        .build();
-      preparedTx.sign(relayerKeypair as StellarSdk.Keypair);
+        // Submit
+        log("info", "submit_vote", { daoId, proposalId });
+        const sr = await callWithTimeout(
+          () => (server as StellarSdk.rpc.Server).sendTransaction(preparedTx),
+          "send_vote",
+        );
 
-      // Submit
-      log("info", "submit_vote", { daoId, proposalId });
-      const sr = await callWithTimeout(
-        () => (server as StellarSdk.rpc.Server).sendTransaction(preparedTx),
-        "send_vote",
-      );
+        if (sr.status === "ERROR") {
+          if (nullifier) updateTransactionLogStatus(nullifier, "FAILED");
+          log("error", "submit_failed", {
+            daoId,
+            proposalId,
+            error: sr.errorResult,
+          });
+          throw new Error("SUBMIT_FAILED");
+        }
 
-      if (sr.status === "ERROR") {
-        if (nullifier) updateTransactionLogStatus(nullifier, "FAILED");
-        log("error", "submit_failed", {
+        if (nullifier && sr.hash) {
+          recordTransactionLog(nullifier, sr.hash, "PENDING");
+        }
+
+        // Wait for confirmation
+        log("info", "submitted", { txHash: sr.hash, daoId, proposalId });
+        const r = await callWithTimeout(
+          () => waitForTransaction(sr.hash),
+          "wait_for_vote",
+        );
+
+        return { sendResult: sr, result: r };
+      });
+
+      if (result.status === "SUCCESS") {
+        if (nullifier && sendResult.hash) {
+          updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
+        }
+        votesProcessed.inc({ status: "success" });
+        log("info", "vote_success", {
+          txHash: sendResult.hash,
           daoId,
           proposalId,
-          error: sr.errorResult,
         });
-        throw new Error("SUBMIT_FAILED");
-      }
-
-      if (nullifier && sr.hash) {
-        recordTransactionLog(nullifier, sr.hash, "PENDING");
-      }
-
-      // Wait for confirmation
-      log("info", "submitted", { txHash: sr.hash, daoId, proposalId });
-      const r = await callWithTimeout(
-        () => waitForTransaction(sr.hash),
-        "wait_for_vote",
-      );
-
-      return { sendResult: sr, result: r };
-    });
-
-    if (result.status === "SUCCESS") {
-      if (nullifier && sendResult.hash) {
-        updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
-      }
-      votesProcessed.inc({ status: "success" });
-      log("info", "vote_success", {
-        txHash: sendResult.hash,
-        daoId,
-        proposalId,
-      });
-      res.json({
-        success: true,
-        txHash: sendResult.hash,
-        status: result.status,
-      });
-    } else {
+        const receipt = createSubmissionReceipt(
+          sendResult.hash,
+          nullifier,
+          daoId,
+          proposalId,
+          commitmentHash || nullifier,
+        );
+        res.json({
+          success: true,
+          txHash: sendResult.hash,
+          status: result.status,
+          receipt,
+        });
+      } else {
       if (nullifier && sendResult.hash) {
         updateTransactionLogStatus(nullifier, "FAILED", sendResult.hash);
       }
@@ -281,61 +416,73 @@ router.get("/proposal/:daoId/:proposalId", queryLimiter, validateParams(proposal
   const { daoId, proposalId } = (req as any).validatedParams;
 
   try {
-    const contract = new StellarSdk.Contract(config.votingContractId!);
-    const args = [
-      StellarSdk.nativeToScVal(daoId, { type: "u64" }),
-      StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
-    ];
+    const result = await sharedSingleFlight.do(`proposal:${daoId}:${proposalId}`, async () => {
+      const contract = new StellarSdk.Contract(config.votingContractId!);
+      const args = [
+        StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+        StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
+      ];
 
-    const operation = contract.call("get_results", ...args);
+      const operation = contract.call("get_results", ...args);
 
-    const account = await (server as StellarSdk.rpc.Server).getAccount(
-      relayerKeypair.publicKey(),
-    );
-    const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100000",
-      networkPassphrase: config.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
+      const tx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
 
-    const simResult = await (
-      server as StellarSdk.rpc.Server
-    ).simulateTransaction(tx);
+      const simResult = await (
+        server as StellarSdk.rpc.Server
+      ).simulateTransaction(tx);
 
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+        throw new Error("PROPOSAL_NOT_FOUND");
+      }
+
+      // Parse results from simulation
+      const resultScVal = simResult.result?.retval;
+      if (!resultScVal) {
+        throw new Error("NO_RESULT_RETURNED");
+      }
+
+      // Parse the tuple (yes_votes, no_votes, closed)
+      const resultVec = resultScVal.vec();
+      if (!resultVec || resultVec.length < 3) {
+        throw new Error("INVALID_RESULT_FORMAT");
+      }
+
+      const yesVotes = resultVec[0].u64().toString();
+      const noVotes = resultVec[1].u64().toString();
+      const closed = resultVec[2].b();
+
+      return {
+        daoId,
+        proposalId,
+        yesVotes,
+        noVotes,
+        closed,
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    if (errMsg === "PROPOSAL_NOT_FOUND") {
       return res.status(404).json({ error: "Proposal not found" });
-    }
-
-    // Parse results from simulation
-    const resultScVal = simResult.result?.retval;
-    if (!resultScVal) {
+    } else if (errMsg === "NO_RESULT_RETURNED") {
       return res.status(500).json({ error: "No result returned" });
-    }
-
-    // Parse the tuple (yes_votes, no_votes, closed)
-    const resultVec = resultScVal.vec();
-    if (!resultVec || resultVec.length < 3) {
+    } else if (errMsg === "INVALID_RESULT_FORMAT") {
       return res.status(500).json({ error: "Invalid result format" });
     }
-
-    const yesVotes = resultVec[0].u64().toString();
-    const noVotes = resultVec[1].u64().toString();
-    const closed = resultVec[2].b();
-
-    res.json({
-      daoId,
-      proposalId,
-      yesVotes,
-      noVotes,
-      closed,
-    });
-  } catch (err) {
     log("error", "proposal_fetch_error", {
       daoId,
       proposalId,
-      error: (err as Error).message,
+      error: errMsg,
     });
     res.status(500).json({ error: "Failed to fetch proposal results" });
   }
@@ -351,45 +498,55 @@ router.get("/root/:daoId", queryLimiter, validateParams(daoParamsSchema), (async
   const { daoId } = (req as any).validatedParams;
 
   try {
-    const contract = new StellarSdk.Contract(config.treeContractId!);
-    const args = [StellarSdk.nativeToScVal(daoId, { type: "u64" })];
+    const result = await sharedSingleFlight.do(`root:${daoId}`, async () => {
+      const contract = new StellarSdk.Contract(config.treeContractId!);
+      const args = [StellarSdk.nativeToScVal(daoId, { type: "u64" })];
 
-    const operation = contract.call("get_root", ...args);
+      const operation = contract.call("get_root", ...args);
 
-    const account = await (server as StellarSdk.rpc.Server).getAccount(
-      relayerKeypair.publicKey(),
-    );
-    const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100000",
-      networkPassphrase: config.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
+      const tx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
 
-    const simResult = await (
-      server as StellarSdk.rpc.Server
-    ).simulateTransaction(tx);
+      const simResult = await (
+        server as StellarSdk.rpc.Server
+      ).simulateTransaction(tx);
 
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+        throw new Error("DAO_NOT_FOUND");
+      }
+
+      const resultScVal = simResult.result?.retval;
+      if (!resultScVal) {
+        throw new Error("NO_RESULT_RETURNED");
+      }
+
+      const root = scValToU256Hex(resultScVal);
+
+      return {
+        daoId,
+        root,
+      };
+    });
+
+    res.json(result);
+  } catch (err) {
+    const errMsg = (err as Error).message;
+    if (errMsg === "DAO_NOT_FOUND") {
       return res
         .status(404)
         .json({ error: "DAO not found or tree not initialized" });
-    }
-
-    const resultScVal = simResult.result?.retval;
-    if (!resultScVal) {
+    } else if (errMsg === "NO_RESULT_RETURNED") {
       return res.status(500).json({ error: "No result returned" });
     }
-
-    const root = scValToU256Hex(resultScVal);
-
-    res.json({
-      daoId,
-      root,
-    });
-  } catch (err) {
-    log("error", "root_fetch_error", { daoId, error: (err as Error).message });
+    log("error", "root_fetch_error", { daoId, error: errMsg });
     res.status(500).json({ error: "Failed to fetch Merkle root" });
   }
 }) as AsyncHandler);
