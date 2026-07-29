@@ -9,7 +9,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
 import { log } from "../services/logger.js";
-import { masterKeyGuard, validateBody, validateParams } from "../middleware/index.js";
+import { masterKeyGuard, validateBody, validateParams, bodyLimit } from "../middleware/index.js";
 import {
   createNewToken,
   revokeToken,
@@ -72,6 +72,7 @@ const auditQuerySchema = z.object({
  */
 router.post(
   "/auth/tokens",
+  bodyLimit("100kb"),
   masterKeyGuard,
   validateBody(createTokenSchema),
   (async (req: Request, res: Response) => {
@@ -202,6 +203,7 @@ router.get(
  */
 router.post(
   "/auth/tokens/:tokenId/revoke",
+  bodyLimit("100kb"),
   masterKeyGuard,
   validateParams(tokenIdSchema),
   (async (req: Request, res: Response) => {
@@ -240,6 +242,7 @@ router.post(
  */
 router.post(
   "/auth/tokens/:tokenId/rotate",
+  bodyLimit("100kb"),
   masterKeyGuard,
   validateParams(tokenIdSchema),
   (async (req: Request, res: Response) => {
@@ -286,6 +289,7 @@ router.post(
  */
 router.post(
   "/auth/tokens/rotate",
+  bodyLimit("100kb"),
   masterKeyGuard,
   (async (_req: Request, res: Response) => {
     if (!config.tokenRotationEnabled) {
@@ -317,6 +321,7 @@ router.post(
  */
 router.post(
   "/auth/maintenance",
+  bodyLimit("100kb"),
   masterKeyGuard,
   (async (_req: Request, res: Response) => {
     const results = runMaintenanceTasks();

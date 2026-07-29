@@ -29,6 +29,7 @@ import {
   queryLimiter,
   validateBody,
   validateParams,
+  bodyLimit,
 } from "../middleware/index.js";
 import {
   voteSchema,
@@ -155,6 +156,7 @@ router.get("/relayer/pubkey", (_req: Request, res: Response) => {
  */
 router.post(
   "/vote/commit",
+  bodyLimit("5kb"),
   authGuard,
   tlsClientCertGuard,
   walletRateLimiter,
@@ -227,6 +229,7 @@ router.post(
 
 router.post(
   "/vote",
+  bodyLimit("5kb"),
   authGuard,
   tlsClientCertGuard,
   walletRateLimiter,

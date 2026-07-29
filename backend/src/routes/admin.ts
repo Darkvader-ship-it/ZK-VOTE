@@ -6,7 +6,7 @@
  * privileged graceful-shutdown trigger for controlled restarts.
  */
 import { Router, type Request, type Response } from "express";
-import { authGuard, queryLimiter } from "../middleware/index.js";
+import { authGuard, queryLimiter, bodyLimit } from "../middleware/index.js";
 import {
   getAuditLogs,
   verifyAuditChain,
@@ -42,7 +42,7 @@ export function registerShutdownHandler(handler: ShutdownHandler): void {
  *
  * Body (optional): { "reason": "<string>" }
  */
-router.post("/admin/shutdown", authGuard, queryLimiter, (async (
+router.post("/admin/shutdown", bodyLimit("100kb"), authGuard, queryLimiter, (async (
   req: Request,
   res: Response,
 ) => {
