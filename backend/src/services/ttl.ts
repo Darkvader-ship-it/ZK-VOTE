@@ -16,6 +16,7 @@ import {
   isInGracePeriod,
   formatRemaining,
 } from "./ttl-checker.js";
+import { markDegraded, markHealthy } from "./service-health.js";
 
 const CONTRACT_META: Array<{
   envKey: keyof typeof config;
@@ -458,18 +459,24 @@ export function startTTLRenewal(intervalMs?: number): void {
 
   const interval = intervalMs ?? config.ttlRenewalIntervalMs;
 
-  renewAllTTLs().catch((err) => {
-    log("error", "ttl_renewal_initial_failed", {
-      error: (err as Error).message,
-    });
-  });
-
-  renewalTimerId = setInterval(() => {
-    renewAllTTLs().catch((err) => {
-      log("error", "ttl_renewal_periodic_failed", {
+  renewAllTTLs()
+    .then(() => markHealthy("ttl_renewal"))
+    .catch((err) => {
+      markDegraded("ttl_renewal", (err as Error).message);
+      log("error", "ttl_renewal_initial_failed", {
         error: (err as Error).message,
       });
     });
+
+  renewalTimerId = setInterval(() => {
+    renewAllTTLs()
+      .then(() => markHealthy("ttl_renewal"))
+      .catch((err) => {
+        markDegraded("ttl_renewal", (err as Error).message);
+        log("error", "ttl_renewal_periodic_failed", {
+          error: (err as Error).message,
+        });
+      });
   }, interval);
 
   const intervalDays = (interval / (24 * 60 * 60 * 1000)).toFixed(1);

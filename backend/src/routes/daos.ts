@@ -18,6 +18,10 @@ import {
   auditLog,
   queryLimiter,
   validateParams,
+  noteDegraded,
+} from "../middleware/index.js";
+import { getServiceHealth } from "../services/service-health.js";
+import { daoParamsSchema } from "../validation/schemas.js";
   validateQuery,
 } from "../middleware/index.js";
 import { daoParamsSchema, daosQuerySchema } from "../validation/schemas.js";
@@ -35,6 +39,16 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (req: R
     const allDaos = dbService.getAllCachedDaos();
     let filteredDaos = allDaos;
 
+    if (!userAddress) {
+      const syncHealth = getServiceHealth("dao_sync") as { state: string };
+      if (syncHealth.state !== "healthy") {
+        noteDegraded("dao_sync");
+      }
+      return res.json({
+        daos,
+        total: daos.length,
+        lastSync,
+        cached: true,
       if (user) {
       if (!/^[GC][A-Z2-7]{55}$/.test(user)) {
         return res.status(400).json({ error: "Invalid Stellar address format" });

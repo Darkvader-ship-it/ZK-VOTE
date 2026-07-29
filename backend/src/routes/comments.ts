@@ -27,6 +27,8 @@ import {
   queryLimiter,
   validateBody,
   validateParams,
+  noteDegraded,
+  sendPartial,
   validateQuery,
 } from "../middleware/index.js";
 import {
@@ -46,6 +48,14 @@ import {
   getHiddenCommentIds,
 } from "../services/anti-spam.js";
 import { commentsSubmitted } from "../services/metrics.js";
+import {
+  markDegraded,
+  markHealthy,
+  markUnavailable,
+  setLkg,
+  getLkg,
+  commentsLkgKey,
+} from "../services/service-health.js";
 
 const router = Router();
 
@@ -502,6 +512,10 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposal
           hidden: hiddenIds.has(c.id),
         }));
 
+        const payload = { comments: filtered, total: filtered.length };
+        setLkg(commentsLkgKey(daoId, proposalId), payload);
+        markHealthy("comments");
+        res.json(payload);
         const total = filtered.length;
         const hasMore = total === limit;
 
@@ -527,12 +541,47 @@ router.get("/comments/:daoId/:proposalId", queryLimiter, validateParams(proposal
       res.status(400).json({ error: "Failed to get comments" });
     }
   } catch (err) {
+    const message = (err as Error).message;
     log("error", "get_comments_failed", {
       daoId,
       proposalId,
-      error: (err as Error).message,
+      error: message,
     });
-    res.status(500).json({ error: "Failed to fetch comments" });
+
+    // Disable comments UX when contract/RPC unavailable — serve LKG if present
+    if (!config.commentsContractId) {
+      markUnavailable("comments", "comments contract not configured");
+      noteDegraded("comments");
+      return res.status(503).json({
+        error: "Comments system unavailable",
+        disabled: true,
+      });
+    }
+
+    markDegraded("comments", message);
+    noteDegraded("comments");
+    const cached = getLkg<{ comments: unknown[]; total: number }>(
+      commentsLkgKey(daoId, proposalId),
+    );
+    if (cached) {
+      return sendPartial(
+        res,
+        {
+          comments: cached.comments,
+          total: cached.total,
+          stale: true,
+          source: "last_known_good",
+        },
+        ["comments"],
+      );
+    }
+
+    res.status(503).json({
+      error: "Comments temporarily unavailable",
+      disabled: true,
+      comments: [],
+      total: 0,
+    });
   }
 }) as AsyncHandler);
 

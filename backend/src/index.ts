@@ -68,6 +68,7 @@ import {
   requestLogger,
   errorHandler,
   graduatedSlowDown,
+  degradationContext,
   metricsMiddleware,
 } from "./middleware/index.js";
 import { metricsMiddleware } from "./middleware/metrics.js";
@@ -134,11 +135,16 @@ app.use(
 // Metrics middleware (before other middleware to capture all requests)
 app.use(metricsMiddleware);
 
+// Request-scoped degradation tracking (#204)
+app.use(degradationContext);
+
 // Security: CORS configuration
 const corsOrigins = config.corsOrigins === "*" ? "*" : config.corsOrigins;
 const corsOptions: cors.CorsOptions = {
   origin: corsOrigins,
   methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth"],
+  exposedHeaders: ["X-Service-Degraded", "X-Service-Status"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Relayer-Auth", "X-CSRF-Token"],
   maxAge: 86400, // 24 hours
 };
