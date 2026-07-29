@@ -157,6 +157,21 @@ const walletKeyGenerator = (req: Express.Request): string => {
 /**
  * Rate limiter for vote submissions per wallet address
  * Default 5 per minute per wallet address
+ *
+ * NOTE (#131): this and every limiter below use express-rate-limit's default
+ * in-memory MemoryStore (or ClusterRateLimitStore when RELAYER_CLUSTER is
+ * enabled, which only shares state across worker processes on the *same*
+ * host). Neither is a true distributed store: when the backend runs as
+ * multiple separate instances behind a load balancer (e.g. Fly.io scaling
+ * across machines), each instance still counts independently, so the
+ * effective limit is multiplied by the instance count. Fixing that requires
+ * a shared external store (e.g. Redis via `rate-limit-redis`), which is a
+ * new runtime dependency and real infra work — intentionally out of scope
+ * for this pass. What's included here instead: both limiters now emit the
+ * standard `RateLimit-*` headers plus the legacy `X-RateLimit-Remaining` /
+ * `X-RateLimit-Reset` headers (previously only some limiters set the legacy
+ * form), so clients can see and react to their remaining budget regardless
+ * of which store ends up backing this later.
  */
 export const walletRateLimiter = isTestMode
   ? noopMiddleware
@@ -165,7 +180,7 @@ export const walletRateLimiter = isTestMode
       max: 5,
       message: { error: "Too many proof submissions for this wallet address, please try again later" },
       standardHeaders: true,
-      legacyHeaders: false,
+      legacyHeaders: true,
       keyGenerator: walletKeyGenerator,
     });
 
