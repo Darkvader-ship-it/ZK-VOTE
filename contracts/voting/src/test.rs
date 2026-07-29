@@ -3659,3 +3659,132 @@ fn test_quadratic_tally_length_mismatch_fails() {
     let tallies = soroban_sdk::vec![&env, 5u64, 3u64]; // one short
     voting_client.record_qv_tally(&1u64, &proposal_id, &proposal_ids, &tallies, &proof);
 }
+
+/// Issue #64: nullifiers are election-scoped by (dao_id, proposal_id).
+/// Using the same nullifier hash in election A must not mark it used in election B.
+#[test]
+fn test_nullifier_domain_separation_across_elections() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    sbt_client.set_member(&2u64, &member, &true);
+    let root = U256::from_u32(&env, 4242);
+    tree_client.set_root(&1u64, &root);
+    tree_client.set_root(&2u64, &root);
+    registry_client.set_admin(&1u64, &admin);
+    registry_client.set_admin(&2u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+    voting_client.set_vk(&2u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let election_a = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Election A"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+    env.ledger().set_timestamp(now + ELECTION_CREATION_COOLDOWN);
+    let now2 = env.ledger().timestamp();
+    let election_b = voting_client.create_proposal(
+        &2u64,
+        &String::from_str(&env, "Election B"),
+        &String::from_str(&env, ""),
+        &(now2 + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    let shared_nullifier = U256::from_u32(&env, 0xDEAD);
+    let proof = create_dummy_proof(&env);
+    let prop_a = voting_client.get_proposal(&1u64, &election_a);
+    let prop_b = voting_client.get_proposal(&2u64, &election_b);
+
+    // Vote in election A
+    voting_client.vote(
+        &1u64,
+        &election_a,
+        &true,
+        &shared_nullifier,
+        &prop_a.eligible_root,
+        &proof,
+    );
+
+    // Scoped queries: used in A, unused in B
+    assert!(voting_client.is_nullifier_used(&1u64, &election_a, &shared_nullifier));
+    assert!(voting_client.has_nullifier_been_used(&1u64, &election_a, &shared_nullifier));
+    assert!(!voting_client.is_nullifier_used(&2u64, &election_b, &shared_nullifier));
+    assert!(!voting_client.has_nullifier_been_used(&2u64, &election_b, &shared_nullifier));
+
+    // Same nullifier value must still be votable in election B (no global DoS)
+    voting_client.vote(
+        &2u64,
+        &election_b,
+        &false,
+        &shared_nullifier,
+        &prop_b.eligible_root,
+        &proof,
+    );
+    assert!(voting_client.is_nullifier_used(&2u64, &election_b, &shared_nullifier));
+}
+
+/// Issue #64: migrate LegacyNullifierUsed(n) → Nullifier(dao, proposal, n).
+#[test]
+fn test_migrate_nullifier_to_election_scope() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+
+    sbt_client.set_member(&1u64, &member, &true);
+    let root = U256::from_u32(&env, 111);
+    tree_client.set_root(&1u64, &root);
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Migrate election"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    let nullifier = U256::from_u32(&env, 777);
+    // Seed a legacy flat nullifier entry directly in storage
+    env.as_contract(&voting_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::LegacyNullifierUsed(nullifier.clone()), &true);
+    });
+
+    assert!(!voting_client.is_nullifier_used(&1u64, &proposal_id, &nullifier));
+
+    let migrated = voting_client.migrate_nullifier(
+        &1u64,
+        &proposal_id,
+        &nullifier,
+        &admin,
+    );
+    assert!(migrated);
+    assert!(voting_client.is_nullifier_used(&1u64, &proposal_id, &nullifier));
+
+    // Second migrate is a no-op (legacy already removed)
+    let migrated_again = voting_client.migrate_nullifier(
+        &1u64,
+        &proposal_id,
+        &nullifier,
+        &admin,
+    );
+    assert!(!migrated_again);
+}

@@ -217,6 +217,45 @@ app.use(errorHandler);
 
 let backgroundServicesStarted = false;
 
+    // Keep the startup banner on stdout for human-readable output
+    console.log(`\nZKVote Relayer running on http://localhost:${PORT}`);
+
+    logger.info("endpoints_registered", {
+      core: [
+        "/health",
+        "/ready",
+        "/config",
+        "/vote",
+        "/proposal/:dao/:prop",
+        "/nullifier/:daoId/:proposalId/:nullifier",
+        "/root/:dao",
+        "/events/:daoId",
+        "/events/notify",
+        "/indexer/status",
+      ],
+      comments: [
+        "/comment/anonymous",
+        "/comments/:dao/:prop",
+        "/comments/:dao/:prop/nonce",
+        "/comment/:dao/:prop/:id",
+        "/comment/edit",
+        "/comment/delete",
+      ],
+      bridge: [
+        "/bridge/vote",
+        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
+        "/bridge/relay",
+      ],
+      ipfs: config.ipfsEnabled
+        ? [
+            "/ipfs/image",
+            "/ipfs/metadata",
+            "/ipfs/:cid",
+            "/ipfs/image/:cid",
+            "/ipfs/health",
+          ]
+        : [],
+    });
 async function startBackgroundServices(): Promise<void> {
   if (backgroundServicesStarted) return;
   backgroundServicesStarted = true;
