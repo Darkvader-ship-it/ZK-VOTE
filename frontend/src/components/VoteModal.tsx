@@ -10,7 +10,7 @@ import {
 } from "./ui/Card";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import { initializeContractClients } from "../lib/contracts";
-import { relayerFetch } from "../lib/api";
+import { relayerFetch, parseApiError, getApiErrorCode, ErrorCode } from "../lib/api";
 import {
   generateVoteProof,
   formatProofForSoroban,
@@ -246,11 +246,12 @@ export default function VoteModal({
 
       if (!response.ok) {
         const errorData = await response.json();
-        const errorMsg =
-          errorData.error || "Failed to submit vote through relay";
+        const errorMsg = parseApiError(errorData);
+        const errorCode = getApiErrorCode(errorData);
 
         // Detect double-vote error
         if (
+          errorCode === ErrorCode.VOTE_ALREADY_CAST ||
           errorMsg.includes("already voted") ||
           errorMsg.includes("UnreachableCodeReached")
         ) {

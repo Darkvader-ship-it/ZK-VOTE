@@ -4,7 +4,7 @@
  * Handles anonymous vote submission with ZK proofs and proposal results retrieval.
  */
 
-import { Router, type Request, type Response } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
 
 import { config } from "../config.js";
@@ -30,6 +30,9 @@ import {
   validateBody,
   validateParams,
 } from "../middleware/index.js";
+import { voteSchema, proposalParamsSchema, daoParamsSchema } from "../validation/schemas.js";
+import { type AsyncHandler, ErrorCode } from "../types/index.js";
+import { ApiError } from "../utils/errors.js";
 import {
   voteSchema,
   commitSchema,
@@ -65,6 +68,7 @@ router.get("/relayer/pubkey", (_req: Request, res: Response) => {
 router.post("/vote", authGuard, auditLog("vote_relay"), voteLimiter, validateBody(voteSchema), (async (
   req: Request,
   res: Response,
+  next: NextFunction
 ) => {
   // Validated by voteSchema middleware
   const { daoId, proposalId, choice, nullifier, root, proof } =
@@ -150,6 +154,29 @@ router.post(
         }
       }
 
+        let errorMessage = "Transaction simulation failed";
+        let errorCode = ErrorCode.INTERNAL_ERROR;
+        if (simResult.error) {
+          const errorStr = JSON.stringify(simResult.error);
+          if (errorStr.includes("already voted")) {
+            errorMessage = "You have already voted on this proposal";
+            errorCode = ErrorCode.VOTE_ALREADY_CAST;
+          } else if (errorStr.includes("voting period closed")) {
+            errorMessage = "Voting period has ended";
+            errorCode = ErrorCode.VOTING_PERIOD_CLOSED;
+          } else if (errorStr.includes("invalid proof")) {
+            errorMessage = "Invalid vote proof";
+            errorCode = ErrorCode.INVALID_PROOF;
+          } else if (errorStr.includes("root must match")) {
+            errorMessage = "You are not eligible to vote on this proposal";
+            errorCode = ErrorCode.NOT_ELIGIBLE;
+          } else if (errorStr.includes("proposal not found")) {
+            errorMessage = "Proposal not found";
+            errorCode = ErrorCode.PROPOSAL_NOT_FOUND;
+          } else if (errorStr.includes("UnreachableCodeReached")) {
+            errorMessage =
+              "Invalid proof or contract error (proof verification failed)";
+            errorCode = ErrorCode.INVALID_PROOF;
       // Proof commitment validation
       let commitmentHash: string | undefined;
       if (proof && nullifier && timestamp) {
@@ -163,6 +190,8 @@ router.post(
           }
           updateProofCommitmentStatus(commitmentHash, "REVEALED");
         }
+
+        throw new ApiError(400, errorCode, errorMessage, simResult.error);
       }
 
       // Replay protection: check local transaction log
@@ -365,44 +394,45 @@ router.post(
       stack: (err as Error).stack,
     });
 
+    if (err instanceof ApiError) {
+      return next(err);
+    }
+
     const errMsg = (err as Error).message || "";
     let statusCode = 500;
+    let errorCode = ErrorCode.INTERNAL_ERROR;
     let userMessage = "Internal server error";
 
-    if (errMsg.startsWith("SIMULATION_FAILED:")) {
-      statusCode = 400;
-      userMessage = errMsg.slice("SIMULATION_FAILED:".length);
-    } else if (errMsg === "SUBMIT_FAILED") {
+    if (errMsg === "SUBMIT_FAILED") {
       statusCode = 500;
       userMessage = "Transaction submission failed";
     } else if (errMsg.includes("Timeout:")) {
       statusCode = 504;
+      errorCode = ErrorCode.TIMEOUT;
       userMessage = "Request timeout - please try again";
     } else if (errMsg.includes("Transaction not found after timeout")) {
       statusCode = 504;
+      errorCode = ErrorCode.TIMEOUT;
       userMessage =
         "Transaction confirmation timeout - vote may have succeeded, please check proposal results";
     } else if (errMsg.includes("getAccount")) {
       statusCode = 503;
+      errorCode = ErrorCode.SERVICE_UNAVAILABLE;
       userMessage = "Blockchain RPC temporarily unavailable - please retry";
     } else if (
       errMsg.includes("ECONNREFUSED") ||
       errMsg.includes("ETIMEDOUT")
     ) {
       statusCode = 503;
+      errorCode = ErrorCode.SERVICE_UNAVAILABLE;
       userMessage = "Network error - please retry";
     } else if (errMsg.includes("sequence")) {
       statusCode = 503;
+      errorCode = ErrorCode.SERVICE_UNAVAILABLE;
       userMessage = "Transaction sequence error - please retry";
     }
 
-    res
-      .status(statusCode)
-      .json(
-        config.genericErrors
-          ? { error: userMessage }
-          : { error: userMessage, details: errMsg },
-      );
+    return next(new ApiError(statusCode, errorCode, userMessage, errMsg));
   }
 }) as AsyncHandler);
 
@@ -412,6 +442,7 @@ router.post(
 router.get("/proposal/:daoId/:proposalId", queryLimiter, validateParams(proposalParamsSchema), (async (
   req: Request,
   res: Response,
+  next: NextFunction
 ) => {
   const { daoId, proposalId } = (req as any).validatedParams;
 
@@ -471,20 +502,22 @@ router.get("/proposal/:daoId/:proposalId", queryLimiter, validateParams(proposal
 
     res.json(result);
   } catch (err) {
+    if (err instanceof ApiError) return next(err);
+    
     const errMsg = (err as Error).message;
     if (errMsg === "PROPOSAL_NOT_FOUND") {
-      return res.status(404).json({ error: "Proposal not found" });
+      return next(new ApiError(404, ErrorCode.PROPOSAL_NOT_FOUND, "Proposal not found"));
     } else if (errMsg === "NO_RESULT_RETURNED") {
-      return res.status(500).json({ error: "No result returned" });
+      return next(new ApiError(500, ErrorCode.INTERNAL_ERROR, "No result returned"));
     } else if (errMsg === "INVALID_RESULT_FORMAT") {
-      return res.status(500).json({ error: "Invalid result format" });
+      return next(new ApiError(500, ErrorCode.INTERNAL_ERROR, "Invalid result format"));
     }
     log("error", "proposal_fetch_error", {
       daoId,
       proposalId,
       error: errMsg,
     });
-    res.status(500).json({ error: "Failed to fetch proposal results" });
+    return next(new ApiError(500, ErrorCode.INTERNAL_ERROR, "Failed to fetch proposal results", errMsg));
   }
 }) as AsyncHandler);
 
@@ -494,6 +527,7 @@ router.get("/proposal/:daoId/:proposalId", queryLimiter, validateParams(proposal
 router.get("/root/:daoId", queryLimiter, validateParams(daoParamsSchema), (async (
   req: Request,
   res: Response,
+  next: NextFunction
 ) => {
   const { daoId } = (req as any).validatedParams;
 
@@ -538,16 +572,16 @@ router.get("/root/:daoId", queryLimiter, validateParams(daoParamsSchema), (async
 
     res.json(result);
   } catch (err) {
+    if (err instanceof ApiError) return next(err);
+    
     const errMsg = (err as Error).message;
     if (errMsg === "DAO_NOT_FOUND") {
-      return res
-        .status(404)
-        .json({ error: "DAO not found or tree not initialized" });
+      return next(new ApiError(404, ErrorCode.DAO_NOT_FOUND, "DAO not found or tree not initialized"));
     } else if (errMsg === "NO_RESULT_RETURNED") {
-      return res.status(500).json({ error: "No result returned" });
+      return next(new ApiError(500, ErrorCode.INTERNAL_ERROR, "No result returned"));
     }
     log("error", "root_fetch_error", { daoId, error: errMsg });
-    res.status(500).json({ error: "Failed to fetch Merkle root" });
+    return next(new ApiError(500, ErrorCode.INTERNAL_ERROR, "Failed to fetch Merkle root", errMsg));
   }
 }) as AsyncHandler);
 
