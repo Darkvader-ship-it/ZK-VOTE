@@ -25,6 +25,7 @@ export interface CommentWithContent extends CommentInfo {
   content: CommentMetadata | null;
   replies: CommentWithContent[];
   isCollapsed: boolean;
+  isPending?: boolean;
 }
 
 // Anonymous comment tracking (stored in localStorage)
