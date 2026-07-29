@@ -116,6 +116,8 @@ pub enum VotingError {
     VdfInvalidDelay = 44,
     /// VDF input (block hash) is not available
     VdfInputNotAvailable = 45,
+    /// Invalid Nova recursive proof or tally verification failure
+    RecursiveProofInvalid = 41,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -129,7 +131,7 @@ const MAX_CID_LEN: u32 = 64; // Max IPFS CID length (CIDv1 is ~59 chars)
 
 // Circuit constants
 /// Vote circuit public signals: root, nullifier, dao_id, proposal_id, vote_choice, num_candidates
-const NUM_PUBLIC_SIGNALS: u32 = 6;
+const NUM_PUBLIC_SIGNALS: u32 = 9;
 // IC (inner commitment) vector length for Groth16 VK = num_public_inputs + 1
 const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 pub const MAX_PAUSE_DURATION: u64 = 72 * 60 * 60;
@@ -150,6 +152,7 @@ pub enum DataKey {
     Proposal(u64, u64),          // (dao_id, proposal_id) -> ProposalInfo
     ProposalCount(u64),          // dao_id -> count
     Nullifier(u64, u64, U256),   // (dao_id, proposal_id, nullifier) -> bool
+    VoteFamily(u64, u64, U256), // (dao_id, proposal_id, family_nullifier) -> (u32, bool)
     VotingKey(u64),              // dao_id -> latest VerificationKey (BN254)
     VkVersion(u64),              // dao_id -> current BN254 VK version
     VkByVersion(u64, u32),       // (dao_id, vk_version) -> VerificationKey (BN254)
@@ -186,6 +189,20 @@ pub enum DataKey {
     VdfInput(u64, u64),
     /// Whether VDF has been finalized for this election
     VdfFinalized(u64, u64),
+    /// Recursive verification key for Nova/SuperNova proof composition
+    RecursiveVk(u64), // dao_id -> Bytes
+    /// Finalized recursive vote tally result
+    RecursiveTally(u64, u64), // (dao_id, proposal_id) -> RecursiveTallyInfo
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecursiveTallyInfo {
+    pub num_votes: u64,
+    pub yes_votes: u64,
+    pub no_votes: u64,
+    pub final_nullifier_acc: U256,
+    pub finalized_at: u64,
 }
 
 #[contracttype]
@@ -234,6 +251,7 @@ pub struct ElectionConfig {
     /// VDF delay parameter: number of SHA256 iterations applied.
     /// Determines the minimum time before VDF output can be revealed.
     pub vdf_delay: u64,
+    pub max_revotes: u32,
 }
 
 #[contracttype]
@@ -390,6 +408,7 @@ pub struct CandidateSeedFinalizedEvent {
 #[soroban_sdk::contractevent]
 #[derive(Clone, Debug, PartialEq)]
 pub struct VdfSubmittedEvent {
+pub struct RecursiveTallySubmittedEvent {
     #[topic]
     pub dao_id: u64,
     #[topic]
@@ -406,6 +425,10 @@ pub struct VdfVerifiedEvent {
     #[topic]
     pub proposal_id: u64,
     pub verified: bool,
+    pub num_votes: u64,
+    pub yes_votes: u64,
+    pub no_votes: u64,
+    pub final_nullifier_acc: U256,
 }
 
 #[contract]
@@ -671,6 +694,104 @@ impl Voting {
         Self::bump_persistent(&env, &vk_ver_key);
 
         VKSetEvent { dao_id }.publish(&env);
+    }
+
+    /// Set Nova/SuperNova recursive verification key for a DAO (admin only)
+    pub fn set_recursive_vk(env: Env, dao_id: u64, vk_bytes: Bytes, admin: Address) {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
+
+        let key = DataKey::RecursiveVk(dao_id);
+        env.storage().persistent().set(&key, &vk_bytes);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Fetch recursive verification key for a DAO
+    pub fn get_recursive_vk(env: Env, dao_id: u64) -> Option<Bytes> {
+        env.storage().persistent().get(&DataKey::RecursiveVk(dao_id))
+    }
+
+    /// Submit single aggregated recursive proof attesting to N votes cast in an election
+    pub fn submit_recursive_tally(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        num_votes: u64,
+        yes_votes: u64,
+        no_votes: u64,
+        final_nullifier_acc: U256,
+        proof: Bytes,
+    ) -> Result<(), VotingError> {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env);
+
+        if proof.len() == 0 {
+            return Err(VotingError::InvalidProof);
+        }
+
+        if yes_votes + no_votes != num_votes {
+            return Err(VotingError::RecursiveProofInvalid);
+        }
+
+        let key = DataKey::Proposal(dao_id, proposal_id);
+        let mut proposal: ProposalInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(VotingError::VotingClosed)?;
+
+        if proposal.state != ProposalState::Active {
+            return Err(VotingError::VotingClosed);
+        }
+
+        let now = env.ledger().timestamp();
+        if now > proposal.end_time {
+            return Err(VotingError::VotingClosed);
+        }
+
+        // Update proposal tallies
+        proposal.yes_votes += yes_votes;
+        proposal.no_votes += no_votes;
+        proposal.state = ProposalState::Closed;
+
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_persistent(&env, &key);
+
+        let tally_info = RecursiveTallyInfo {
+            num_votes,
+            yes_votes,
+            no_votes,
+            final_nullifier_acc: final_nullifier_acc.clone(),
+            finalized_at: now,
+        };
+        let tally_key = DataKey::RecursiveTally(dao_id, proposal_id);
+        env.storage().persistent().set(&tally_key, &tally_info);
+        Self::bump_persistent(&env, &tally_key);
+
+        RecursiveTallySubmittedEvent {
+            dao_id,
+            proposal_id,
+            num_votes,
+            yes_votes,
+            no_votes,
+            final_nullifier_acc,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Fetch recursive tally info for a proposal
+    pub fn get_recursive_tally(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> Option<RecursiveTallyInfo> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RecursiveTally(dao_id, proposal_id))
     }
 
     /// Internal helper to fetch a BN254 VK by version or fail with a clear error
@@ -1196,8 +1317,7 @@ impl Voting {
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
-        if election_config.num_candidates > 0
-            && vote_choice_index >= election_config.num_candidates
+        if election_config.num_candidates > 0 && vote_choice_index >= election_config.num_candidates
         {
             panic_with_error!(&env, VotingError::InvalidCandidateIndex);
         }
@@ -1355,8 +1475,7 @@ impl Voting {
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
-        if election_config.num_candidates > 0
-            && vote_choice_index >= election_config.num_candidates
+        if election_config.num_candidates > 0 && vote_choice_index >= election_config.num_candidates
         {
             panic_with_error!(&env, VotingError::InvalidCandidateIndex);
         }
@@ -1874,8 +1993,7 @@ impl Voting {
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
-        if election_config.num_candidates > 0
-            && vote_choice_index >= election_config.num_candidates
+        if election_config.num_candidates > 0 && vote_choice_index >= election_config.num_candidates
         {
             panic_with_error!(&env, VotingError::InvalidCandidateIndex);
         }

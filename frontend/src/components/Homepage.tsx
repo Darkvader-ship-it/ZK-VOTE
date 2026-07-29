@@ -7,34 +7,34 @@ export function Homepage() {
   return (
     <div className="animate-fade-in">
       {/* Hero Section */}
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-200px)]">
-        <div className="text-center max-w-4xl space-y-8">
-          <div className="space-y-6">
-            <h1 className="text-5xl md:text-7xl font-bold tracking-tighter leading-[1.1]">
+      <div className="flex flex-col items-center justify-center min-h-[calc(100dvh-140px)] py-12 px-4">
+        <div className="text-center max-w-4xl space-y-6 sm:space-y-8 w-full">
+          <div className="space-y-4 sm:space-y-6">
+            <h1 className="text-3xl sm:text-5xl md:text-7xl font-bold tracking-tighter leading-[1.15] break-words">
               Private voting for
               <br />
               <span className="bg-clip-text text-transparent bg-gradient-to-r from-foreground to-muted-foreground">
                 decentralized organizations
               </span>
             </h1>
-            <p className="text-xl text-muted-foreground max-w-[700px] mx-auto leading-relaxed">
+            <p className="text-base sm:text-xl text-muted-foreground max-w-[700px] mx-auto leading-relaxed">
               Zero-knowledge proof voting on Stellar. Cast your vote privately
               while maintaining full verifiability through Groth16 SNARKs.
             </p>
           </div>
-          <div className="flex items-center justify-center gap-4 pt-4">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 pt-2 sm:pt-4 w-full max-w-sm sm:max-w-none mx-auto">
             <Button
               onClick={() => navigate("/daos/")}
               size="lg"
-              className="h-12 px-8 text-base"
+              className="w-full sm:w-auto min-h-[48px] px-8 text-base font-semibold"
             >
               Start voting
             </Button>
             <Button
-              variant="ghost"
+              variant="outline"
               size="lg"
               onClick={() => navigate("/docs/")}
-              className="h-12 px-8 text-base text-muted-foreground hover:text-foreground"
+              className="w-full sm:w-auto min-h-[48px] px-8 text-base"
             >
               Documentation <span className="ml-2">→</span>
             </Button>

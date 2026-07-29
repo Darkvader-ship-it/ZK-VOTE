@@ -26,7 +26,7 @@ import {
 import { fetchWithProgress } from "../lib/fetchWithProgress";
 import { getMerklePath } from "../lib/merkletree";
 import { initializeContractClients } from "../lib/contracts";
-import { relayerFetch } from "../lib/api";
+import { relayerFetch, parseApiError } from "../lib/api";
 
 interface CommentFormProps {
   daoId: number;
@@ -211,7 +211,7 @@ export default function CommentForm({
 
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data.error || "Failed to submit anonymous comment");
+          throw new Error(parseApiError(data) || "Failed to submit anonymous comment");
         }
 
         // Save anonymous comment record for edit/delete capability

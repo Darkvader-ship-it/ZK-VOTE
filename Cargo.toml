@@ -11,6 +11,8 @@ members = [
     "contracts/circuit-registry",
     "contracts/token",
     "contracts/vdf",
+    "crates/nova-aggregator",
+    "contracts/threshold-crypto",
     "tests/integration",
 ]
 resolver = "2"
