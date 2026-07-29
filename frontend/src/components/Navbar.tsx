@@ -14,8 +14,8 @@ interface NavbarProps {
   connecting: boolean;
   theme: "light" | "dark";
   onToggleTheme: () => void;
-  currentView: "home" | "browse" | "votes" | "docs";
-  onNavigate: (view: "home" | "browse" | "votes" | "docs") => void;
+  currentView: "home" | "browse" | "votes" | "docs" | "profile";
+  onNavigate: (view: "home" | "browse" | "votes" | "docs" | "profile") => void;
   relayerStatus?: string | null;
   relayerErrors?: string[];
 }
@@ -37,7 +37,7 @@ export default function Navbar({
   const mounted = useMounted();
   const { t } = useTranslation();
 
-  const handleNavigate = (view: "home" | "browse" | "votes" | "docs") => {
+  const handleNavigate = (view: "home" | "browse" | "votes" | "docs" | "profile") => {
     onNavigate(view);
     setMobileMenuOpen(false);
   };
@@ -103,6 +103,14 @@ export default function Navbar({
             }`}
           >
             {t("nav.docs")}
+          </button>
+          <button
+            onClick={() => handleNavigate("profile")}
+            className={`transition-colors hover:text-foreground/80 ${
+              currentView === "profile" ? "text-foreground" : "text-foreground/60"
+            }`}
+          >
+            Receipts
           </button>
         </nav>
 
@@ -202,6 +210,16 @@ export default function Navbar({
               }`}
             >
               Docs
+            </button>
+            <button
+              onClick={() => handleNavigate("profile")}
+              className={`block w-full text-left px-3 py-2 rounded-md transition-colors ${
+                currentView === "profile"
+                  ? "bg-muted text-foreground"
+                  : "text-foreground/60 hover:bg-muted/50"
+              }`}
+            >
+              Receipts
             </button>
           </div>
         </div>

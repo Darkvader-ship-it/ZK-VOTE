@@ -1393,6 +1393,12 @@ impl Voting {
         env.storage().persistent().has(&key)
     }
 
+    /// Verify a voter receipt by checking if the nullifier was recorded
+    /// (used for Individual Verifiability of votes without revealing the choice)
+    pub fn verify_receipt(env: Env, dao_id: u64, proposal_id: u64, nullifier: U256) -> bool {
+        Self::is_nullifier_used(env, dao_id, proposal_id, nullifier)
+    }
+
     /// Get tree contract address
     pub fn tree_contract(env: Env) -> Address {
         Self::bump_instance(&env);

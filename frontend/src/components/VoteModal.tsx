@@ -25,6 +25,7 @@ import {
   storeZKCredentials,
 } from "../lib/zk";
 import { CheckCircle, XCircle, AlertTriangle, Loader2, X } from "lucide-react";
+import { useReceipts } from "../hooks/useReceipts";
 
 interface VoteModalProps {
   proposalId: number;
@@ -54,6 +55,7 @@ export default function VoteModal({
   const [step, setStep] = useState<VoteStep>("select");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
+  const { addReceipt } = useReceipts();
 
   const handleVote = async (choice: boolean) => {
     setStep("generating");
@@ -265,6 +267,17 @@ export default function VoteModal({
       const result = await response.json();
       if (import.meta.env.DEV)
         console.log("Vote submitted successfully:", result);
+
+      // Save receipt
+      if (result.success && result.txHash) {
+        addReceipt({
+          txHash: result.txHash,
+          nullifier: toHexBE(nullifier),
+          timestamp: Date.now(),
+          daoId: Number(daoId),
+          proposalId: Number(proposalId),
+        });
+      }
 
       setStep("success");
       setTimeout(() => {
