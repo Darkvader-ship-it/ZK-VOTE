@@ -121,7 +121,7 @@ const MAX_CID_LEN: u32 = 64; // Max IPFS CID length (CIDv1 is ~59 chars)
 
 // Circuit constants
 /// Vote circuit public signals: root, nullifier, dao_id, proposal_id, vote_choice, num_candidates
-const NUM_PUBLIC_SIGNALS: u32 = 6;
+const NUM_PUBLIC_SIGNALS: u32 = 9;
 // IC (inner commitment) vector length for Groth16 VK = num_public_inputs + 1
 const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 pub const MAX_PAUSE_DURATION: u64 = 72 * 60 * 60;
@@ -136,6 +136,7 @@ pub enum DataKey {
     Proposal(u64, u64),          // (dao_id, proposal_id) -> ProposalInfo
     ProposalCount(u64),          // dao_id -> count
     Nullifier(u64, u64, U256),   // (dao_id, proposal_id, nullifier) -> bool
+    VoteFamily(u64, u64, U256), // (dao_id, proposal_id, family_nullifier) -> (u32, bool)
     VotingKey(u64),              // dao_id -> latest VerificationKey (BN254)
     VkVersion(u64),              // dao_id -> current BN254 VK version
     VkByVersion(u64, u32),       // (dao_id, vk_version) -> VerificationKey (BN254)
@@ -217,6 +218,7 @@ pub struct ElectionConfig {
     /// Number of valid candidates. The circuit constrains voteChoice < num_candidates.
     /// Must be set at election creation and cannot be changed after votes are cast.
     pub num_candidates: u32,
+    pub max_revotes: u32,
 }
 
 #[contracttype]
