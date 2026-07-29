@@ -70,6 +70,7 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  quadraticRoutes,
   metricsRoutes,
   remediationRoutes,
   novaRoutes,
@@ -156,6 +157,7 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(quadraticRoutes);
 app.use("/api/v1/nova", novaRoutes);
 app.use(adminRoutes);
 app.use(thresholdRoutes);
