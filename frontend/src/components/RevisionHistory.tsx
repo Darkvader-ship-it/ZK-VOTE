@@ -140,6 +140,16 @@ export default function RevisionHistory({
                   </span>
                 </div>
                 {revision.isDeleted && revision.deletedAt ? (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {mounted
+                      ? new Date(revision.deletedAt * 1000).toLocaleString()
+                      : ""}
+                  </p>
+                ) : revision.content?.createdAt ? (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {mounted
+                      ? new Date(revision.content.createdAt).toLocaleString()
+                      : ""}
                   <p className="text-xs text-muted-foreground mt-1 hidden sm:block">
                     {mounted ? new Date(revision.deletedAt * 1000).toLocaleTimeString() : ''}
                   </p>

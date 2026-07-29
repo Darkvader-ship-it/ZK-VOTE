@@ -140,14 +140,33 @@ export default function Navbar({
               <span className="sr-only">Toggle theme</span>
             </Button>
 
-            {mounted && (isConnected && publicKey ? (
-              <div className="flex items-center gap-2">
-                <div className="hidden sm:flex items-center h-9 px-4 rounded-md border bg-muted/50 font-mono text-xs">
-                  {truncateAddress(publicKey, 6, 4)}
+            {mounted &&
+              (isConnected && publicKey ? (
+                <div className="flex items-center gap-2">
+                  <div className="hidden sm:flex items-center h-9 px-4 rounded-md border bg-muted/50 font-mono text-xs">
+                    {truncateAddress(publicKey, 6, 4)}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onDisconnect}
+                    className="h-9"
+                  >
+                    <LogOut className="mr-2 h-3.5 w-3.5" />
+                    Disconnect
+                  </Button>
                 </div>
+              ) : (
                 <Button
-                  variant="outline"
+                  onClick={onConnect}
+                  disabled={connecting}
                   size="sm"
+                  className="h-9"
+                >
+                  <Wallet className="mr-2 h-3.5 w-3.5" />
+                  {connecting ? "Connecting..." : "Connect Wallet"}
+                </Button>
+              ))}
                   onClick={onDisconnect}
                   className="min-h-[48px] sm:min-h-0 sm:h-9"
                 >

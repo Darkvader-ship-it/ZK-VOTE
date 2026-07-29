@@ -304,7 +304,7 @@ export function formatRelativeTime(timestamp: number): string {
   // Fallback to date - use UTC to prevent hydration mismatch
   // The date will be consistent between server and client
   const date = new Date(timestamp * 1000);
-  return date.toUTCString().split(' ').slice(1, 4).join(' ');
+  return date.toUTCString().split(" ").slice(1, 4).join(" ");
 }
 
 // Truncate address for display
