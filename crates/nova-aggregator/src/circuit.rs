@@ -98,8 +98,7 @@ impl VoteStepCircuit {
         }
 
         // 5. Update Poseidon nullifier accumulator
-        let new_acc_nullifier =
-            poseidon_hash_2(&state.acc_nullifier_hash, &expected_nullifier);
+        let new_acc_nullifier = poseidon_hash_2(&state.acc_nullifier_hash, &expected_nullifier);
 
         // 6. Update candidate tallies
         let (new_yes, new_no) = if witness.vote_choice == 1 {
@@ -152,6 +151,9 @@ mod tests {
         assert_eq!(next_state.step_count, 1);
         assert_eq!(next_state.yes_votes, 1);
         assert_eq!(next_state.no_votes, 0);
-        assert_ne!(next_state.acc_nullifier_hash, initial_state.acc_nullifier_hash);
+        assert_ne!(
+            next_state.acc_nullifier_hash,
+            initial_state.acc_nullifier_hash
+        );
     }
 }

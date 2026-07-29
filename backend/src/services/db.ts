@@ -15,15 +15,32 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import {
 import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
 import { migrateUp } from "./migrate.js";
 import { kysely } from "./kysely.js";
 import { sql } from "kysely";
-import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
-import { migrateUp } from "./migrate.js";
 import { initWalResilience, configureWalResilience, incrementTransactionCounter } from "./walResilience.js";
 import { config } from "../config.js";
+
+/** Optional Prometheus sink — wired from boot so db.ts stays testable without prom-client. */
+export interface DbMetricsSink {
+  setConnectionsActive(n: number): void;
+  setWalSizeBytes(n: number): void;
+  setReadLagMs(n: number): void;
+  setWriteHealthy(healthy: boolean): void;
+  incWriteFailover(result: "success" | "failure"): void;
+}
+
+/** Object holder avoids TDZ if metrics wires during circular ESM init. */
+const metricsState: { sink: DbMetricsSink | null } = { sink: null };
+
+export function setDbMetricsSink(sink: DbMetricsSink | null): void {
+  metricsState.sink = sink;
+}
+
+function metricsSink(): DbMetricsSink | null {
+  return metricsState.sink;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -99,6 +116,14 @@ export interface DbStatus {
   totalEvents: number;
   daoCount: number;
   lastLedger: number;
+  /** Size of the SQLite WAL file in bytes (0 if absent). */
+  walSizeBytes?: number;
+  /** Estimated read-connection lag behind the writer (ms). */
+  readLagMs?: number;
+  /** Whether the write connection is healthy. */
+  writeHealthy?: boolean;
+  /** Active SQLite connections (write + read). */
+  connectionsActive?: number;
 }
 
 export interface IndexedDao {
@@ -337,6 +362,8 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "idx_auth_audit_client_id", columns: ["client_id"] },
       { name: "idx_auth_audit_action", columns: ["action"] },
       { name: "idx_auth_audit_created_at", columns: ["created_at"] },
+    ],
+  },
   proof_commitments: {
     columns: [
       { name: "commitment_hash", type: "TEXT", notNull: true, primaryKey: true },
@@ -487,13 +514,275 @@ function logQuery(query: string, params: unknown[] = [], operation: string): voi
 }
 
 // ============================================
-// DATABASE INSTANCE
+// DATABASE INSTANCES (write + readonly read)
 // ============================================
 
+/** Write connection — indexer, sync, migrations, mutating API. */
+let writeDb: DatabaseType | null = null;
+/** Readonly connection — API query path (same file, WAL concurrent readers). */
+let readDb: DatabaseType | null = null;
+/** @deprecated alias kept for internal partition DDL; always mirrors writeDb */
 let db: DatabaseType | null = null;
+
+let activeDbFile: string = DB_FILE;
+let writeHealthy = true;
+let writeFailureReason: string | null = null;
+let lastWriteAtMs = 0;
 
 /** Cache of known partition tables (events_{daoId}) to avoid redundant DDL */
 const knownPartitions: Set<number> = new Set();
+
+export class WriteConnectionUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WriteConnectionUnavailableError";
+  }
+}
+
+function countActiveConnections(): number {
+  return (writeDb ? 1 : 0) + (readDb ? 1 : 0);
+}
+
+function updateConnectionGauges(): void {
+  const sink = metricsSink();
+  if (!sink) return;
+  try {
+    sink.setConnectionsActive(countActiveConnections());
+    sink.setWriteHealthy(writeHealthy && Boolean(writeDb));
+    sink.setWalSizeBytes(getWalSizeBytes(activeDbFile));
+  } catch {
+    // Metrics sink may throw if registry is torn down in tests
+  }
+}
+
+export function getWalSizeBytes(dbFile: string = activeDbFile): number {
+  const walPath = `${dbFile}-wal`;
+  try {
+    if (fs.existsSync(walPath)) return fs.statSync(walPath).size;
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
+
+function readDataVersion(database: DatabaseType): number {
+  const ver = database.pragma("data_version", { simple: true }) as number | string;
+  return typeof ver === "number" ? ver : Number(ver) || 0;
+}
+
+/**
+ * Estimate how far the read connection lags the writer.
+ * Same-file WAL readers typically see lag ≈ 0 once the write commits;
+ * a version mismatch reports time since the last successful write.
+ */
+export function getReadReplicaLagMs(): number {
+  if (!writeDb || !readDb) return 0;
+  try {
+    const writeVer = readDataVersion(writeDb);
+    const readVer = readDataVersion(readDb);
+    if (writeVer === readVer) {
+      try {
+        metricsSink()?.setReadLagMs(0);
+      } catch { /* ignore */ }
+      return 0;
+    }
+    const lag = lastWriteAtMs > 0 ? Math.max(0, Date.now() - lastWriteAtMs) : 0;
+    try {
+      metricsSink()?.setReadLagMs(lag);
+    } catch { /* ignore */ }
+    return lag;
+  } catch {
+    return 0;
+  }
+}
+
+function markWriteSuccess(): void {
+  writeHealthy = true;
+  writeFailureReason = null;
+  lastWriteAtMs = Date.now();
+  updateConnectionGauges();
+  getReadReplicaLagMs();
+}
+
+function markWriteFailure(err: unknown): void {
+  writeHealthy = false;
+  writeFailureReason = err instanceof Error ? err.message : String(err);
+  log("error", "db_write_connection_failed", { error: writeFailureReason });
+  updateConnectionGauges();
+}
+
+function isConnectionError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code = (err as { code?: string })?.code ?? "";
+  return (
+    code === "SQLITE_BUSY" ||
+    code === "SQLITE_LOCKED" ||
+    code === "SQLITE_IOERR" ||
+    code === "SQLITE_CANTOPEN" ||
+    code === "SQLITE_NOTADB" ||
+    /SQLITE_(BUSY|LOCKED|IOERR|CANTOPEN|CORRUPT)/i.test(msg) ||
+    /database is (locked|closed|not open)/i.test(msg)
+  );
+}
+
+function openWriteConnection(dbFile: string): DatabaseType {
+  const database = new Database(dbFile);
+  database.pragma("journal_mode = WAL");
+  database.pragma("foreign_keys = ON");
+  database.pragma("busy_timeout = 5000");
+  try {
+    database.pragma("strict = ON");
+    log("info", "sqlite_strict_mode_enabled");
+  } catch (err) {
+    log("warn", "sqlite_strict_mode_unavailable", {
+      error: (err as Error).message,
+    });
+  }
+  return database;
+}
+
+function openReadConnection(dbFile: string): DatabaseType {
+  const database = new Database(dbFile, { readonly: true, fileMustExist: true });
+  database.pragma("foreign_keys = ON");
+  database.pragma("busy_timeout = 5000");
+  try {
+    database.pragma("query_only = ON");
+  } catch {
+    // query_only may be unavailable on older SQLite builds
+  }
+  return database;
+}
+
+/**
+ * Attempt to reopen the write connection after failure.
+ * Read connection is left open so API queries can continue in degraded mode.
+ */
+export function reconnectWriteDb(): boolean {
+  if (!activeDbFile) return false;
+  try {
+    if (writeDb) {
+      try {
+        writeDb.close();
+      } catch {
+        /* already closed */
+      }
+      writeDb = null;
+      db = null;
+    }
+    writeDb = openWriteConnection(activeDbFile);
+    db = writeDb;
+    writeDb.prepare("SELECT 1").get();
+    markWriteSuccess();
+    try {
+      metricsSink()?.incWriteFailover("success");
+    } catch { /* ignore */ }
+    log("info", "db_write_reconnect_success", { path: activeDbFile });
+    return true;
+  } catch (err) {
+    markWriteFailure(err);
+    try {
+      metricsSink()?.incWriteFailover("failure");
+    } catch { /* ignore */ }
+    log("error", "db_write_reconnect_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+/** Reopen the readonly connection (e.g. after restore / WAL truncate). */
+export function reopenReadDb(): void {
+  if (!activeDbFile || !fs.existsSync(activeDbFile)) return;
+  if (readDb) {
+    try {
+      readDb.close();
+    } catch { /* ignore */ }
+    readDb = null;
+  }
+  try {
+    readDb = openReadConnection(activeDbFile);
+    updateConnectionGauges();
+    log("info", "db_read_reopened", { path: activeDbFile });
+  } catch (err) {
+    log("warn", "db_read_reopen_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export function isWriteConnectionHealthy(): boolean {
+  return Boolean(writeHealthy && writeDb);
+}
+
+export function getWriteFailureReason(): string | null {
+  return writeFailureReason;
+}
+
+/**
+ * Return the write connection (initializing if needed).
+ * On connection-level failure, attempts one reconnect (failover).
+ * Does not switch away from an already-open custom dbPath.
+ */
+export function getWriteDb(): DatabaseType {
+  if (writeDb) {
+    try {
+      writeDb.prepare("SELECT 1").get();
+      if (!writeHealthy) {
+        if (!reconnectWriteDb() || !writeDb) {
+          throw new WriteConnectionUnavailableError(
+            writeFailureReason ?? "write database unavailable",
+          );
+        }
+      }
+      return writeDb;
+    } catch (err) {
+      if (isConnectionError(err)) {
+        markWriteFailure(err);
+        if (reconnectWriteDb() && writeDb) return writeDb;
+      }
+      throw err instanceof Error
+        ? err
+        : new WriteConnectionUnavailableError(String(err));
+    }
+  }
+  initDb();
+  if (!writeDb) {
+    throw new WriteConnectionUnavailableError(
+      writeFailureReason ?? "write database is not initialized",
+    );
+  }
+  return writeDb;
+}
+
+/**
+ * Return the readonly connection for API queries.
+ * Falls back to the write connection if the read handle is unavailable
+ * (degraded mode) so GET endpoints keep serving.
+ */
+export function getReadDb(): DatabaseType {
+  if (readDb) {
+    try {
+      readDb.prepare("SELECT 1").get();
+      return readDb;
+    } catch {
+      reopenReadDb();
+      if (readDb) return readDb;
+    }
+  }
+  if (writeDb) {
+    reopenReadDb();
+    if (readDb) return readDb;
+    log("warn", "db_read_fallback_to_write");
+    return writeDb;
+  }
+  initDb();
+  if (readDb) return readDb;
+  if (writeDb) {
+    log("warn", "db_read_fallback_to_write");
+    return writeDb;
+  }
+  throw new Error("database is not initialized");
+}
 
 /**
  * Return the partition table name for a given DAO ID.
@@ -504,14 +793,28 @@ function partitionTableName(daoId: number): string {
   return `events_${validatedDaoId}`;
 }
 
+/** True if the DAO partition table exists (no DDL). Safe for readonly connections. */
+function partitionTableExists(database: DatabaseType, daoId: number): boolean {
+  if (knownPartitions.has(daoId)) return true;
+  const tableName = partitionTableName(daoId);
+  const row = database
+    .prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?`)
+    .get(tableName) as { ok: number } | undefined;
+  if (row) {
+    knownPartitions.add(daoId);
+    return true;
+  }
+  return false;
+}
+
 /**
  * Ensure a partition table exists for the given DAO ID.
- * Idempotent — safe to call on every write.
+ * Idempotent — safe to call on every write. Always uses the write connection.
  * SECURITY: Uses validated table names and allowlisted event types.
  */
 function ensurePartitionTable(daoId: number): void {
   if (knownPartitions.has(daoId)) return;
-  const database = db as DatabaseType;
+  const database = getWriteDb();
   const tableName = partitionTableName(daoId); // This validates daoId
   
   // SECURITY: Use allowlisted event types in CHECK constraint
@@ -543,6 +846,7 @@ function ensurePartitionTable(daoId: number): void {
   knownPartitions.add(daoId);
   // Record this partition in metadata for cross-DAO queries
   recordPartitionDaoId(database, daoId);
+  markWriteSuccess();
 }
 
 /**
@@ -571,10 +875,37 @@ function getAllPartitionDaoIds(database: DatabaseType): number[] {
 
 /**
  * Initialize the database and migrate from the monolithic schema.
+ * Opens a write connection plus a readonly read connection on the same
+ * WAL-mode file for query isolation (issue #205).
  * SECURITY: Enables SQLite strict mode and WAL journaling.
+ * @returns The write connection (backward compatible with prior callers).
  */
 export function initDb(dbPath?: string): DatabaseType {
-  if (db && !dbPath) return db;
+  const dbFile = dbPath ?? DB_FILE;
+
+  // Reuse open handles for the same file
+  if (writeDb && activeDbFile === dbFile) {
+    try {
+      writeDb.prepare("SELECT 1").get();
+      return writeDb;
+    } catch {
+      try { writeDb.close(); } catch { /* ignore */ }
+      writeDb = null;
+      db = null;
+      try { readDb?.close(); } catch { /* ignore */ }
+      readDb = null;
+    }
+  }
+
+  // Switching files (or reopening after close): drop prior handles
+  if (writeDb || readDb) {
+    try { readDb?.close(); } catch { /* ignore */ }
+    try { writeDb?.close(); } catch { /* ignore */ }
+    writeDb = null;
+    readDb = null;
+    db = null;
+    knownPartitions.clear();
+  }
 
   if (!dbPath) {
     if (!fs.existsSync(DATA_DIR)) {
@@ -587,6 +918,8 @@ export function initDb(dbPath?: string): DatabaseType {
     }
   }
 
+  activeDbFile = dbFile;
+  let database: DatabaseType;
   const dbFile = dbPath ?? DB_FILE;
   const database = new Database(dbFile);
   
@@ -609,12 +942,10 @@ export function initDb(dbPath?: string): DatabaseType {
   
   // SECURITY: Enable strict mode if available (better-sqlite3 v8+)
   try {
-    database.pragma("strict = ON");
-    log("info", "sqlite_strict_mode_enabled");
+    database = openWriteConnection(dbFile);
   } catch (err) {
-    log("warn", "sqlite_strict_mode_unavailable", {
-      error: (err as Error).message
-    });
+    markWriteFailure(err);
+    throw err;
   }
 
   // Create system tables (daos, metadata, partition_registry)
@@ -906,17 +1237,37 @@ export function initDb(dbPath?: string): DatabaseType {
     }
   }
 
+  writeDb = database;
   db = database;
+  markWriteSuccess();
+
+  // Open readonly companion for API query isolation
+  try {
+    if (readDb) {
+      try { readDb.close(); } catch { /* ignore */ }
+    }
+    readDb = openReadConnection(dbFile);
+  } catch (err) {
+    log("warn", "db_read_connection_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    readDb = null;
+  }
+  db = database;
+
+  updateConnectionGauges();
 
   log("info", "db_initialized", {
     path: dbFile,
     partitions: knownPartitions.size,
+    readConnection: Boolean(readDb),
   });
   // feat: events partitioning, db monitoring, migration framework, and data integrity constraints
   return database;
 }
 
 /**
+ * Return the initialized write database instance (initializing it if needed).
  * Return the initialized database instance, initializing it if needed.
  * Get active database instance or initialize default.
  * Return the initialized database instance (initializing it if needed).
@@ -927,19 +1278,31 @@ export function initDb(dbPath?: string): DatabaseType {
  * from booting at all, including for verifying the changes in this PR.
  */
 export function getDb(): DatabaseType {
-  return initDb();
+  return getWriteDb();
 }
 
 /**
- * Close the database
+ * Close write and read database connections.
  */
 export function closeDb(): void {
-  if (db) {
-    db.close();
+  if (readDb) {
+    try {
+      readDb.close();
+    } catch { /* ignore */ }
+    readDb = null;
+  }
+  if (writeDb) {
+    try {
+      writeDb.close();
+    } catch { /* ignore */ }
+    writeDb = null;
     db = null;
     knownPartitions.clear();
+    writeHealthy = true;
+    writeFailureReason = null;
     log("info", "db_closed");
   }
+  updateConnectionGauges();
 }
 
 // ============================================
@@ -1102,7 +1465,7 @@ interface MetadataRow {
  * Get metadata value by key
  */
 export function getMetadata<T>(key: string): T | null {
-  const database = initDb();
+  const database = getReadDb();
   const row = timeQuery(
     "getMetadata",
     () =>
@@ -1118,6 +1481,7 @@ export function getMetadata<T>(key: string): T | null {
  * Set metadata value
  */
 export function setMetadata<T>(key: string, value: T): void {
+  const database = getWriteDb();
   const database = initDb();
   const compiled = kysely
     .insertInto("metadata")
@@ -1134,6 +1498,7 @@ export function setMetadata<T>(key: string, value: T): void {
   );
   // Invalidate any cached queries that depend on metadata
   invalidateCachePrefix("metadata");
+  markWriteSuccess();
   incrementTransactionCounter();
 }
 
@@ -1181,7 +1546,7 @@ function rowToEvent(row: EventRow): Event {
  * SECURITY: Validates event type and uses parameterized queries.
  */
 export function addEvent(event: EventInput): boolean {
-  const database = initDb();
+  const database = getWriteDb();
   const tableName = partitionTableName(event.daoId); // Validates daoId
   ensurePartitionTable(event.daoId);
 
@@ -1206,6 +1571,9 @@ export function addEvent(event: EventInput): boolean {
     "addEvent",
     () => {
       try {
+        logQuery(query, params, 'add_event');
+        database.prepare(query).run(...params);
+        markWriteSuccess();
         logQuery(compiled.sql, compiled.parameters as any[], "add_event");
         database.prepare(compiled.sql).run(...compiled.parameters);
         return true;
@@ -1213,6 +1581,15 @@ export function addEvent(event: EventInput): boolean {
         const error = err as { code?: string };
         if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
           return false; // Duplicate
+        }
+        if (isConnectionError(err)) {
+          markWriteFailure(err);
+          if (reconnectWriteDb()) {
+            ensurePartitionTable(event.daoId);
+            getWriteDb().prepare(query).run(...params);
+            markWriteSuccess();
+            return true;
+          }
         }
         throw err;
       }
@@ -1273,7 +1650,7 @@ export function verifyEvent(txHash: string, ledger: number): void {
     throw new Error(`Invalid ledger: ${ledger}`);
   }
 
-  const database = initDb();
+  const database = getWriteDb();
   // Search in all partitions for the matching tx_hash
   const daoIds = getAllPartitionDaoIds(database);
   for (const daoId of daoIds) {
@@ -1296,9 +1673,13 @@ export function getEventsForDao(
   daoId: number,
   options: EventQueryOptions = {},
 ): EventQueryResult {
-  const database = initDb();
+  const database = getReadDb();
   const tableName = partitionTableName(daoId); // Validates daoId
-  ensurePartitionTable(daoId);
+
+  // Reads must not run DDL — missing partitions return empty results.
+  if (!partitionTableExists(database, daoId)) {
+    return { events: [], total: 0, daoId };
+  }
 
   const {
     limit = 100,
@@ -1386,7 +1767,7 @@ export function getEventsForDao(
  * Get all indexed DAOs (with event counts from partitions).
  */
 export function getIndexedDaos(): IndexedDao[] {
-  const database = initDb();
+  const database = getReadDb();
   const daoIds = getAllPartitionDaoIds(database);
   if (daoIds.length === 0) return [];
 
@@ -1413,7 +1794,7 @@ export function getIndexedDaos(): IndexedDao[] {
  * Get database status (cross-DAO aggregates).
  */
 export function getDbStatus(): DbStatus {
-  const database = initDb();
+  const database = getReadDb();
   const daoIds = getAllPartitionDaoIds(database);
 
   let totalEvents = 0;
@@ -1438,6 +1819,10 @@ export function getDbStatus(): DbStatus {
     totalEvents,
     daoCount,
     lastLedger,
+    walSizeBytes: getWalSizeBytes(),
+    readLagMs: getReadReplicaLagMs(),
+    writeHealthy: isWriteConnectionHealthy(),
+    connectionsActive: countActiveConnections(),
   };
 }
 
@@ -1446,7 +1831,7 @@ export function getDbStatus(): DbStatus {
  * Searches across all partitions.
  */
 export function getUnverifiedEvents(limit = 10): Event[] {
-  const database = initDb();
+  const database = getReadDb();
   const daoIds = getAllPartitionDaoIds(database);
   if (daoIds.length === 0) return [];
 
@@ -1470,7 +1855,7 @@ export function getUnverifiedEvents(limit = 10): Event[] {
  * Delete an unverified event (if verification fails).
  */
 export function deleteUnverifiedEvent(txHash: string): void {
-  const database = initDb();
+  const database = getWriteDb();
   const daoIds = getAllPartitionDaoIds(database);
   for (const daoId of daoIds) {
     const tableName = partitionTableName(daoId);
@@ -1497,7 +1882,7 @@ export interface TransactionLogRow {
  * Get transaction log by nullifier hash.
  */
 export function getTransactionLog(nullifierHash: string): TransactionLogRow | null {
-  const database = initDb();
+  const database = getReadDb();
   const row = database
     .prepare("SELECT * FROM transaction_log WHERE nullifier_hash = ?")
     .get(nullifierHash) as TransactionLogRow | undefined;
@@ -1512,7 +1897,7 @@ export function recordTransactionLog(
   txHash: string,
   status: string = "PENDING",
 ): void {
-  const database = initDb();
+  const database = getWriteDb();
   database
     .prepare(
       `INSERT INTO transaction_log (nullifier_hash, tx_hash, status, created_at, updated_at)
@@ -1534,7 +1919,7 @@ export function updateTransactionLogStatus(
   status: string,
   txHash?: string,
 ): void {
-  const database = initDb();
+  const database = getWriteDb();
   if (txHash) {
     database
       .prepare(
@@ -1554,7 +1939,7 @@ export function updateTransactionLogStatus(
  * Cleanup old transaction log entries.
  */
 export function cleanupTransactionLog(maxAgeMs = 86400000): number {
-  const database = initDb();
+  const database = getWriteDb();
   const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
   const result = database
     .prepare("DELETE FROM transaction_log WHERE updated_at < ?")
@@ -1605,7 +1990,7 @@ export interface AuditLogQueryOptions {
  * so concurrent inserts can't interleave and desync the chain.
  */
 export function insertAuditLog(entry: AuditLogInput): AuditLogRow {
-  const database = initDb();
+  const database = getWriteDb();
 
   const insert = database.transaction((e: AuditLogInput): AuditLogRow => {
     const last = database
@@ -1674,7 +2059,7 @@ export function insertAuditLog(entry: AuditLogInput): AuditLogRow {
 export function getAuditLogs(
   options: AuditLogQueryOptions = {},
 ): { logs: AuditLogRow[]; total: number } {
-  const database = initDb();
+  const database = getReadDb();
   const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
   const offset = Math.max(0, options.offset ?? 0);
 
@@ -1704,7 +2089,7 @@ export function getAuditLogs(
  * All audit log rows in insertion order, for hash-chain verification.
  */
 export function getAllAuditLogsOrdered(): AuditLogRow[] {
-  const database = initDb();
+  const database = getReadDb();
   return database
     .prepare("SELECT * FROM audit_log ORDER BY id ASC")
     .all() as AuditLogRow[];
@@ -1716,7 +2101,7 @@ export function getAllAuditLogsOrdered(): AuditLogRow[] {
 export function getUnarchivedAuditLogsOlderThan(
   cutoffIso: string,
 ): AuditLogRow[] {
-  const database = initDb();
+  const database = getReadDb();
   return database
     .prepare(
       "SELECT * FROM audit_log WHERE archived_at IS NULL AND timestamp < ? ORDER BY id ASC",
@@ -1730,7 +2115,7 @@ export function getUnarchivedAuditLogsOlderThan(
  */
 export function markAuditLogsArchived(ids: number[], archivedAt: string): void {
   if (ids.length === 0) return;
-  const database = initDb();
+  const database = getWriteDb();
   const stmt = database.prepare(
     "UPDATE audit_log SET archived_at = ? WHERE id = ?",
   );
@@ -1746,7 +2131,7 @@ export function markAuditLogsArchived(ids: number[], archivedAt: string): void {
  */
 export function deleteAuditLogs(ids: number[]): number {
   if (ids.length === 0) return 0;
-  const database = initDb();
+  const database = getWriteDb();
   const stmt = database.prepare("DELETE FROM audit_log WHERE id = ?");
   const run = database.transaction((rowIds: number[]) => {
     let deleted = 0;
@@ -1760,9 +2145,9 @@ export function deleteAuditLogs(ids: number[]): number {
  * Count pending (unverified) events for a specific DAO.
  */
 export function getPendingEventsCountForDao(daoId: number): number {
-  const database = initDb();
+  const database = getReadDb();
   const tableName = partitionTableName(daoId);
-  ensurePartitionTable(daoId);
+  if (!partitionTableExists(database, daoId)) return 0;
   const row = database
     .prepare(`SELECT COUNT(*) as count FROM ${tableName} WHERE verified = 0`)
     .get() as { count: number };
@@ -1773,7 +2158,7 @@ export function getPendingEventsCountForDao(daoId: number): number {
  * Cleanup expired unverified pending events across partitions older than ttlMs.
  */
 export function cleanupExpiredPendingEvents(ttlMs = 15 * 60 * 1000): number {
-  const database = initDb();
+  const database = getWriteDb();
   const daoIds = getAllPartitionDaoIds(database);
   const cutoff = new Date(Date.now() - ttlMs).toISOString();
   let deletedCount = 0;
@@ -1796,7 +2181,7 @@ export function cleanupExpiredPendingEvents(ttlMs = 15 * 60 * 1000): number {
  * Public version — call this when a new DAO is created.
  */
 export function ensurePartition(daoId: number): void {
-  initDb();
+  getWriteDb();
   ensurePartitionTable(daoId);
   log("info", "partition_created", { daoId });
 }
@@ -1806,7 +2191,7 @@ export function ensurePartition(daoId: number): void {
  * Removes the DAO from the registry as well.
  */
 export function dropPartition(daoId: number): void {
-  const database = initDb();
+  const database = getWriteDb();
   const tableName = partitionTableName(daoId);
 
   database.exec(`DROP TABLE IF EXISTS ${tableName}`);
@@ -1829,7 +2214,7 @@ export function dropPartition(daoId: number): void {
  * Returns the number of events migrated.
  */
 export function migrateToPartitions(): number {
-  const database = initDb();
+  const database = getWriteDb();
 
   // Check if there are any rows in the old events table
   const oldCount = database
@@ -1920,7 +2305,7 @@ export function migrateToPartitions(): number {
  * SECURITY: Validates all JSON input and uses parameterized queries.
  */
 export function migrateFromJson(jsonPath: string): number {
-  const database = initDb();
+  const database = getWriteDb();
 
   if (!fs.existsSync(jsonPath)) {
     log("info", "no_json_to_migrate");
@@ -2039,7 +2424,7 @@ export function migrateFromJson(jsonPath: string): number {
  * Includes query metrics, table statistics, cache stats, and index analysis.
  */
 export function getDbDiagnostics(): Record<string, unknown> {
-  const database = initDb();
+  const database = getReadDb();
   const stats = getMonitorDbStats(database);
 
   // Profile event queries for large DAOs (10K+ events)
@@ -2058,6 +2443,13 @@ export function getDbDiagnostics(): Record<string, unknown> {
     config: stats.config,
     partitions: knownPartitions.size,
     largeDaos: largeDaos.length,
+    readReplica: {
+      lagMs: getReadReplicaLagMs(),
+      writeHealthy: isWriteConnectionHealthy(),
+      connectionsActive: countActiveConnections(),
+      walSizeBytes: getWalSizeBytes(),
+      writeFailureReason,
+    },
   };
 }
 
@@ -2065,7 +2457,7 @@ export function getDbDiagnostics(): Record<string, unknown> {
  * Profile queries for a specific DAO partition (for diagnostics).
  */
 export function profileDaoQueries(daoId: number): void {
-  const database = initDb();
+  const database = getReadDb();
   const tableName = partitionTableName(daoId);
   const tableExists = database
     .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
@@ -2094,7 +2486,7 @@ interface DaoRow {
  * Upsert a DAO into the cache
  */
 export function upsertDao(dao: DaoInput): void {
-  const database = initDb();
+  const database = getWriteDb();
   database
     .prepare(
       `
@@ -2126,7 +2518,7 @@ export function upsertDao(dao: DaoInput): void {
  * Upsert multiple DAOs in a transaction
  */
 export function upsertDaos(daos: DaoInput[]): void {
-  const database = initDb();
+  const database = getWriteDb();
   const stmt = database.prepare(`
     INSERT INTO daos (id, name, creator, membership_open, members_can_propose, metadata_cid, member_count, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -2162,7 +2554,7 @@ export function upsertDaos(daos: DaoInput[]): void {
  * Get all cached DAOs
  */
 export function getAllCachedDaos(): DaoCache[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare("SELECT * FROM daos ORDER BY id ASC")
     .all() as DaoRow[];
@@ -2182,7 +2574,7 @@ export function getAllCachedDaos(): DaoCache[] {
  * Get a specific cached DAO by ID
  */
 export function getCachedDao(daoId: number): DaoCache | null {
-  const database = initDb();
+  const database = getReadDb();
   const row = database.prepare("SELECT * FROM daos WHERE id = ?").get(daoId) as
     | DaoRow
     | undefined;
@@ -2226,7 +2618,7 @@ export function setDaosSyncTime(timestamp: string): void {
  * Get cached DAO count
  */
 export function getCachedDaoCount(): number {
-  const database = initDb();
+  const database = getReadDb();
   const result = database
     .prepare("SELECT COUNT(*) as count FROM daos")
     .get() as { count: number };
@@ -2260,7 +2652,7 @@ export interface TTLCostLogEntry {
 }
 
 export function upsertTTLTracking(entry: TTLTrackingEntry): void {
-  const database = initDb();
+  const database = getWriteDb();
   database
     .prepare(
       `
@@ -2287,7 +2679,7 @@ export function upsertTTLTracking(entry: TTLTrackingEntry): void {
 }
 
 export function getTTLTracking(entryId: string): TTLTrackingEntry | null {
-  const database = initDb();
+  const database = getReadDb();
   const row = database
     .prepare("SELECT * FROM ttl_tracking WHERE entry_id = ?")
     .get(entryId) as Record<string, unknown> | undefined;
@@ -2304,7 +2696,7 @@ export function getTTLTracking(entryId: string): TTLTrackingEntry | null {
 }
 
 export function getAllTTLTracking(): TTLTrackingEntry[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare("SELECT * FROM ttl_tracking ORDER BY remaining_ledgers ASC")
     .all() as Record<string, unknown>[];
@@ -2320,7 +2712,7 @@ export function getAllTTLTracking(): TTLTrackingEntry[] {
 }
 
 export function getGracePeriodEntries(): TTLTrackingEntry[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare(
       "SELECT * FROM ttl_tracking WHERE urgency = 'grace' ORDER BY remaining_ledgers ASC",
@@ -2338,7 +2730,7 @@ export function getGracePeriodEntries(): TTLTrackingEntry[] {
 }
 
 export function createTTLCostLog(cycleId: string, cycleStart: string): number {
-  const database = initDb();
+  const database = getWriteDb();
   const result = database
     .prepare(
       `
@@ -2361,7 +2753,7 @@ export function updateTTLCostLog(
     status: string;
   }>,
 ): void {
-  const database = initDb();
+  const database = getWriteDb();
   const sets: string[] = [];
   const values: unknown[] = [];
 
@@ -2398,7 +2790,7 @@ export function updateTTLCostLog(
 }
 
 export function getTTLCostLogs(limit = 10): TTLCostLogEntry[] {
-  const database = initDb();
+  const database = getReadDb();
   const rows = database
     .prepare("SELECT * FROM ttl_cost_log ORDER BY id DESC LIMIT ?")
     .all(limit) as Record<string, unknown>[];
@@ -2416,7 +2808,7 @@ export function getTTLCostLogs(limit = 10): TTLCostLogEntry[] {
 }
 
 export function getTotalTTLCostXLM(): number {
-  const database = initDb();
+  const database = getReadDb();
   const row = database
     .prepare(
       "SELECT COALESCE(SUM(total_fee_xlm), 0) as total FROM ttl_cost_log WHERE status = 'completed'",
@@ -2671,6 +3063,10 @@ function rowToAuditEntry(row: Record<string, unknown>): AuthTokenAuditEntry {
     ipHash: (row.ip_hash as string) ?? null,
     success: !!row.success,
     errorMessage: (row.error_message as string) ?? null,
+    createdAt: (row.created_at as string) ?? null,
+  };
+}
+
 // PROOF COMMITMENT STORAGE
 // ============================================
 

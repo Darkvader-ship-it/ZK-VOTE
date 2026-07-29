@@ -30,6 +30,7 @@ import {
   noteDegraded,
   sendPartial,
   validateQuery,
+  bodyLimit,
 } from "../middleware/index.js";
 import {
   anonymousCommentSchema,
@@ -133,6 +134,7 @@ router.get("/comment/challenge/:commitment", queryLimiter, validateParams(commit
  */
 router.post(
   "/comment/anonymous",
+  bodyLimit("10kb"),
   authGuard,
   auditLog("comment_anonymous_relay"),
   commentLimiter,
@@ -672,7 +674,7 @@ router.get("/comment/:daoId/:proposalId/:commentId", queryLimiter, validateParam
 /**
  * POST /comment/edit - Edit public comment
  */
-router.post("/comment/edit", authGuard, commentLimiter, (async (
+router.post("/comment/edit", bodyLimit("100kb"), authGuard, commentLimiter, (async (
   req: Request,
   res: Response,
 ) => {
@@ -783,7 +785,7 @@ router.post("/comment/edit", authGuard, commentLimiter, (async (
 /**
  * POST /comment/delete - Delete public comment
  */
-router.post("/comment/delete", authGuard, commentLimiter, (async (
+router.post("/comment/delete", bodyLimit("100kb"), authGuard, commentLimiter, (async (
   req: Request,
   res: Response,
 ) => {
@@ -894,6 +896,7 @@ router.post("/comment/delete", authGuard, commentLimiter, (async (
  */
 router.post(
   "/comment/flag",
+  bodyLimit("100kb"),
   authGuard,
   commentLimiter,
   validateBody(flagCommentSchema),

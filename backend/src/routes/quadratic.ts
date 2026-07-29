@@ -23,7 +23,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 
 import { log } from "../services/logger.js";
-import { queryLimiter, validateBody, validateParams } from "../middleware/index.js";
+import { queryLimiter, validateBody, validateParams, bodyLimit } from "../middleware/index.js";
 import type { AsyncHandler } from "../types/index.js";
 
 const router = Router();
@@ -144,6 +144,7 @@ const daoParamsSchema = z.object({
  */
 router.post(
   "/qv/proposals/:dao/calculate",
+  bodyLimit("100kb"),
   queryLimiter,
   validateParams(daoParamsSchema),
   validateBody(calculateSchema),
@@ -165,6 +166,7 @@ router.post(
  */
 router.post(
   "/qv/tally",
+  bodyLimit("100kb"),
   queryLimiter,
   validateBody(tallySchema),
   (async (req: Request, res: Response) => {

@@ -19,11 +19,10 @@ import {
   queryLimiter,
   validateParams,
   noteDegraded,
+  validateQuery,
+  bodyLimit,
 } from "../middleware/index.js";
 import { getServiceHealth } from "../services/service-health.js";
-import { daoParamsSchema } from "../validation/schemas.js";
-  validateQuery,
-} from "../middleware/index.js";
 import { daoParamsSchema, daosQuerySchema } from "../validation/schemas.js";
 import type { AsyncHandler, DaoWithRole } from "../types/index.js";
 
@@ -114,7 +113,7 @@ router.get("/dao/:daoId", queryLimiter, validateParams(daoParamsSchema), (req: R
 /**
  * POST /daos/sync - Trigger manual DAO sync (admin only)
  */
-router.post("/daos/sync", authGuard, auditLog("daos_sync"), (async (req: Request, res: Response) => {
+router.post("/daos/sync", bodyLimit("1kb"), authGuard, auditLog("daos_sync"), (async (req: Request, res: Response) => {
   try {
     const synced = await syncDaosFromContract();
     res.json({ success: true, synced });

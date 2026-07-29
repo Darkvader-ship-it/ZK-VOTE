@@ -21,7 +21,11 @@ struct Args {
     out: PathBuf,
 
     /// Merkle tree root (hex string)
-    #[arg(short, long, default_value = "0x0000000000000000000000000000000000000000000000000000000000000000")]
+    #[arg(
+        short,
+        long,
+        default_value = "0x0000000000000000000000000000000000000000000000000000000000000000"
+    )]
     root: String,
 
     /// Run in benchmark mode and print timing metrics
@@ -32,12 +36,15 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    println!("[NovaAggregator] Loading vote witnesses from {:?}", args.batch);
-    let batch_content = fs::read_to_string(&args.batch)
-        .expect("Failed to read vote batch JSON file");
+    println!(
+        "[NovaAggregator] Loading vote witnesses from {:?}",
+        args.batch
+    );
+    let batch_content =
+        fs::read_to_string(&args.batch).expect("Failed to read vote batch JSON file");
 
-    let witnesses: Vec<VoteWitness> = serde_json::from_str(&batch_content)
-        .expect("Failed to parse vote witnesses JSON array");
+    let witnesses: Vec<VoteWitness> =
+        serde_json::from_str(&batch_content).expect("Failed to parse vote witnesses JSON array");
 
     println!(
         "[NovaAggregator] Successfully loaded {} vote witnesses",
@@ -86,8 +93,7 @@ fn main() {
     let output_content = serde_json::to_string_pretty(&payload)
         .expect("Failed to serialize recursive proof payload");
 
-    fs::write(&args.out, output_content)
-        .expect("Failed to write output proof file");
+    fs::write(&args.out, output_content).expect("Failed to write output proof file");
 
     println!("[NovaAggregator] Written recursive proof to {:?}", args.out);
 }

@@ -335,10 +335,13 @@ impl Token {
             if last.ledger_sequence == ledger {
                 // Update the last checkpoint in-place
                 let len = checkpoints.len();
-                checkpoints.set(len - 1, Checkpoint {
-                    ledger_sequence: ledger,
-                    balance,
-                });
+                checkpoints.set(
+                    len - 1,
+                    Checkpoint {
+                        ledger_sequence: ledger,
+                        balance,
+                    },
+                );
                 env.storage().persistent().set(&cp_key, &checkpoints);
                 Self::bump_persistent(env, &cp_key);
                 return;
@@ -790,12 +793,7 @@ impl Token {
         Self::receive_balance(&env, &to, amount);
         Self::increment_supply(&env, amount);
 
-        MintEvent {
-            admin,
-            to,
-            amount,
-        }
-        .publish(&env);
+        MintEvent { admin, to, amount }.publish(&env);
     }
 
     pub fn version(env: Env) -> u32 {
@@ -1353,7 +1351,6 @@ impl Token {
         Self::bump_instance(&env);
         env.storage().persistent().get(&DataKey::Delegate(holder))
     }
-
 
     // ── Batch Operations (Issue #110) ───────────────────────────────────────
     //

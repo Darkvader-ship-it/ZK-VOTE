@@ -19,6 +19,7 @@ import {
   validateParams,
   noteDegraded,
   sendPartial,
+  bodyLimit,
 } from "../middleware/index.js";
 import { cidParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
@@ -263,7 +264,7 @@ router.post(
  * POST /ipfs/metadata - Upload JSON metadata to IPFS
  */
 // N1 hardening: was unauthenticated — see /ipfs/image rationale.
-router.post("/ipfs/metadata", authGuard, auditLog("ipfs_upload_metadata"), ipfsUploadLimiter, (async (
+router.post("/ipfs/metadata", bodyLimit("50kb"), authGuard, auditLog("ipfs_upload_metadata"), ipfsUploadLimiter, (async (
   req: Request,
   res: Response,
 ) => {

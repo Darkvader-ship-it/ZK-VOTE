@@ -25,12 +25,15 @@ export const errorHandler: ErrorRequestHandler = (
   _next: NextFunction,
 ): void => {
   log("error", "unhandled_error", {
+    ctx: req.ctx,
+    traceId: req.traceId,
     path: req.path,
     message: err.message,
     stack: err.stack,
   });
 
   const requestId = req.ctx || "unknown";
+  const traceId = req.traceId;
   const timestamp = new Date().toISOString();
 
   if (err instanceof ApiError) {
@@ -38,6 +41,7 @@ export const errorHandler: ErrorRequestHandler = (
       code: err.code,
       message: err.message,
       requestId,
+      traceId,
       timestamp,
     };
 
@@ -54,6 +58,7 @@ export const errorHandler: ErrorRequestHandler = (
     code: ErrorCode.INTERNAL_ERROR,
     message: "Internal server error",
     requestId,
+    traceId,
     timestamp,
   };
 

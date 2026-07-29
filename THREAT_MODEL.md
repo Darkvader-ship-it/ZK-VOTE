@@ -173,3 +173,96 @@ See [`docs/post-quantum-evaluation.md`](file:///home/uche/ZK-VOTE/docs/post-quan
 
 - Coercion resistance: implement re-voting window and registrar tally filter (see #96).
 - Tally proofs: add `verify_tally_proof` contract entrypoint and circuit for universal verifiability (see #94).
+
+## Mitigations Applied (#167)
+
+- **Merkle second-preimage attack**: leaves were previously inserted as raw,
+  unhashed commitments at tree depth `levels`, making a leaf value and an
+  internal-node hash indistinguishable — an attacker who found `C1, C2` with
+  `Poseidon(C1, C2) == C_target` could register `C1`/`C2` as members, then
+  present `C_target` as a forged leaf. Every leaf is now domain-tagged —
+  `leafHash = Poseidon(LEAF_DOMAIN, leaf)`, `LEAF_DOMAIN = 1` — before
+  entering the tree, in `circuits/merkle_tree.circom`,
+  `frontend/src/lib/merkletree.ts`, and
+  `contracts/membership-tree/src/lib.rs`. Verified by
+  `test_leaf_is_domain_separated_before_tree_insertion` in
+  `contracts/membership-tree/src/test.rs`, which reconstructs the on-chain
+  root off-chain using the domain-tagged hash.
+- **Groth16 proof malleability**: `(A, B, C)` and `(-A, -B, C)` both satisfy
+  the same pairing check; if proof bytes were ever used as a dedup/uniqueness
+  key, the two representations would look like distinct submissions.
+  `backend/src/services/stellar.ts`'s `canonicalizeProof()` now reduces A's
+  Y-coordinate to the lower half of the BN254 base field (negating both A
+  and B together, C untouched) before a proof is stored or submitted, so
+  both malleable forms of a proof always canonicalize identically.
+- **Proof coordinate field-range validation**: `proof.a`/`b`/`c` were
+  previously only checked for the all-zeros point at infinity.
+  `backend/src/validation/schemas.ts` now also rejects any coordinate that
+  isn't a valid BN254 base-field (Fq) element. This is a cheap early
+  rejection of malformed input — full curve/subgroup membership
+  verification remains the Soroban host's job at proof-verification time
+  (unchanged), since a hand-rolled EC membership check without a vetted
+  curve library would be a correctness/security risk of its own.
+
+### Explicitly deferred (not addressed by #167)
+
+- **Relayer front-running / proof-to-relayer binding**: this threat model
+  already documents relayer front-running as an accepted, low-severity risk
+  ("tally unaffected because votes are additive") rather than something the
+  system currently prevents. Binding a proof to a specific relayer would
+  mean adding `relayer_address` as a new circuit public signal, which
+  cascades into the Groth16 verifier's on-chain check and a new trusted
+  setup — a change that touches the same failure surface as a new
+  cryptographic parameter set and needs its own dedicated, carefully
+  reviewed pass rather than being bundled into this one.
+- **Circuit constraint-count optimization** (tracked separately, #123): a
+  multi-week circuit-engineering task independent of the security fixes
+  above.
+## Voter Deanonymization at Registration (Issue #122)
+
+**Threat**: during credential/registration flows where a voter submits an
+identity commitment tied to an authenticated request (e.g. a signed wallet
+challenge), the admin/issuer observes the `(voter_identifier, commitment)`
+pair directly. Even though the commitment itself is later used unlinkably
+inside the ZK proof (per the "What Relays Learn" section above), the
+*registration* step itself leaks the mapping to whoever operates the
+issuer, defeating anonymity for anyone who trusts that operator less than
+they trust "the protocol".
+
+**Mitigation (implemented as a primitive, not yet wired into registration
+routes)**: `backend/src/services/blindSignature.ts` implements RSA blind
+signatures (Chaum, 1983), the "simpler alternative to full OT" the issue
+calls out:
+
+1. The voter blinds their commitment with a fresh random blinding factor
+   before sending it to the issuer: `blinded = commitment * r^e mod n`.
+2. The issuer authenticates the voter (via whatever eligibility check is
+   already in place) and signs the *blinded* value — it never sees the
+   real commitment.
+3. The voter unblinds the returned signature locally, obtaining a valid
+   issuer signature over their original, never-disclosed commitment.
+4. The voter can later present `(commitment, signature)` — e.g. alongside
+   their Merkle-inclusion / vote proof — to prove eligibility without the
+   issuer being able to link it back to the blinded value from step 1.
+
+**Privacy guarantee (formal sketch)**: for a uniformly random blinding
+factor `r` coprime to `n`, `r^e mod n` is uniformly distributed over
+`Z_n*` (since `x -> x^e mod n` is a bijection on `Z_n*` when
+`gcd(e, phi(n)) = 1`, which RSA key generation guarantees). Multiplying the
+commitment by a uniform, secret unit therefore yields a blinded value whose
+distribution is statistically independent of the commitment itself
+("perfect blinding" in the standard RSA blind signature literature). This
+is exercised directly by the unlinkability tests in
+`backend/test/blind-signature.test.js` (chi-square uniformity test across
+fixed vs. varying underlying messages, and 100% collision-free sampling
+across repeated blindings of the same message).
+
+**Residual scope / what's left out**: this landing implements and tests
+the cryptographic primitive only. Wiring it end-to-end (new registration
+HTTP endpoints for the blind/sign exchange, DB schema for issued
+credentials, revocation/one-credential-per-voter enforcement without the
+issuer learning the commitment, frontend integration) is a materially
+larger change with its own migration and abuse-prevention design (e.g.
+preventing a single eligible voter from requesting many blind signatures)
+and is intentionally out of scope for this PR — see the PR description for
+the full list of deferred acceptance criteria.

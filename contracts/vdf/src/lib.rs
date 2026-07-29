@@ -74,7 +74,9 @@ pub const MAX_VDF_ITERATIONS: u64 = 10_000_000;
 pub fn compute_vdf(env: &Env, x: &BytesN<32>, t: u64) -> BytesN<32> {
     let mut current = x.clone();
     for _ in 0..t {
-        let hash = env.crypto().sha256(&Bytes::from_array(env, &current.to_array()));
+        let hash = env
+            .crypto()
+            .sha256(&Bytes::from_array(env, &current.to_array()));
         current = hash.into();
     }
     current
@@ -220,7 +222,9 @@ pub fn create_checkpoints(
 
     for _ in 0..num_checkpoints {
         for _ in 0..seg_size {
-            let hash = env.crypto().sha256(&Bytes::from_array(env, &current.to_array()));
+            let hash = env
+                .crypto()
+                .sha256(&Bytes::from_array(env, &current.to_array()));
             current = hash.into();
         }
         checkpoints.push_back(current.clone());
@@ -277,7 +281,9 @@ mod tests {
         // Manually compute expected result
         let mut expected = x.clone();
         for _ in 0..t {
-            let hash = env.crypto().sha256(&Bytes::from_array(&env, &expected.to_array()));
+            let hash = env
+                .crypto()
+                .sha256(&Bytes::from_array(&env, &expected.to_array()));
             expected = hash.into();
         }
 
@@ -373,7 +379,11 @@ mod tests {
         assert_eq!(challenges1.len(), 5);
         assert_eq!(challenges2.len(), 5);
 
-        let diff = challenges1.iter().zip(challenges2.iter()).filter(|(a, b)| a != b).count();
+        let diff = challenges1
+            .iter()
+            .zip(challenges2.iter())
+            .filter(|(a, b)| a != b)
+            .count();
         assert!(diff > 0);
     }
 }

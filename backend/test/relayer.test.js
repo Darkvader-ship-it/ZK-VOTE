@@ -109,7 +109,7 @@ test('vote rejects U256 values above BN254 modulus', async () => {
       choice: true,
       nullifier: tooBig,
       root: '01'.repeat(32), // 64 hex chars
-      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '33'.repeat(64) },
+      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '05'.repeat(64) },
     });
   assert.equal(res.statusCode, 400);
   // Zod returns 'Validation failed' with details mentioning 'BN254 field modulus'
@@ -155,7 +155,7 @@ test('generic errors hide message when RELAYER_GENERIC_ERRORS=true', async () =>
       choice: true,
       nullifier: '0xz', // malformed
       root: '0x01',
-      proof: { a: '0x' + '11'.repeat(64), b: '0x' + '22'.repeat(128), c: '0x' + '33'.repeat(64) },
+      proof: { a: '0x' + '11'.repeat(64), b: '0x' + '22'.repeat(128), c: '0x' + '05'.repeat(64) },
     });
   assert.equal(res.statusCode, 400);
   assert.ok(res.body.error);

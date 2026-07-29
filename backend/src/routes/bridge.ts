@@ -23,7 +23,7 @@ import {
   u256ToScVal,
 } from "../services/stellar.js";
 
-import { authGuard, queryLimiter, validateBody, validateParams } from "../middleware/index.js";
+import { authGuard, queryLimiter, validateBody, validateParams, bodyLimit } from "../middleware/index.js";
 import { nullifierParamsSchema } from "../validation/schemas.js";
 import { z } from "zod";
 import type { AsyncHandler } from "../types/index.js";
@@ -58,7 +58,7 @@ export const bridgeVoteSchema = z.object({
  * Receives a Groth16 proof generated on EVM and relays it to Soroban.
  * The proof proves SBT membership and voting eligibility.
  */
-router.post("/bridge/vote", validateBody(bridgeVoteSchema), (async (
+router.post("/bridge/vote", bodyLimit("100kb"), validateBody(bridgeVoteSchema), (async (
   req: Request,
   res: Response,
 ) => {
@@ -295,7 +295,7 @@ router.get(
  *
  * Admin endpoint to manually process EVM events
  */
-router.post("/bridge/relay", authGuard, (async (
+router.post("/bridge/relay", bodyLimit("100kb"), authGuard, (async (
   req: Request,
   res: Response,
 ) => {
