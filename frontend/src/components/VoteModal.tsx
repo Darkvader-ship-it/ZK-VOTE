@@ -60,7 +60,7 @@ export default function VoteModal({
 
       // Step 1: Load registration data (or regenerate from wallet)
       setProgress("Loading voting credentials...");
-      let secret: string, salt: string, commitment: string, leafIndex: number;
+      let secret: string, salt: string, blindingFactor: string, commitment: string, leafIndex: number;
 
       const cached = getZKCredentials(daoId, publicKey);
 
@@ -90,6 +90,7 @@ export default function VoteModal({
         leafIndex = Number(leafIndexResult.result);
         secret = credentials.secret;
         salt = credentials.salt;
+        blindingFactor = credentials.blindingFactor;
         commitment = credentials.commitment;
 
         // Cache for next time
@@ -99,6 +100,7 @@ export default function VoteModal({
       } else {
         secret = cached.secret;
         salt = cached.salt;
+        blindingFactor = cached.blindingFactor;
         commitment = cached.commitment;
         leafIndex = cached.leafIndex;
       }
@@ -172,6 +174,7 @@ export default function VoteModal({
         // Private signals
         secret: secret.toString(),
         salt: salt.toString(),
+        blindingFactor: blindingFactor.toString(),
         pathElements,
         pathIndices,
       };
