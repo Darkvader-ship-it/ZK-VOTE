@@ -92,6 +92,24 @@ export const config = {
   relayerAuthToken: process.env.RELAYER_AUTH_TOKEN,
   relayerSecretKey: process.env.RELAYER_SECRET_KEY,
 
+  // Master key for token management endpoints (REQUIRED - must be at least 32 chars)
+  authMasterKey: process.env.AUTH_MASTER_KEY,
+
+  // Token rotation configuration
+  tokenRotationEnabled: process.env.TOKEN_ROTATION_ENABLED !== "false",
+  tokenRotationIntervalMs: Number(
+    process.env.TOKEN_ROTATION_INTERVAL_MS || 2_592_000_000,
+  ),
+  tokenRotationTransitionMs: Number(
+    process.env.TOKEN_ROTATION_TRANSITION_MS || 172_800_000,
+  ),
+  defaultTokenLifetimeMs: Number(
+    process.env.DEFAULT_TOKEN_LIFETIME_MS || 5_184_000_000,
+  ),
+
+  // Audit logging
+  tokenAuditLogEnabled: process.env.TOKEN_AUDIT_LOG_ENABLED !== "false",
+
   // Contract IDs
   votingContractId: process.env.VOTING_CONTRACT_ID,
   treeContractId: process.env.TREE_CONTRACT_ID,
@@ -310,7 +328,7 @@ export function validateEnv(): void {
   if (!config.relayerSecretKey) missing.push("RELAYER_SECRET_KEY");
   if (!config.rpcUrl) missing.push("SOROBAN_RPC_URL");
   if (!config.networkPassphrase) missing.push("NETWORK_PASSPHRASE");
-  if (!config.relayerAuthToken) missing.push("RELAYER_AUTH_TOKEN");
+  if (!config.authMasterKey) missing.push("AUTH_MASTER_KEY");
 
   if (missing.length > 0) {
     console.error(
@@ -320,6 +338,7 @@ export function validateEnv(): void {
     process.exit(1);
   }
 
+  // Validate auth master key strength (minimum 32 characters for security)
   // Prevent production secrets in non-production environments
   const isProd = process.env.NODE_ENV === "production";
   if (
@@ -342,6 +361,24 @@ export function validateEnv(): void {
   // Validate auth token strength (minimum 32 characters for security)
   // Skip validation in test mode since tests set short tokens for convenience
   if (
+    config.authMasterKey &&
+    config.authMasterKey.length < 32 &&
+    !config.testMode
+  ) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "weak_auth_master_key",
+        length: config.authMasterKey.length,
+        minLength: 32,
+      }),
+    );
+    console.error("AUTH_MASTER_KEY must be at least 32 characters");
+    process.exit(1);
+  }
+
+  // Validate legacy RELAYER_AUTH_TOKEN if provided (backward compatibility)
+  if (
     config.relayerAuthToken &&
     config.relayerAuthToken.length < 32 &&
     !config.testMode
@@ -349,7 +386,7 @@ export function validateEnv(): void {
     console.error(
       JSON.stringify({
         level: "error",
-        event: "weak_auth_token",
+        event: "weak_legacy_auth_token",
         length: config.relayerAuthToken.length,
         minLength: 32,
       }),
