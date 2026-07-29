@@ -64,6 +64,8 @@ export interface EventQueryOptions {
   verifiedOnly?: boolean;
   orderBy?: string;
   orderDirection?: string;
+  cursor?: string;
+  cursorField?: string;
 }
 
 export interface EventQueryResult {
@@ -378,6 +380,18 @@ function validateEventTypes(types: string[]): string[] {
     throw new Error(`Invalid event types: ${invalid.join(', ')}`);
   }
   return types;
+}
+
+/**
+ * Decode a base64-encoded cursor back into its components.
+ */
+function decodeCursor(cursor: string, cursorField: string): { i?: number; l?: number; t?: string } {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64").toString("utf-8"));
+    return decoded;
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -772,7 +786,8 @@ export function initDb(dbPath?: string): DatabaseType {
     });
   }
 
-  // Populate knownPartitions from the registry
+  // Populate knownPartitions from the active database registry.
+  knownPartitions.clear();
   const rows = database
     .prepare("SELECT dao_id FROM partition_registry")
     .all() as Array<{ dao_id: number }>;
@@ -811,9 +826,7 @@ export function initDb(dbPath?: string): DatabaseType {
     }
   }
 
-  if (!dbPath) {
-    db = database;
-  }
+  db = database;
 
   log("info", "db_initialized", {
     path: dbFile,
@@ -824,6 +837,7 @@ export function initDb(dbPath?: string): DatabaseType {
 }
 
 /**
+ * Return the initialized database instance, initializing it if needed.
  * Get active database instance or initialize default.
  * Return the initialized database instance (initializing it if needed).
  * archival.ts and backup.ts import this; it was missing from this module's
@@ -1162,6 +1176,15 @@ export function addPendingEvent(
  * SECURITY: Uses parameterized queries and validates inputs.
  */
 export function verifyEvent(txHash: string, ledger: number): void {
+  if (
+    typeof txHash !== "string" ||
+    txHash.length === 0 ||
+    txHash.length > 128 ||
+    !/^[A-Za-z0-9_-]+$/.test(txHash)
+  ) {
+    throw new Error("Invalid transaction hash");
+  }
+
   // SECURITY: Basic input validation
   if (typeof txHash !== 'string' || txHash.length === 0 || txHash.length > 128) {
     throw new Error(`Invalid txHash: ${txHash}`);
@@ -1186,6 +1209,7 @@ export function verifyEvent(txHash: string, ledger: number): void {
 
 /**
  * Get events for a DAO (from its partition).
+ * Supports both cursor-based and offset-based pagination.
  * SECURITY: Uses parameterized queries and validates all inputs.
  */
 export function getEventsForDao(
@@ -1197,12 +1221,14 @@ export function getEventsForDao(
   ensurePartitionTable(daoId);
 
   const {
-    limit = 50,
+    limit = 100,
     offset = 0,
     types = null,
     verifiedOnly = false,
     orderBy = 'timestamp',
-    orderDirection = 'DESC'
+    orderDirection = 'DESC',
+    cursor,
+    cursorField = 'id',
   } = options;
 
   // SECURITY: Validate limit and offset
@@ -1225,11 +1251,24 @@ export function getEventsForDao(
     query = query.where("verified", "=", 1);
   }
 
+  // Cursor-based pagination: filter for records after the cursor position
+  if (cursor) {
+    const decoded = decodeCursor(cursor, cursorField);
+    if (cursorField === "id") {
+      query = query.where("id", ">", decoded.i as number);
+    } else if (cursorField === "ledger") {
+      query = query.where("ledger", ">", decoded.l as number);
+    } else if (cursorField === "timestamp") {
+      query = query.where("timestamp", ">", decoded.t as string);
+    }
+  } else {
+    query = query.offset(validOffset);
+  }
+
   query = query
     .orderBy(orderColumn as any, direction.toLowerCase() as any)
     .orderBy("ledger", "desc")
-    .limit(validLimit)
-    .offset(validOffset);
+    .limit(validLimit);
 
   const compiled = query.compile();
 
@@ -1242,7 +1281,7 @@ export function getEventsForDao(
   let countQuery = kysely
     .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
     .select(sql<number>`COUNT(*)`.as("total"));
-    
+
   if (types && types.length > 0) {
     countQuery = countQuery.where("type", "in", validateEventTypes(types));
   }
@@ -1856,10 +1895,16 @@ export function migrateFromJson(jsonPath: string): number {
 
             // SECURITY: Validate timestamp format if provided
             const timestamp = event.timestamp ?? new Date().toISOString();
-            if (event.timestamp && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp)) {
-              log("warn", "json_migration_invalid_timestamp", { 
-                timestamp: event.timestamp, 
-                daoId 
+            if (
+              event.timestamp &&
+              (
+                !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp) ||
+                Number.isNaN(Date.parse(event.timestamp))
+              )
+            ) {
+              log("warn", "json_migration_invalid_timestamp", {
+                timestamp: event.timestamp,
+                daoId,
               });
               continue;
             }

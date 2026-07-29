@@ -7,6 +7,7 @@
  */
 
 import dotenv from "dotenv";
+import os from "node:os";
 import fs from "fs";
 import path from "path";
 
@@ -61,6 +62,21 @@ export function isValidContractId(
 export const config = {
   // Server
   port: Number(process.env.PORT || 3001),
+
+  // Clustering
+  clusterEnabled: process.env.CLUSTER_ENABLED === "true",
+  clusterWorkers: Math.max(
+    1,
+    Number(
+      process.env.CLUSTER_WORKERS ||
+        process.env.WORKER_COUNT ||
+        process.env.WEB_CONCURRENCY ||
+        (typeof os.availableParallelism === "function"
+          ? os.availableParallelism()
+          : os.cpus().length) ||
+        2,
+    ),
+  ),
 
   // Soroban RPC
   rpcUrl: process.env.SOROBAN_RPC_URL || "http://localhost:8000/soroban/rpc",
@@ -167,6 +183,16 @@ export const config = {
   s3Bucket: process.env.BACKUP_S3_BUCKET || process.env.S3_BUCKET,
   archivalAgeDays: Number(process.env.ARCHIVAL_AGE_DAYS || 90),
   archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
+
+  // Audit log rotation and archival
+  auditLogRetentionDays: Number(
+    process.env.AUDIT_LOG_RETENTION_DAYS || 90,
+  ),
+  auditLogRotationIntervalMs: Number(
+    process.env.AUDIT_LOG_ROTATION_INTERVAL_MS || 86_400_000,
+  ),
+  auditLogArchiveDir:
+    process.env.AUDIT_LOG_ARCHIVE_DIR || "./data/audit-archive",
 
   // Proof Security & Mitigations
   maxProofAgeSeconds: Number(process.env.MAX_PROOF_AGE_SECONDS || 300),
