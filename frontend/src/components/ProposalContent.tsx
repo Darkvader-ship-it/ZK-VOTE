@@ -41,6 +41,7 @@ export default function ProposalContent({ contentCid }: ProposalContentProps) {
     if (hasRichContent && !metadata && !loadingMetadata && !metadataFailed) {
       loadMetadata();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentCid, hasRichContent, metadata, loadingMetadata, metadataFailed]);
 
   const loadMetadata = async () => {
