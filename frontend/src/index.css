@@ -265,3 +265,41 @@
   -webkit-text-fill-color: #fafafa !important;
 }
 
+/* Mobile responsive & safe area utilities */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
+.pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Minimum 48x48px tap target constraint for Apple HIG / accessibility */
+.touch-target {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Mobile viewport height fix for iOS Safari 100vh dynamic bar issues */
+.min-h-dvh {
+  min-height: 100dvh;
+}
+
+/* Prevent horizontal overflow from long Stellar addresses & hashes */
+.break-words-all {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+

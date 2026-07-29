@@ -291,3 +291,47 @@ export async function notifyEvent(
     console.warn("Failed to notify relayer of event:", error);
   }
 }
+
+export interface CommitVoteInput {
+  daoId: number;
+  proposalId: number;
+  nullifier: string;
+  commitmentHash: string;
+  timestamp: number;
+  walletAddress?: string;
+}
+
+/**
+ * Commit to a proof hash before revealing
+ */
+export async function commitVoteProof(input: CommitVoteInput): Promise<{
+  success: boolean;
+  commitmentHash: string;
+  expiresAt: string;
+}> {
+  const response = await relayerFetch("/vote/commit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || "Failed to commit vote proof");
+  }
+
+  return response.json();
+}
+
+/**
+ * Fetch relayer public key for proof encryption
+ */
+export async function fetchRelayerPublicKey(): Promise<string> {
+  const response = await relayerFetch("/relayer/pubkey");
+  if (!response.ok) {
+    throw new Error("Failed to fetch relayer public key");
+  }
+  const data = await response.json();
+  return data.publicKey;
+}
+
