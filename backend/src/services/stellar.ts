@@ -8,6 +8,7 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { config, BN254_SCALAR_FIELD } from "../config.js";
 import { log, logger } from "./logger.js";
+import { getMetadata, setMetadata } from "./db.js";
 import {
   rpcCallsTotal,
   rpcCallDuration,
@@ -103,6 +104,81 @@ export async function waitForSequenceLockIdle(
   }
   return true;
 }
+
+// ============================================
+// SEQUENCE MANAGER
+// ============================================
+
+/**
+ * Manages the relayer account's sequence number with dirty-flag recovery.
+ *
+ * When an RPC error leaves the local sequence unknown, `markDirty()` forces a
+ * fresh `getAccount` call before the next submission instead of building on a
+ * potentially stale number. The last known sequence is persisted to the SQLite
+ * metadata table so a process crash doesn't lose it.
+ */
+export class SequenceManager {
+  private dirty = false;
+  private lastKnownSequence: string | null = null;
+
+  constructor() {
+    const persisted = this.loadPersisted();
+    if (persisted) {
+      this.lastKnownSequence = persisted;
+    }
+  }
+
+  private loadPersisted(): string | null {
+    try {
+      return getMetadata<string>("relayer_last_sequence");
+    } catch {
+      return null;
+    }
+  }
+
+  private persist(seq: string): void {
+    try {
+      setMetadata("relayer_last_sequence", seq);
+    } catch {
+      // Non-fatal: SQLite may be unavailable during tests
+    }
+  }
+
+  markDirty(): void {
+    this.dirty = true;
+  }
+
+  async forceResync(sorobanServer: StellarSdk.rpc.Server): Promise<void> {
+    const account = await sorobanServer.getAccount(relayerKeypair.publicKey());
+    const seq = (account as unknown as { sequence: string }).sequence ?? String((account as any).sequenceNumber?.());
+    this.lastKnownSequence = seq;
+    this.dirty = false;
+    this.persist(seq);
+    log("info", "sequence_resync", { sequence: seq });
+  }
+
+  async getAccount(sorobanServer: StellarSdk.rpc.Server): Promise<StellarSdk.Account> {
+    if (this.dirty || this.lastKnownSequence === null) {
+      const account = await sorobanServer.getAccount(relayerKeypair.publicKey());
+      const seq = (account as any).sequence ?? String((account as any).sequenceNumber?.());
+      this.lastKnownSequence = seq;
+      this.dirty = false;
+      this.persist(seq);
+      return account;
+    }
+    return sorobanServer.getAccount(relayerKeypair.publicKey());
+  }
+
+  handleTxError(errorResult: string): boolean {
+    if (errorResult && errorResult.includes("tx_bad_seq")) {
+      this.markDirty();
+      return true;
+    }
+    return false;
+  }
+}
+
+export const sequenceManager = new SequenceManager();
 
 export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
   if (config.clusterEnabled && cluster.isWorker) {

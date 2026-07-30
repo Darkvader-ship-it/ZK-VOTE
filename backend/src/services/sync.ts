@@ -19,6 +19,7 @@ import {
   relayerKeypair,
   callWithTimeout,
   simulateWithBackoff,
+  sequenceManager,
 } from "./stellar.js";
 import type { Dao } from "../types/index.js";
 import {
@@ -594,6 +595,21 @@ export function stopMembershipSync(): void {
     membershipSyncInterval = null;
     serviceRunning.set({ service: "membership_sync" }, 0);
     log("info", "membership_sync_stopped");
+  }
+}
+
+/**
+ * Graceful shutdown: flush sequence state so the next process starts clean.
+ * Called by the shutdown handler after in-flight submissions have drained.
+ */
+export async function gracefulShutdownSync(): Promise<void> {
+  stopDaoSync();
+  stopMembershipSync();
+  try {
+    await sequenceManager.forceResync(server as import("@stellar/stellar-sdk").rpc.Server);
+    log("info", "sequence_persisted_on_shutdown");
+  } catch (err) {
+    log("warn", "sequence_resync_on_shutdown_failed", { error: (err as Error).message });
   }
 }
 

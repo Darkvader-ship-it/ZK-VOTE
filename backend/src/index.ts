@@ -314,6 +314,7 @@ let backgroundServicesStarted = false;
         "/proposal/:dao/:prop",
         "/nullifier/:daoId/:proposalId/:nullifier",
         "/root/:dao",
+        "/root-history/:daoId/:proposalId",
         "/events/:daoId",
         "/events/notify",
         "/indexer/status",
