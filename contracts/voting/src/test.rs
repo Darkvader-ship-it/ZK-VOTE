@@ -3242,16 +3242,16 @@ fn test_successful_vote_clears_reentrancy_lock() {
 
 #[test]
 fn test_recursive_tally_submission() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let creator = Address::generate(&env);
-    let registry_id = env.register(crate::test::DummyRegistry, ());
-
-    let voting_id = env.register_contract(None, Voting);
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
     let client = VotingClient::new(&env, &voting_id);
-    client.initialize(&registry_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+    registry_client.set_admin(&1u64, &admin);
+    client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
 
     let dao_id = 1u64;
 
@@ -3268,7 +3268,7 @@ fn test_recursive_tally_submission() {
         &String::from_str(&env, "Recursive Test Proposal"),
         &String::from_str(&env, "ipfs://QmTest"),
         &end_time,
-        &creator,
+        &member,
         &VoteMode::Fixed,
     );
 
@@ -3394,8 +3394,9 @@ fn test_quadratic_set_qv_vk_wrong_ic_length_fails() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
     let admin = Address::generate(&env);
     registry_client.set_admin(&1u64, &admin);
-    // Regular vote VK has IC length 6, not the 7 the QV circuit requires.
-    voting_client.set_qv_vk(&1u64, &create_dummy_vk(&env), &admin);
+    let mut bad_vk = create_dummy_vk(&env);
+    bad_vk.ic.pop_back();
+    voting_client.set_qv_vk(&1u64, &bad_vk, &admin);
 }
 
 #[test]
@@ -3686,7 +3687,7 @@ fn test_nullifier_domain_separation_across_elections() {
         &member,
         &VoteMode::Fixed,
     );
-    env.ledger().set_timestamp(now + ELECTION_CREATION_COOLDOWN);
+    env.ledger().set_timestamp(now + 300);
     let now2 = env.ledger().timestamp();
     let election_b = voting_client.create_proposal(
         &2u64,
@@ -3773,4 +3774,115 @@ fn test_migrate_nullifier_to_election_scope() {
     // Second migrate is a no-op (legacy already removed)
     let migrated_again = voting_client.migrate_nullifier(&1u64, &proposal_id, &nullifier, &admin);
     assert!(!migrated_again);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_tally_yes_votes_overflow_fails() {
+    let (env, voting_id, _tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+    registry_client.set_admin(&1u64, &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Title"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    let key = DataKey::Proposal(1u64, proposal_id);
+    let mut proposal: ProposalInfo =
+        env.as_contract(&voting_id, || env.storage().persistent().get(&key).unwrap());
+    proposal.yes_votes = u64::MAX;
+    env.as_contract(&voting_id, || {
+        env.storage().persistent().set(&key, &proposal);
+    });
+
+    let nullifier = U256::from_u32(&env, 123);
+    let proof = create_dummy_proof(&env);
+    let root = voting_client.get_eligible_root(&1u64, &proposal_id);
+
+    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &root, &proof);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_tally_no_votes_overflow_fails() {
+    let (env, voting_id, _tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+    registry_client.set_admin(&1u64, &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Title"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    let key = DataKey::Proposal(1u64, proposal_id);
+    let mut proposal: ProposalInfo =
+        env.as_contract(&voting_id, || env.storage().persistent().get(&key).unwrap());
+    proposal.no_votes = u64::MAX;
+    env.as_contract(&voting_id, || {
+        env.storage().persistent().set(&key, &proposal);
+    });
+
+    let nullifier = U256::from_u32(&env, 123);
+    let proof = create_dummy_proof(&env);
+    let root = voting_client.get_eligible_root(&1u64, &proposal_id);
+
+    voting_client.vote(&1u64, &proposal_id, &false, &nullifier, &root, &proof);
+}
+
+#[test]
+fn test_recursive_tally_overflow_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+    registry_client.set_admin(&1u64, &admin);
+    voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Title"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    let proof = Bytes::from_array(&env, &[1u8; 32]);
+    let nullifier_acc = U256::from_u32(&env, 1);
+
+    let res = voting_client.try_submit_recursive_tally(
+        &1u64,
+        &proposal_id,
+        &u64::MAX,
+        &u64::MAX,
+        &u64::MAX,
+        &nullifier_acc,
+        &proof,
+    );
+
+    assert!(res.is_err());
 }

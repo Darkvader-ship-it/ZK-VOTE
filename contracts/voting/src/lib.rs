@@ -131,21 +131,23 @@ pub enum VotingError {
     /// Tally proposal_ids / tallies vectors have mismatched or empty length
     QvTallyLengthMismatch = 54,
     /// Candidate index >= numCandidates configured for this election
-    InvalidCandidateIndex = 40,
+    InvalidCandidateIndex = 63,
     /// Reentrant call detected (defense-in-depth against cross-contract reentrancy)
-    ReentrantCall = 41,
+    ReentrantCall = 56,
     /// VDF proof verification failed
-    VdfVerificationFailed = 41,
+    VdfVerificationFailed = 57,
     /// VDF output already submitted for this election
-    VdfAlreadySubmitted = 42,
+    VdfAlreadySubmitted = 58,
     /// VDF delay period has not elapsed yet
-    VdfDelayNotElapsed = 43,
+    VdfDelayNotElapsed = 59,
     /// VDF delay parameter is invalid
-    VdfInvalidDelay = 44,
+    VdfInvalidDelay = 60,
     /// VDF input (block hash) is not available
-    VdfInputNotAvailable = 45,
+    VdfInputNotAvailable = 61,
     /// Invalid Nova recursive proof or tally verification failure
-    RecursiveProofInvalid = 41,
+    RecursiveProofInvalid = 62,
+    /// Vote tally increment overflowed maximum integer capacity
+    TallyOverflow = 55,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -159,7 +161,7 @@ const MAX_CID_LEN: u32 = 64; // Max IPFS CID length (CIDv1 is ~59 chars)
 
 // Circuit constants
 /// Vote circuit public signals: root, nullifier, dao_id, proposal_id, vote_choice, num_candidates
-const NUM_PUBLIC_SIGNALS: u32 = 9;
+const NUM_PUBLIC_SIGNALS: u32 = 6;
 // IC (inner commitment) vector length for Groth16 VK = num_public_inputs + 1
 const VOTE_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 pub const MAX_PAUSE_DURATION: u64 = 72 * 60 * 60;
@@ -170,8 +172,10 @@ const MAX_RANDOMNESS_PARTICIPANTS: u32 = 32;
 
 // VDF constants
 /// Minimum VDF checkpoints for on-chain verification
+#[allow(dead_code)]
 const MIN_VDF_CHECKPOINTS: u32 = 3;
 /// Maximum VDF checkpoints to bound on-chain computation
+#[allow(dead_code)]
 const MAX_VDF_CHECKPOINTS: u32 = 100;
 
 // Quadratic-voting circuit constants (issue #50)
@@ -193,10 +197,6 @@ pub enum DataKey {
     /// Election-scoped nullifier usage flag (`NullifierUsed(election, n)`).
     /// Election identity is `(dao_id, proposal_id)`. Must not be a flat global map
     /// — see issue #64 / `storage.rs`.
-    Nullifier(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool
-    VotingKey(u64),     // dao_id -> latest VerificationKey (BN254)
-    Proposal(u64, u64), // (dao_id, proposal_id) -> ProposalInfo
-    ProposalCount(u64), // dao_id -> count
     Nullifier(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool
     VoteFamily(u64, u64, U256), // (dao_id, proposal_id, family_nullifier) -> (u32, bool)
     VotingKey(u64),     // dao_id -> latest VerificationKey (BN254)
@@ -522,7 +522,7 @@ pub struct RecursiveTallySubmittedEvent {
     pub num_votes: u64,
     pub yes_votes: u64,
     pub no_votes: u64,
-    pub final_nullifier_acc: String,
+    pub final_nullifier_acc: U256,
 }
 
 #[soroban_sdk::contractevent]
@@ -843,11 +843,14 @@ impl Voting {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
 
-        if proof.len() == 0 {
+        if proof.is_empty() {
             return Err(VotingError::InvalidProof);
         }
 
-        if yes_votes + no_votes != num_votes {
+        let total_votes = yes_votes
+            .checked_add(no_votes)
+            .ok_or(VotingError::TallyOverflow)?;
+        if total_votes != num_votes {
             return Err(VotingError::RecursiveProofInvalid);
         }
 
@@ -867,9 +870,15 @@ impl Voting {
             return Err(VotingError::VotingClosed);
         }
 
-        // Update proposal tallies
-        proposal.yes_votes += yes_votes;
-        proposal.no_votes += no_votes;
+        // Update proposal tallies with checked arithmetic
+        proposal.yes_votes = proposal
+            .yes_votes
+            .checked_add(yes_votes)
+            .ok_or(VotingError::TallyOverflow)?;
+        proposal.no_votes = proposal
+            .no_votes
+            .checked_add(no_votes)
+            .ok_or(VotingError::TallyOverflow)?;
         proposal.state = ProposalState::Closed;
 
         env.storage().persistent().set(&key, &proposal);
@@ -1508,7 +1517,7 @@ impl Voting {
         // daoId + proposalId ARE the election binding verified on-chain (#64):
         // the circuit enforces nullifier = Poseidon(secret, daoId, proposalId), so a
         // proof for election A cannot authorize a vote in election B.
-        let vote_signal = if vote_choice {
+        let _vote_signal = if vote_choice {
             U256::from_u32(&env, 1)
         } else {
             U256::from_u32(&env, 0)
@@ -1529,6 +1538,7 @@ impl Voting {
                 num_candidates: 0,
                 vdf_output: None,
                 vdf_delay: 0,
+                max_revotes: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -1556,11 +1566,17 @@ impl Voting {
             panic_with_error!(&env, VotingError::InvalidProof);
         }
 
-        // Update vote count (nullifier already marked above per CEI pattern)
+        // Update vote count with checked arithmetic
         if vote_choice {
-            proposal.yes_votes += 1;
+            proposal.yes_votes = proposal
+                .yes_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         } else {
-            proposal.no_votes += 1;
+            proposal.no_votes = proposal
+                .no_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
@@ -1702,6 +1718,7 @@ impl Voting {
                 num_candidates: 0,
                 vdf_output: None,
                 vdf_delay: 0,
+                max_revotes: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -1729,11 +1746,17 @@ impl Voting {
             panic_with_error!(&env, VotingError::InvalidProof);
         }
 
-        // Update vote count (nullifier already marked above per CEI pattern)
+        // Update vote count with checked arithmetic
         if vote_choice {
-            proposal.yes_votes += 1;
+            proposal.yes_votes = proposal
+                .yes_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         } else {
-            proposal.no_votes += 1;
+            proposal.no_votes = proposal
+                .no_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
@@ -2277,6 +2300,7 @@ impl Voting {
                 num_candidates: 0,
                 vdf_output: None,
                 vdf_delay: 0,
+                max_revotes: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -2308,9 +2332,15 @@ impl Voting {
         Self::bump_persistent(&env, &null_key);
 
         if vote_choice {
-            proposal.yes_votes += 1;
+            proposal.yes_votes = proposal
+                .yes_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         } else {
-            proposal.no_votes += 1;
+            proposal.no_votes = proposal
+                .no_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
@@ -2361,6 +2391,7 @@ impl Voting {
             num_candidates,
             vdf_output,
             vdf_delay,
+            max_revotes: 0,
         };
         env.storage().persistent().set(&key, &config);
         Self::bump_persistent(&env, &key);
@@ -2728,6 +2759,7 @@ impl Voting {
                     num_candidates: 0,
                     vdf_output: None,
                     vdf_delay: 0,
+                    max_revotes: 0,
                 });
         if config.candidate_seed.is_some() {
             panic_with_error!(&env, VotingError::CandidateSeedFinalized);
@@ -2814,7 +2846,7 @@ impl Voting {
         admin.require_auth();
         Self::assert_admin(&env, dao_id, &admin);
 
-        if delay < vdf::MIN_VDF_ITERATIONS || delay > vdf::MAX_VDF_ITERATIONS {
+        if !(vdf::MIN_VDF_ITERATIONS..=vdf::MAX_VDF_ITERATIONS).contains(&delay) {
             panic_with_error!(&env, VotingError::VdfInvalidDelay);
         }
 
@@ -2924,6 +2956,7 @@ impl Voting {
                     num_candidates: 0,
                     vdf_output: None,
                     vdf_delay: delay,
+                    max_revotes: 0,
                 });
         config.vdf_output = Some(vdf_output.clone());
         config.vdf_delay = delay;
@@ -3013,6 +3046,7 @@ impl Voting {
                         num_candidates: 0,
                         vdf_output: None,
                         vdf_delay: 0,
+                        max_revotes: 0,
                     });
 
             // Mix VDF output with existing seed if available, or use VDF output as seed

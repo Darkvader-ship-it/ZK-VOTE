@@ -381,11 +381,13 @@ impl MembershipTree {
             Self::insert_leaf(&env, dao_id, commitment.clone(), next_index, depth);
 
         // Update next index
-        let next_leaf_key = DataKey::NextLeafIndex(dao_id);
+        let next_leaf_index = next_index
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, TreeError::TreeFull));
         env.storage()
             .persistent()
-            .set(&next_leaf_key, &(next_index + 1));
-        Self::bump_persistent(&env, &next_leaf_key);
+            .set(&DataKey::NextLeafIndex(dao_id), &next_leaf_index);
+        Self::bump_persistent(&env, &DataKey::NextLeafIndex(dao_id));
 
         // Store leaf index for this commitment
         env.storage().persistent().set(&leaf_key, &next_index);
@@ -464,11 +466,13 @@ impl MembershipTree {
             Self::insert_leaf(&env, dao_id, commitment.clone(), next_index, depth);
 
         // Update next index
-        let next_leaf_key = DataKey::NextLeafIndex(dao_id);
+        let next_leaf_index = next_index
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, TreeError::TreeFull));
         env.storage()
             .persistent()
-            .set(&next_leaf_key, &(next_index + 1));
-        Self::bump_persistent(&env, &next_leaf_key);
+            .set(&DataKey::NextLeafIndex(dao_id), &next_leaf_index);
+        Self::bump_persistent(&env, &DataKey::NextLeafIndex(dao_id));
 
         // Store leaf index for this commitment
         env.storage().persistent().set(&leaf_key, &next_index);
@@ -566,11 +570,13 @@ impl MembershipTree {
             Self::insert_leaf(&env, dao_id, commitment.clone(), next_index, depth);
 
         // Update next index
-        let next_leaf_key = DataKey::NextLeafIndex(dao_id);
+        let next_leaf_index = next_index
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, TreeError::TreeFull));
         env.storage()
             .persistent()
-            .set(&next_leaf_key, &(next_index + 1));
-        Self::bump_persistent(&env, &next_leaf_key);
+            .set(&DataKey::NextLeafIndex(dao_id), &next_leaf_index);
+        Self::bump_persistent(&env, &DataKey::NextLeafIndex(dao_id));
 
         // Store leaf index for this commitment
         env.storage().persistent().set(&leaf_key, &next_index);

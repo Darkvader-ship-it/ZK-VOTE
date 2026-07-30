@@ -115,7 +115,7 @@
                   "u64": "1"
                 },
                 {
-                  "string": "Test"
+                  "string": "Title"
                 },
                 {
                   "string": ""
@@ -140,8 +140,6 @@
         }
       ]
     ],
-    [],
-    [],
     []
   ],
   "ledger": {
@@ -350,97 +348,6 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "ElectionConfig"
-                  },
-                  {
-                    "u64": "1"
-                  },
-                  {
-                    "u64": "1"
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "candidate_seed"
-                    },
-                    "val": "void"
-                  },
-                  {
-                    "key": {
-                      "symbol": "max_revotes"
-                    },
-                    "val": {
-                      "u32": 0
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "min_balance"
-                    },
-                    "val": {
-                      "i128": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "num_candidates"
-                    },
-                    "val": {
-                      "u32": 1
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "snapshot_ledger"
-                    },
-                    "val": {
-                      "u32": 0
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "twab_window"
-                    },
-                    "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "vdf_delay"
-                    },
-                    "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "vdf_output"
-                    },
-                    "val": "void"
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 535680
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
-              "key": {
-                "vec": [
-                  {
                     "symbol": "Proposal"
                   },
                   {
@@ -551,7 +458,7 @@
                       "symbol": "title"
                     },
                     "val": {
-                      "string": "Test"
+                      "string": "Title"
                     }
                   },
                   {
