@@ -3255,6 +3255,11 @@ fn test_recursive_tally_submission() {
     let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
     let client = VotingClient::new(&env, &voting_id);
     let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
     let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
     let admin = Address::generate(&env);
@@ -3405,6 +3410,7 @@ fn test_quadratic_set_qv_vk_wrong_ic_length_fails() {
     let voting_client = VotingClient::new(&env, &voting_id);
     let _registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
     let admin = Address::generate(&env);
+    registry_client.set_admin(&1u64, &admin);
     let mut bad_vk = create_dummy_vk(&env);
     bad_vk.ic.pop_back();
     voting_client.set_qv_vk(&1u64, &bad_vk, &admin);
@@ -3788,6 +3794,20 @@ fn test_migrate_nullifier_to_election_scope() {
 }
 
 #[test]
+#[should_panic(expected = "HostError")]
+fn test_tally_yes_votes_overflow_fails() {
+    let (env, voting_id, _tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+    registry_client.set_admin(&1u64, &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Title"),
 fn test_set_merkle_root_during_registration() {
     let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
     let voting_client = VotingClient::new(&env, &voting_id);
@@ -3812,6 +3832,31 @@ fn test_set_merkle_root_during_registration() {
         &VoteMode::Fixed,
     );
 
+    let key = DataKey::Proposal(1u64, proposal_id);
+    let mut proposal: ProposalInfo =
+        env.as_contract(&voting_id, || env.storage().persistent().get(&key).unwrap());
+    proposal.yes_votes = u64::MAX;
+    env.as_contract(&voting_id, || {
+        env.storage().persistent().set(&key, &proposal);
+    });
+
+    let nullifier = U256::from_u32(&env, 123);
+    let proof = create_dummy_proof(&env);
+    let root = voting_client.get_eligible_root(&1u64, &proposal_id);
+
+    voting_client.vote(&1u64, &proposal_id, &true, &nullifier, &root, &proof);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_tally_no_votes_overflow_fails() {
+    let (env, voting_id, _tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
+    registry_client.set_admin(&1u64, &admin);
     // Set commitment window to 600 seconds
     voting_client.set_commitment_window(&1u64, &proposal_id, &600u64, &admin);
 
@@ -3857,6 +3902,7 @@ fn test_set_merkle_root_when_active_fails() {
     let now = env.ledger().timestamp();
     let proposal_id = voting_client.create_proposal(
         &1u64,
+        &String::from_str(&env, "Title"),
         &String::from_str(&env, "Active Proposal"),
         &String::from_str(&env, ""),
         &(now + 3600),
@@ -3864,6 +3910,31 @@ fn test_set_merkle_root_when_active_fails() {
         &VoteMode::Fixed,
     );
 
+    let key = DataKey::Proposal(1u64, proposal_id);
+    let mut proposal: ProposalInfo =
+        env.as_contract(&voting_id, || env.storage().persistent().get(&key).unwrap());
+    proposal.no_votes = u64::MAX;
+    env.as_contract(&voting_id, || {
+        env.storage().persistent().set(&key, &proposal);
+    });
+
+    let nullifier = U256::from_u32(&env, 123);
+    let proof = create_dummy_proof(&env);
+    let root = voting_client.get_eligible_root(&1u64, &proposal_id);
+
+    voting_client.vote(&1u64, &proposal_id, &false, &nullifier, &root, &proof);
+}
+
+#[test]
+fn test_recursive_tally_overflow_fails() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting_client = VotingClient::new(&env, &voting_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    sbt_client.set_member(&1u64, &member, &true);
+    let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+    tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let admin = Address::generate(&env);
     let new_root = U256::from_u32(&env, 200);
     voting_client.set_merkle_root(&1u64, &proposal_id, &new_root, &admin);
 }
@@ -3885,6 +3956,9 @@ fn test_set_merkle_root_commitment_window_expired_fails() {
     voting_client.set_vk(&1u64, &create_dummy_vk(&env), &admin);
 
     let now = env.ledger().timestamp();
+    let proposal_id = voting_client.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Title"),
     let proposal_id = voting_client.create_proposal_in_registration(
         &1u64,
         &String::from_str(&env, "Registration Proposal"),
@@ -3894,6 +3968,20 @@ fn test_set_merkle_root_commitment_window_expired_fails() {
         &VoteMode::Fixed,
     );
 
+    let proof = Bytes::from_array(&env, &[1u8; 32]);
+    let nullifier_acc = U256::from_u32(&env, 1);
+
+    let res = voting_client.try_submit_recursive_tally(
+        &1u64,
+        &proposal_id,
+        &u64::MAX,
+        &u64::MAX,
+        &u64::MAX,
+        &nullifier_acc,
+        &proof,
+    );
+
+    assert!(res.is_err());
     voting_client.set_commitment_window(&1u64, &proposal_id, &60u64, &admin);
     env.ledger().set_timestamp(now + 120);
 

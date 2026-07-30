@@ -131,6 +131,7 @@ pub enum VotingError {
     /// Tally proposal_ids / tallies vectors have mismatched or empty length
     QvTallyLengthMismatch = 54,
     /// Candidate index >= numCandidates configured for this election
+    InvalidCandidateIndex = 63,
     InvalidCandidateIndex = 55,
     /// Reentrant call detected (defense-in-depth against cross-contract reentrancy)
     ReentrantCall = 56,
@@ -146,6 +147,8 @@ pub enum VotingError {
     VdfInputNotAvailable = 61,
     /// Invalid Nova recursive proof or tally verification failure
     RecursiveProofInvalid = 62,
+    /// Vote tally increment overflowed maximum integer capacity
+    TallyOverflow = 55,
     /// Merkle root locked because proposal transitioned out of Registration phase
     MerkleRootLocked = 63,
     /// Commitment window for root updates has expired
@@ -880,7 +883,10 @@ impl Voting {
             return Err(VotingError::InvalidProof);
         }
 
-        if yes_votes + no_votes != num_votes {
+        let total_votes = yes_votes
+            .checked_add(no_votes)
+            .ok_or(VotingError::TallyOverflow)?;
+        if total_votes != num_votes {
             return Err(VotingError::RecursiveProofInvalid);
         }
 
@@ -900,9 +906,15 @@ impl Voting {
             return Err(VotingError::VotingClosed);
         }
 
-        // Update proposal tallies
-        proposal.yes_votes += yes_votes;
-        proposal.no_votes += no_votes;
+        // Update proposal tallies with checked arithmetic
+        proposal.yes_votes = proposal
+            .yes_votes
+            .checked_add(yes_votes)
+            .ok_or(VotingError::TallyOverflow)?;
+        proposal.no_votes = proposal
+            .no_votes
+            .checked_add(no_votes)
+            .ok_or(VotingError::TallyOverflow)?;
         proposal.state = ProposalState::Closed;
 
         env.storage().persistent().set(&key, &proposal);
@@ -1619,11 +1631,17 @@ impl Voting {
             panic_with_error!(&env, VotingError::InvalidProof);
         }
 
-        // Update vote count (nullifier already marked above per CEI pattern)
+        // Update vote count with checked arithmetic
         if vote_choice {
-            proposal.yes_votes += 1;
+            proposal.yes_votes = proposal
+                .yes_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         } else {
-            proposal.no_votes += 1;
+            proposal.no_votes = proposal
+                .no_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
@@ -1795,11 +1813,17 @@ impl Voting {
             panic_with_error!(&env, VotingError::InvalidProof);
         }
 
-        // Update vote count (nullifier already marked above per CEI pattern)
+        // Update vote count with checked arithmetic
         if vote_choice {
-            proposal.yes_votes += 1;
+            proposal.yes_votes = proposal
+                .yes_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         } else {
-            proposal.no_votes += 1;
+            proposal.no_votes = proposal
+                .no_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
@@ -2377,9 +2401,15 @@ impl Voting {
         Self::bump_persistent(&env, &null_key);
 
         if vote_choice {
-            proposal.yes_votes += 1;
+            proposal.yes_votes = proposal
+                .yes_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         } else {
-            proposal.no_votes += 1;
+            proposal.no_votes = proposal
+                .no_votes
+                .checked_add(1)
+                .unwrap_or_else(|| panic_with_error!(&env, VotingError::TallyOverflow));
         }
         env.storage().persistent().set(&prop_key, &proposal);
         Self::bump_persistent(&env, &prop_key);
@@ -2441,6 +2471,7 @@ impl Voting {
             num_candidates,
             vdf_output,
             vdf_delay,
+            max_revotes: 0,
             max_revotes,
             merkle_root_set_at,
             commitment_window,
