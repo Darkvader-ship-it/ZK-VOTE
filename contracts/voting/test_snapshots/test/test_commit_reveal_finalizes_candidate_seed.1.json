@@ -521,11 +521,25 @@
                   },
                   {
                     "key": {
+                      "symbol": "commitment_window"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "max_revotes"
                     },
                     "val": {
                       "u32": 0
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "merkle_root_set_at"
+                    },
+                    "val": "void"
                   },
                   {
                     "key": {

@@ -132,6 +132,7 @@ pub enum VotingError {
     QvTallyLengthMismatch = 54,
     /// Candidate index >= numCandidates configured for this election
     InvalidCandidateIndex = 63,
+    InvalidCandidateIndex = 55,
     /// Reentrant call detected (defense-in-depth against cross-contract reentrancy)
     ReentrantCall = 56,
     /// VDF proof verification failed
@@ -148,6 +149,10 @@ pub enum VotingError {
     RecursiveProofInvalid = 62,
     /// Vote tally increment overflowed maximum integer capacity
     TallyOverflow = 55,
+    /// Merkle root locked because proposal transitioned out of Registration phase
+    MerkleRootLocked = 63,
+    /// Commitment window for root updates has expired
+    CommitmentWindowExpired = 64,
 }
 
 // Maximum allowed IC vector length (num_public_inputs + 1)
@@ -263,6 +268,8 @@ pub enum DataKey {
     RecursiveTally(u64, u64), // (dao_id, proposal_id) -> RecursiveTallyInfo
     /// ZK proof of correct tally computation for universal verifiability (#94)
     TallyProof(u64, u64), // (dao_id, proposal_id) -> Bytes (proof)
+    /// Merkle root update history for auditability
+    MerkleRootHistory(u64, u64), // (dao_id, proposal_id) -> Vec<MerkleRootRecord>
 }
 
 /// A single quadratic-voting ballot as stored on-chain.
@@ -319,6 +326,14 @@ pub struct BalanceSnapshotInfo {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MerkleRootRecord {
+    pub root: U256,
+    pub set_at: u64,
+    pub set_by: Address,
+}
+
+#[contracttype]
 #[derive(Clone)]
 pub struct ElectionConfig {
     pub snapshot_ledger: u32,
@@ -336,6 +351,10 @@ pub struct ElectionConfig {
     /// Determines the minimum time before VDF output can be revealed.
     pub vdf_delay: u64,
     pub max_revotes: u32,
+    /// Timestamp when Merkle root was set or updated.
+    pub merkle_root_set_at: Option<u64>,
+    /// Commitment window duration (in seconds) after registration opens during which root updates are permitted.
+    pub commitment_window: u64,
 }
 
 #[contracttype]
@@ -349,6 +368,7 @@ pub enum VoteMode {
 #[contracttype]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProposalState {
+    Registration,
     Active,
     Closed,
     Archived,
@@ -356,13 +376,15 @@ pub enum ProposalState {
 
 impl ProposalState {
     /// Returns true only for legal forward transitions in the state DAG:
+    ///   Registration → Active
     ///   Active → Closed
     ///   Closed → Archived
     /// Archived is terminal — no transitions out of it.
     pub fn is_valid_transition(self, to: ProposalState) -> bool {
         matches!(
             (self, to),
-            (ProposalState::Active, ProposalState::Closed)
+            (ProposalState::Registration, ProposalState::Active)
+                | (ProposalState::Active, ProposalState::Closed)
                 | (ProposalState::Closed, ProposalState::Archived)
         )
     }
@@ -543,6 +565,20 @@ pub struct VdfVerifiedEvent {
     #[topic]
     pub proposal_id: u64,
     pub verified: bool,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ElectionStatusChangedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub old_state: Symbol,
+    pub new_state: Symbol,
+    pub old_root: U256,
+    pub new_root: U256,
+    pub updated_at: u64,
 }
 
 #[contract]
@@ -1084,6 +1120,33 @@ impl Voting {
         )
     }
 
+    /// Create a proposal initialized in Registration phase for Merkle root commitment window
+    pub fn create_proposal_in_registration(
+        env: Env,
+        dao_id: u64,
+        title: String,
+        content_cid: String,
+        end_time: u64,
+        creator: Address,
+        vote_mode: VoteMode,
+    ) -> u64 {
+        let id = Self::create_proposal_with_version(
+            env.clone(),
+            dao_id,
+            title,
+            content_cid,
+            end_time,
+            creator,
+            vote_mode,
+            None,
+        );
+        let key = DataKey::Proposal(dao_id, id);
+        let mut proposal: ProposalInfo = env.storage().persistent().get(&key).unwrap();
+        proposal.state = ProposalState::Registration;
+        env.storage().persistent().set(&key, &proposal);
+        id
+    }
+
     /// Create proposal with a specific VK version (must be <= current and exist)
     pub fn create_proposal_with_vk_version(
         env: Env,
@@ -1539,6 +1602,8 @@ impl Voting {
                 vdf_output: None,
                 vdf_delay: 0,
                 max_revotes: 0,
+                merkle_root_set_at: None,
+                commitment_window: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -1719,6 +1784,8 @@ impl Voting {
                 vdf_output: None,
                 vdf_delay: 0,
                 max_revotes: 0,
+                merkle_root_set_at: None,
+                commitment_window: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -2301,6 +2368,8 @@ impl Voting {
                 vdf_output: None,
                 vdf_delay: 0,
                 max_revotes: 0,
+                merkle_root_set_at: None,
+                commitment_window: 0,
             });
 
         let vote_choice_index: u32 = if vote_choice { 1 } else { 0 };
@@ -2383,6 +2452,17 @@ impl Voting {
             .as_ref()
             .map(|config| config.vdf_delay)
             .unwrap_or(0);
+        let max_revotes = existing
+            .as_ref()
+            .map(|config| config.max_revotes)
+            .unwrap_or(0);
+        let merkle_root_set_at = existing
+            .as_ref()
+            .and_then(|config| config.merkle_root_set_at);
+        let commitment_window = existing
+            .as_ref()
+            .map(|config| config.commitment_window)
+            .unwrap_or(0);
         let config = ElectionConfig {
             snapshot_ledger,
             min_balance,
@@ -2392,6 +2472,9 @@ impl Voting {
             vdf_output,
             vdf_delay,
             max_revotes: 0,
+            max_revotes,
+            merkle_root_set_at,
+            commitment_window,
         };
         env.storage().persistent().set(&key, &config);
         Self::bump_persistent(&env, &key);
@@ -2406,6 +2489,209 @@ impl Voting {
             Self::bump_persistent(&env, &key);
         }
         config
+    }
+
+    /// Set commitment window for Merkle root updates during registration.
+    pub fn set_commitment_window(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        commitment_window: u64,
+        admin: Address,
+    ) {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let key = DataKey::ElectionConfig(dao_id, proposal_id);
+        let mut config: ElectionConfig =
+            env.storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(ElectionConfig {
+                    snapshot_ledger: env.ledger().sequence(),
+                    min_balance: 0,
+                    twab_window: 0,
+                    candidate_seed: None,
+                    num_candidates: 0,
+                    vdf_output: None,
+                    vdf_delay: 0,
+                    max_revotes: 0,
+                    merkle_root_set_at: None,
+                    commitment_window: 0,
+                });
+        config.commitment_window = commitment_window;
+        env.storage().persistent().set(&key, &config);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Sets/updates the Merkle root during the Registration phase within the commitment window.
+    /// Performs cross-contract verification against the Tree contract.
+    /// Stores root history for auditability and emits an ElectionStatusChangedEvent.
+    pub fn set_merkle_root(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        new_root: U256,
+        admin: Address,
+    ) {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let tree_contract: Address = Self::tree_contract(env.clone());
+        let sbt_contract: Address = env.invoke_contract(
+            &tree_contract,
+            &symbol_short!("sbt_contr"),
+            soroban_sdk::vec![&env],
+        );
+        let registry: Address = env.invoke_contract(
+            &sbt_contract,
+            &symbol_short!("registry"),
+            soroban_sdk::vec![&env],
+        );
+        let dao_admin: Address = env.invoke_contract(
+            &registry,
+            &symbol_short!("get_admin"),
+            soroban_sdk::vec![&env, dao_id.into_val(&env)],
+        );
+        if admin != dao_admin {
+            panic_with_error!(&env, VotingError::NotAdmin);
+        }
+
+        let key = DataKey::Proposal(dao_id, proposal_id);
+        let mut proposal: ProposalInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, VotingError::InvalidState));
+
+        if proposal.state != ProposalState::Registration {
+            panic_with_error!(&env, VotingError::MerkleRootLocked);
+        }
+
+        let now = env.ledger().timestamp();
+        let config_key = DataKey::ElectionConfig(dao_id, proposal_id);
+        let mut election_config: ElectionConfig = env
+            .storage()
+            .persistent()
+            .get(&config_key)
+            .unwrap_or(ElectionConfig {
+                snapshot_ledger: env.ledger().sequence(),
+                min_balance: 0,
+                twab_window: 0,
+                candidate_seed: None,
+                num_candidates: 0,
+                vdf_output: None,
+                vdf_delay: 0,
+                max_revotes: 0,
+                merkle_root_set_at: None,
+                commitment_window: 0,
+            });
+
+        if election_config.commitment_window > 0
+            && now > proposal.created_at + election_config.commitment_window
+        {
+            panic_with_error!(&env, VotingError::CommitmentWindowExpired);
+        }
+
+        let root_valid: bool = env.invoke_contract(
+            &tree_contract,
+            &symbol_short!("root_ok"),
+            soroban_sdk::vec![&env, dao_id.into_val(&env), new_root.clone().into_val(&env)],
+        );
+        if !root_valid {
+            panic_with_error!(&env, VotingError::RootNotInHistory);
+        }
+
+        let old_root = proposal.eligible_root.clone();
+        proposal.eligible_root = new_root.clone();
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_persistent(&env, &key);
+
+        election_config.merkle_root_set_at = Some(now);
+        env.storage()
+            .persistent()
+            .set(&config_key, &election_config);
+        Self::bump_persistent(&env, &config_key);
+
+        let history_key = DataKey::MerkleRootHistory(dao_id, proposal_id);
+        let mut history: Vec<MerkleRootRecord> = env
+            .storage()
+            .persistent()
+            .get(&history_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        history.push_back(MerkleRootRecord {
+            root: new_root.clone(),
+            set_at: now,
+            set_by: admin,
+        });
+        env.storage().persistent().set(&history_key, &history);
+        Self::bump_persistent(&env, &history_key);
+
+        ElectionStatusChangedEvent {
+            dao_id,
+            proposal_id,
+            old_state: Symbol::new(&env, "Registration"),
+            new_state: Symbol::new(&env, "Registration"),
+            old_root,
+            new_root,
+            updated_at: now,
+        }
+        .publish(&env);
+    }
+
+    /// Transitions proposal state from Registration to Active, permanently locking the Merkle root.
+    pub fn activate_proposal(env: Env, dao_id: u64, proposal_id: u64, caller: Address) {
+        Self::bump_instance(&env);
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let key = DataKey::Proposal(dao_id, proposal_id);
+        let mut proposal: ProposalInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, VotingError::InvalidState));
+
+        if proposal.state != ProposalState::Registration {
+            panic_with_error!(&env, VotingError::InvalidState);
+        }
+
+        proposal.state = ProposalState::Active;
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_persistent(&env, &key);
+
+        let now = env.ledger().timestamp();
+        ElectionStatusChangedEvent {
+            dao_id,
+            proposal_id,
+            old_state: Symbol::new(&env, "Registration"),
+            new_state: Symbol::new(&env, "Active"),
+            old_root: proposal.eligible_root.clone(),
+            new_root: proposal.eligible_root.clone(),
+            updated_at: now,
+        }
+        .publish(&env);
+    }
+
+    /// Returns the audit history of Merkle root updates for an election.
+    pub fn get_merkle_root_history(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> Vec<MerkleRootRecord> {
+        Self::bump_instance(&env);
+        let history_key = DataKey::MerkleRootHistory(dao_id, proposal_id);
+        let history: Vec<MerkleRootRecord> = env
+            .storage()
+            .persistent()
+            .get(&history_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !history.is_empty() {
+            Self::bump_persistent(&env, &history_key);
+        }
+        history
     }
 
     /// Get the number of valid candidates for a proposal's election.
@@ -2760,6 +3046,8 @@ impl Voting {
                     vdf_output: None,
                     vdf_delay: 0,
                     max_revotes: 0,
+                    merkle_root_set_at: None,
+                    commitment_window: 0,
                 });
         if config.candidate_seed.is_some() {
             panic_with_error!(&env, VotingError::CandidateSeedFinalized);
@@ -2957,6 +3245,8 @@ impl Voting {
                     vdf_output: None,
                     vdf_delay: delay,
                     max_revotes: 0,
+                    merkle_root_set_at: None,
+                    commitment_window: 0,
                 });
         config.vdf_output = Some(vdf_output.clone());
         config.vdf_delay = delay;
@@ -3047,6 +3337,8 @@ impl Voting {
                         vdf_output: None,
                         vdf_delay: 0,
                         max_revotes: 0,
+                        merkle_root_set_at: None,
+                        commitment_window: 0,
                     });
 
             // Mix VDF output with existing seed if available, or use VDF output as seed

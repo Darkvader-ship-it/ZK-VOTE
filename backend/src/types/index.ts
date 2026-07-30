@@ -227,6 +227,7 @@ export enum ErrorCode {
   SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
   TIMEOUT = "TIMEOUT",
   NOT_FOUND = "NOT_FOUND",
+  VOTE_REJECTED = "VOTE_REJECTED",
 }
 
 export interface StructuredError {

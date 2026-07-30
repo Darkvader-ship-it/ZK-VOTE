@@ -161,3 +161,59 @@ test('generic errors hide message when RELAYER_GENERIC_ERRORS=true', async () =>
   assert.ok(res.body.error);
   assert.equal(res.body.message, undefined);
 });
+
+// ============================================================
+// Idempotency tests (issue #279)
+// ============================================================
+
+test('duplicate nullifier in pending state returns 202 with Retry-After header', async () => {
+  const { insertVoteSubmission } = await import('../src/services/db.ts');
+
+  // Seed a pending submission before the request arrives
+  const nullifier = '01'.repeat(32); // 64 hex chars, valid U256
+  insertVoteSubmission(nullifier);
+
+  const app = await setupApp();
+  const res = await request(app)
+    .post('/vote')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      daoId: 1,
+      proposalId: 1,
+      choice: true,
+      nullifier,
+      root: '01'.repeat(32),
+      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '05'.repeat(64) },
+    });
+
+  assert.equal(res.statusCode, 202);
+  assert.ok(res.headers['retry-after'], 'Should set Retry-After header');
+  assert.equal(res.body.status, 'PENDING');
+});
+
+test('duplicate nullifier in confirmed state returns 200 with original txHash', async () => {
+  const { insertVoteSubmission, updateVoteSubmission } = await import('../src/services/db.ts');
+
+  const nullifier = '02'.repeat(32);
+  const txHash = 'abc123def456';
+  insertVoteSubmission(nullifier);
+  updateVoteSubmission(nullifier, 'confirmed', txHash);
+
+  const app = await setupApp();
+  const res = await request(app)
+    .post('/vote')
+    .set('Authorization', `Bearer ${token}`)
+    .send({
+      daoId: 1,
+      proposalId: 1,
+      choice: true,
+      nullifier,
+      root: '01'.repeat(32),
+      proof: { a: '11'.repeat(64), b: '22'.repeat(128), c: '05'.repeat(64) },
+    });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.txHash, txHash);
+  assert.equal(res.body.replayed, true);
+});
