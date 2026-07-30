@@ -263,7 +263,7 @@ curl -X POST http://localhost:3001/vote \
   }'
 ```
 
-#### Response (200) -- Success
+#### Response (200) -- Success (new submission)
 
 ```json
 {
@@ -273,16 +273,45 @@ curl -X POST http://localhost:3001/vote \
 }
 ```
 
+#### Response (200) -- Already confirmed (idempotent replay)
+
+Returned when the same `nullifier` was used in a previous request that already landed on-chain. Safe to treat identically to a fresh success.
+
+```json
+{
+  "success": true,
+  "txHash": "abc123...64hex",
+  "status": "SUCCESS",
+  "replayed": true
+}
+```
+
+#### Response (202) -- Submission in progress
+
+Returned when the same `nullifier` is already in-flight from a previous request (e.g. a browser tab that closed mid-request and retried). The client **must** wait and retry after the indicated delay.
+
+**Headers:**
+
+| Header        | Value | Meaning                      |
+|---------------|-------|------------------------------|
+| `Retry-After` | `5`   | Seconds before retrying      |
+
+```json
+{
+  "success": false,
+  "txHash": null,
+  "status": "PENDING"
+}
+```
+
+The client should poll `GET /proposal/:daoId/:proposalId` or retry `POST /vote` with the same nullifier after `Retry-After` seconds to confirm the final outcome.
+
 #### Error Responses
 
 | Status | Error                          | Cause                                 |
 |--------|--------------------------------|---------------------------------------|
 | 400    | Validation error details       | Invalid request body (Zod validation) |
-| 400    | `"You have already voted on this proposal"` | Duplicate nullifier             |
-| 400    | `"Voting period has ended"`    | Proposal is closed                    |
-| 400    | `"Invalid vote proof"`         | Proof verification failed             |
-| 400    | `"You are not eligible to vote on this proposal"` | Root mismatch           |
-| 400    | `"Proposal not found"`         | Unknown proposal                      |
+| 400    | `"VOTE_REJECTED"`              | Proof invalid, ineligible voter, closed period, or duplicate — all unified under one code to prevent enumeration attacks |
 | 500    | `"Transaction failed"`         | On-chain transaction failed           |
 | 500    | `"Transaction submission failed"` | RPC submission error               |
 | 503    | `"Blockchain RPC temporarily unavailable - please retry"` | RPC down       |

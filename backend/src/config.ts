@@ -263,6 +263,12 @@ export const config = {
   dbRetryBaseDelayMs: Number(process.env.DB_RETRY_BASE_DELAY_MS || 50),
   dbRetryMaxDelayMs: Number(process.env.DB_RETRY_MAX_DELAY_MS || 2000),
 
+  // Sequence manager
+  maxSequenceRetryAttempts: Number(process.env.MAX_SEQUENCE_RETRY_ATTEMPTS || 1),
+
+  // Vote submission idempotency
+  voteSubmissionPendingTtlMs: Number(process.env.VOTE_SUBMISSION_PENDING_TTL_MS || 300_000),
+
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
 } as const;
