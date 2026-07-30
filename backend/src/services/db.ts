@@ -364,6 +364,19 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "idx_auth_audit_created_at", columns: ["created_at"] },
     ],
   },
+  vote_submissions: {
+    columns: [
+      { name: "id", type: "INTEGER", notNull: true, primaryKey: true },
+      { name: "nullifier_hash", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "status", type: "TEXT", notNull: true, primaryKey: false },
+      { name: "tx_hash", type: "TEXT", notNull: false, primaryKey: false },
+      { name: "created_at", type: "INTEGER", notNull: true, primaryKey: false },
+      { name: "updated_at", type: "INTEGER", notNull: true, primaryKey: false },
+    ],
+    indexes: [
+      { name: "idx_vote_submissions_nullifier", columns: ["nullifier_hash"] },
+    ],
+  },
   proof_commitments: {
     columns: [
       { name: "commitment_hash", type: "TEXT", notNull: true, primaryKey: true },
@@ -1036,6 +1049,16 @@ export function initDb(dbPath?: string): DatabaseType {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS vote_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nullifier_hash TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'failed')),
+      tx_hash TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_vote_submissions_nullifier ON vote_submissions(nullifier_hash);
 
     -- Auth tokens table: stores hashed authentication tokens with expiration and metadata
     CREATE TABLE IF NOT EXISTS auth_tokens (
@@ -1943,6 +1966,85 @@ export function cleanupTransactionLog(maxAgeMs = 86400000): number {
   const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
   const result = database
     .prepare("DELETE FROM transaction_log WHERE updated_at < ?")
+    .run(cutoff);
+  return result.changes;
+}
+
+// ============================================
+// VOTE SUBMISSIONS (idempotency table)
+// ============================================
+
+export interface VoteSubmissionRow {
+  id: number;
+  nullifier_hash: string;
+  status: "pending" | "confirmed" | "failed";
+  tx_hash: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * Look up an existing vote submission by nullifier hash.
+ */
+export function getVoteSubmission(nullifierHash: string): VoteSubmissionRow | null {
+  const database = getReadDb();
+  const row = database
+    .prepare("SELECT * FROM vote_submissions WHERE nullifier_hash = ?")
+    .get(nullifierHash) as VoteSubmissionRow | undefined;
+  return row ?? null;
+}
+
+/**
+ * Insert a new pending vote submission. Returns false if nullifier already exists (idempotency race).
+ */
+export function insertVoteSubmission(nullifierHash: string): boolean {
+  const database = getWriteDb();
+  const now = Date.now();
+  const result = database
+    .prepare(
+      "INSERT OR IGNORE INTO vote_submissions (nullifier_hash, status, tx_hash, created_at, updated_at) VALUES (?, 'pending', NULL, ?, ?)",
+    )
+    .run(nullifierHash, now, now);
+  if (result.changes > 0) incrementTransactionCounter();
+  return result.changes > 0;
+}
+
+/**
+ * Update an existing vote submission to confirmed or failed.
+ */
+export function updateVoteSubmission(
+  nullifierHash: string,
+  status: "confirmed" | "failed",
+  txHash?: string,
+): void {
+  const database = getWriteDb();
+  const now = Date.now();
+  if (txHash) {
+    database
+      .prepare(
+        "UPDATE vote_submissions SET status = ?, tx_hash = ?, updated_at = ? WHERE nullifier_hash = ?",
+      )
+      .run(status, txHash, now, nullifierHash);
+  } else {
+    database
+      .prepare(
+        "UPDATE vote_submissions SET status = ?, updated_at = ? WHERE nullifier_hash = ?",
+      )
+      .run(status, now, nullifierHash);
+  }
+  incrementTransactionCounter();
+}
+
+/**
+ * Delete vote submissions older than ttlMs whose status is not confirmed.
+ */
+export function cleanupExpiredVoteSubmissions(ttlMs: number): number {
+  const database = getWriteDb();
+  const cutoff = Date.now() - ttlMs;
+  const result = database
+    .prepare(
+      "DELETE FROM vote_submissions WHERE status != 'confirmed' AND created_at < ?",
+    )
     .run(cutoff);
   return result.changes;
 }

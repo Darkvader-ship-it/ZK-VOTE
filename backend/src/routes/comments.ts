@@ -48,6 +48,11 @@ import {
   flagComment,
   getHiddenCommentIds,
 } from "../services/anti-spam.js";
+import {
+  getVoteSubmission,
+  insertVoteSubmission,
+  updateVoteSubmission,
+} from "../services/db.js";
 import { commentsSubmitted } from "../services/metrics.js";
 import {
   markDegraded,
@@ -208,6 +213,27 @@ router.post(
     try {
       log("info", "comment_anonymous_request", { daoId, proposalId });
 
+      // Idempotency: a nullifier is single-use per proof. If we've already
+      // seen this nullifier as confirmed, return the cached result so a
+      // browser retry doesn't build a duplicate on-chain transaction.
+      const existingSubmission = getVoteSubmission(`comment:${nullifier}`);
+      if (existingSubmission) {
+        if (existingSubmission.status === "confirmed") {
+          return res.status(200).json({
+            success: true,
+            txHash: existingSubmission.tx_hash,
+            replayed: true,
+          });
+        }
+        res.setHeader("Retry-After", "5");
+        return res.status(202).json({
+          success: false,
+          txHash: existingSubmission.tx_hash,
+          status: "PENDING",
+        });
+      }
+      insertVoteSubmission(`comment:${nullifier}`);
+
       const scNullifier = u256ToScVal(nullifier);
       const scRoot = u256ToScVal(root);
       const scProof = proofToScVal(proof);
@@ -295,6 +321,7 @@ router.post(
 
       if (result.status === "SUCCESS") {
         commentsSubmitted.inc({ status: "success" });
+        updateVoteSubmission(`comment:${nullifier}`, "confirmed", sendResult.hash);
         log("info", "comment_anonymous_success", {
           daoId,
           proposalId,
@@ -313,6 +340,7 @@ router.post(
         res.json({ success: true, commentId, txHash: sendResult.hash });
       } else {
         commentsSubmitted.inc({ status: "failed" });
+        updateVoteSubmission(`comment:${nullifier}`, "failed", sendResult.hash);
         // Log the actual failure reason
         const resultXdr = "resultXdr" in result ? result.resultXdr : undefined;
         log("error", "comment_anonymous_tx_failed", {

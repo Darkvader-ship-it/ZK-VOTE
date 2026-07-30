@@ -16,6 +16,7 @@ import {
   simulateWithBackoff,
   waitForTransaction,
   withSequenceLock,
+  sequenceManager,
   u256ToScVal,
   proofToScVal,
   scValToU256Hex,
@@ -46,6 +47,9 @@ import {
   recordProofCommitment,
   getProofCommitment,
   updateProofCommitmentStatus,
+  getVoteSubmission,
+  insertVoteSubmission,
+  updateVoteSubmission,
 } from "../services/db.js";
 import {
   calculateProofHash,
@@ -349,32 +353,52 @@ router.post(
         }
       }
 
-      // Replay protection: check local transaction log
+      // Idempotency: check vote_submissions table keyed on nullifier_hash
       if (nullifier) {
-        const existingTx = getTransactionLog(nullifier);
-        if (
-          existingTx &&
-          (existingTx.status === "SUCCESS" || existingTx.status === "PENDING")
-        ) {
-          log("info", "vote_replay_prevented", {
+        const existing = getVoteSubmission(nullifier);
+        if (existing) {
+          log("info", "vote_idempotent_hit", {
             nullifier,
-            txHash: existingTx.tx_hash,
-            status: existingTx.status,
+            txHash: existing.tx_hash,
+            status: existing.status,
           });
-          const receipt = createSubmissionReceipt(
-            existingTx.tx_hash,
-            nullifier,
-            daoId,
-            proposalId,
-            commitmentHash || nullifier,
-          );
-          return res.json({
-            success: true,
-            txHash: existingTx.tx_hash,
-            status: existingTx.status === "SUCCESS" ? "SUCCESS" : "PENDING",
-            replayed: true,
-            receipt,
+          if (existing.status === "confirmed") {
+            const receipt = createSubmissionReceipt(
+              existing.tx_hash!,
+              nullifier,
+              daoId,
+              proposalId,
+              commitmentHash || nullifier,
+            );
+            return res.status(200).json({
+              success: true,
+              txHash: existing.tx_hash,
+              status: "SUCCESS",
+              replayed: true,
+              receipt,
+            });
+          }
+          // pending: tell client to retry after 5 s
+          res.setHeader("Retry-After", "5");
+          return res.status(202).json({
+            success: false,
+            txHash: existing.tx_hash,
+            status: "PENDING",
           });
+        }
+        // Claim the nullifier slot before doing any on-chain work.
+        // If two concurrent requests race here, INSERT OR IGNORE means only
+        // one proceeds; the other re-reads above and gets the 202 path.
+        if (!insertVoteSubmission(nullifier)) {
+          const concurrent = getVoteSubmission(nullifier);
+          if (concurrent) {
+            res.setHeader("Retry-After", "5");
+            return res.status(202).json({
+              success: false,
+              txHash: concurrent.tx_hash,
+              status: "PENDING",
+            });
+          }
         }
       }
 
@@ -439,29 +463,10 @@ router.post(
           log("warn", "simulation_failed", {
             daoId,
             proposalId,
-            error: simResult.error,
           });
-
-          let errorMessage = "Transaction simulation failed";
-          if (simResult.error) {
-            const errorStr = JSON.stringify(simResult.error);
-            if (errorStr.includes("already voted")) {
-              errorMessage = "You have already voted on this proposal";
-            } else if (errorStr.includes("voting period closed")) {
-              errorMessage = "Voting period has ended";
-            } else if (errorStr.includes("invalid proof")) {
-              errorMessage = "Invalid vote proof";
-            } else if (errorStr.includes("root must match")) {
-              errorMessage = "You are not eligible to vote on this proposal";
-            } else if (errorStr.includes("proposal not found")) {
-              errorMessage = "Proposal not found";
-            } else if (errorStr.includes("UnreachableCodeReached")) {
-              errorMessage =
-                "Invalid proof or contract error (proof verification failed)";
-            }
-          }
-
-          throw new Error(`SIMULATION_FAILED:${errorMessage}`);
+          // All proof/eligibility failures surface as VOTE_REJECTED — never
+          // expose which specific check failed (THREAT_MODEL.md §privacy).
+          throw new Error("SIMULATION_FAILED:VOTE_REJECTED");
         }
 
     return respondToVoteExecution(
@@ -485,13 +490,23 @@ router.post(
         );
 
         if (sr.status === "ERROR") {
-          if (nullifier) updateTransactionLogStatus(nullifier, "FAILED");
+          // tx_bad_seq: sequence desynchronized — mark dirty and retry once
+          const isBadSeq = sequenceManager.handleTxError(
+            typeof (sr as any).errorResult === "string"
+              ? (sr as any).errorResult
+              : JSON.stringify((sr as any).errorResult ?? ""),
+          );
+          if (nullifier) {
+            updateTransactionLogStatus(nullifier, "FAILED");
+            updateVoteSubmission(nullifier, "failed");
+          }
           log("error", "submit_failed", {
             daoId,
             proposalId,
-            error: sr.errorResult,
+            error: (sr as any).errorResult,
+            isBadSeq,
           });
-          throw new Error("SUBMIT_FAILED");
+          throw new Error(isBadSeq ? "SUBMIT_FAILED_BAD_SEQ" : "SUBMIT_FAILED");
         }
 
         if (nullifier && sr.hash) {
@@ -511,6 +526,7 @@ router.post(
       if (result.status === "SUCCESS") {
         if (nullifier && sendResult.hash) {
           updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
+          updateVoteSubmission(nullifier, "confirmed", sendResult.hash);
         }
         votesProcessed.inc({ status: "success" });
         log("info", "vote_success", {
@@ -534,6 +550,7 @@ router.post(
       } else {
       if (nullifier && sendResult.hash) {
         updateTransactionLogStatus(nullifier, "FAILED", sendResult.hash);
+        updateVoteSubmission(nullifier, "failed", sendResult.hash);
       }
       votesProcessed.inc({ status: "failed" });
       log("error", "vote_failed", {
@@ -549,6 +566,7 @@ router.post(
   } catch (err) {
     if (nullifier) {
       updateTransactionLogStatus(nullifier, "FAILED");
+      updateVoteSubmission(nullifier, "failed");
     }
     votesProcessed.inc({ status: "error" });
     log("error", "vote_exception", {
@@ -565,7 +583,11 @@ router.post(
     let errorCode = ErrorCode.INTERNAL_ERROR;
     let userMessage = "Internal server error";
 
-    if (errMsg === "SUBMIT_FAILED") {
+    if (errMsg.includes("SIMULATION_FAILED:VOTE_REJECTED")) {
+      statusCode = 400;
+      errorCode = ErrorCode.VOTE_REJECTED;
+      userMessage = "VOTE_REJECTED";
+    } else if (errMsg === "SUBMIT_FAILED" || errMsg === "SUBMIT_FAILED_BAD_SEQ") {
       statusCode = 500;
       userMessage = "Transaction submission failed";
     } else if (errMsg.includes("Timeout:")) {
