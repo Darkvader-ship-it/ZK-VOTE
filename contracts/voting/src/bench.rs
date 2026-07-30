@@ -12,6 +12,7 @@ use membership_tree::MembershipTreeClient;
 use voting::{VoteMode, VotingClient};
 
 
+
 #[test]
 #[ignore]
 fn stress_many_proposals_and_members() {
