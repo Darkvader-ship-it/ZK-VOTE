@@ -846,5 +846,84 @@ router.get(
   }) as AsyncHandler,
 );
 
+/**
+ * GET /root-history/:daoId/:proposalId - Get Merkle root history for auditability
+ */
+router.get(
+  "/root-history/:daoId/:proposalId",
+  queryLimiter,
+  validateParams(proposalParamsSchema),
+  (async (req: Request, res: Response, next: NextFunction) => {
+    const { daoId, proposalId } = (req as any).validatedParams;
+
+    try {
+      const result = await sharedSingleFlight.do(
+        `root-history:${daoId}:${proposalId}`,
+        async () => {
+          const contract = new StellarSdk.Contract(config.votingContractId!);
+          const args = [
+            StellarSdk.nativeToScVal(daoId, { type: "u64" }),
+            StellarSdk.nativeToScVal(proposalId, { type: "u64" }),
+          ];
+
+          const operation = contract.call("get_merkle_root_history", ...args);
+
+          const account = await (server as StellarSdk.rpc.Server).getAccount(
+            relayerKeypair.publicKey(),
+          );
+          const tx = new StellarSdk.TransactionBuilder(account, {
+            fee: "100000",
+            networkPassphrase: config.networkPassphrase,
+          })
+            .addOperation(operation)
+            .setTimeout(30)
+            .build();
+
+          const simResult = await (
+            server as StellarSdk.rpc.Server
+          ).simulateTransaction(tx);
+
+          if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+            return { daoId, proposalId, history: [] };
+          }
+
+          const resultScVal = simResult.result?.retval;
+          if (!resultScVal) {
+            return { daoId, proposalId, history: [] };
+          }
+
+          const rawHistory = StellarSdk.scValToNative(resultScVal) || [];
+          const history = Array.isArray(rawHistory)
+            ? rawHistory.map((item: any) => ({
+                root: item.root ? item.root.toString() : "",
+                setAt: Number(item.set_at || 0),
+                setBy: item.set_by || "",
+              }))
+            : [];
+
+          return {
+            daoId,
+            proposalId,
+            history,
+          };
+        },
+      );
+
+      res.json(result);
+    } catch (err) {
+      if (err instanceof ApiError) return next(err);
+      log("error", "root_history_fetch_error", { daoId, proposalId, error: (err as Error).message });
+      return next(
+        new ApiError(
+          500,
+          ErrorCode.INTERNAL_ERROR,
+          "Failed to fetch Merkle root history",
+          (err as Error).message,
+        ),
+      );
+    }
+  }) as AsyncHandler,
+);
+
 export default router;
 
