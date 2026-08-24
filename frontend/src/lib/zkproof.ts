@@ -1,7 +1,78 @@
-// ZK Proof generation utilities using snarkjs
+// ZK Proof generation utilities.
+//
+// By default proofs are generated with the Rust -> WASM BN254 Groth16 prover
+// (this crate), which is byte-for-byte compatible with snarkjs' output and the
+// on-chain verifier. snarkjs remains as a transparent fallback if the Rust
+// module fails to load or errors.
+//
+// The witness is still computed by the circom WASM (via `circom_runtime`, the
+// same engine snarkjs uses) and fed to the Rust prover as a decimal JSON
+// array; the Rust prover then performs the FFT + MSM that dominates proof time.
 
 import { groth16 } from "snarkjs";
 import type { Groth16Proof } from "snarkjs";
+
+// Flip to false to force the legacy snarkjs prover.
+const USE_RUST_PROVER = true;
+
+type RustProver = {
+  prove: (
+    zkey: Uint8Array,
+    witnessJson: string,
+  ) => Promise<{ proof: Groth16Proof; publicSignals: string[] }>;
+};
+
+let rustProverPromise: Promise<RustProver> | null = null;
+
+function loadRustProver(): Promise<RustProver> {
+  if (!rustProverPromise) {
+    rustProverPromise = (async () => {
+      const mod = await import("./zkvote_prover.js");
+      await (mod as unknown as { default: () => Promise<void> }).default();
+      return mod as unknown as RustProver;
+    })().catch((e) => {
+      console.warn("Rust prover failed to load; falling back to snarkjs.", e);
+      rustProverPromise = null;
+      throw e;
+    });
+  }
+  return rustProverPromise;
+}
+
+async function proveWithRust(
+  input: Record<string, unknown>,
+  wasmPath: string,
+  zkeyPath: string,
+): Promise<GeneratedProof> {
+  // Compute the witness with the circom WASM (snarkjs' engine).
+  const { WitnessCalculatorBuilder } = await import("circom_runtime");
+  const wasmBytes = new Uint8Array(
+    await (await fetch(wasmPath)).arrayBuffer(),
+  );
+  const wc = await WitnessCalculatorBuilder(wasmBytes, {});
+
+  // circom_runtime expects field elements as BigInt (snarkjs does the same
+  // via unstringifyBigInts before calling the witness calculator).
+  const toBig = (v: unknown): unknown => {
+    if (typeof v === "string") return BigInt(v);
+    if (typeof v === "number") return BigInt(v);
+    if (Array.isArray(v)) return v.map(toBig);
+    return v;
+  };
+  const bigInput: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) bigInput[k] = toBig(v);
+
+  const witnessArr = (await wc.calculateWitness(bigInput, true)) as bigint[];
+  const witnessJson = JSON.stringify(witnessArr.map((x) => x.toString()));
+
+  const zkeyBytes = new Uint8Array(
+    await (await fetch(zkeyPath)).arrayBuffer(),
+  );
+
+  const prover = await loadRustProver();
+  const res = await prover.prove(zkeyBytes, witnessJson);
+  return { proof: res.proof, publicSignals: res.publicSignals };
+}
 
 export interface VoteProofInput {
   secret: string;
@@ -69,7 +140,18 @@ export async function generateVoteProof(
       pathIndices: input.pathIndices,
     };
 
-    // Generate proof using snarkjs
+    // Generate proof with the Rust WASM prover (snarkjs fallback).
+    if (USE_RUST_PROVER) {
+      try {
+        return await proveWithRust(circuitInput, wasmPath, zkeyPath);
+      } catch (e) {
+        console.warn(
+          "Rust vote prover failed; falling back to snarkjs.",
+          e,
+        );
+      }
+    }
+
     const { proof, publicSignals } = await groth16.fullProve(
       circuitInput,
       wasmPath,
@@ -114,7 +196,18 @@ export async function generateCommentProof(
       pathIndices: input.pathIndices,
     };
 
-    // Generate proof using snarkjs
+    // Generate proof with the Rust WASM prover (snarkjs fallback).
+    if (USE_RUST_PROVER) {
+      try {
+        return await proveWithRust(circuitInput, wasmPath, zkeyPath);
+      } catch (e) {
+        console.warn(
+          "Rust comment prover failed; falling back to snarkjs.",
+          e,
+        );
+      }
+    }
+
     const { proof, publicSignals } = await groth16.fullProve(
       circuitInput,
       wasmPath,
