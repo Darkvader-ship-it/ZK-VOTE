@@ -6,9 +6,8 @@
 // module fails to load or errors.
 //
 // The witness is still computed by the circom WASM (via `circom_runtime`, the
-// same engine snarkjs uses) and fed to the Rust prover as the raw binary
-// `.wtns` buffer (see `prove_wtns`); the Rust prover then performs the FFT +
-// MSM that dominates proof time.
+// same engine snarkjs uses) and fed to the Rust prover as a decimal JSON
+// array; the Rust prover then performs the FFT + MSM that dominates proof time.
 
 import { groth16 } from "snarkjs";
 import type { Groth16Proof } from "snarkjs";
@@ -17,9 +16,9 @@ import type { Groth16Proof } from "snarkjs";
 const USE_RUST_PROVER = true;
 
 type RustProver = {
-  prove_wtns: (
+  prove: (
     zkey: Uint8Array,
-    wtns: Uint8Array,
+    witnessJson: string,
   ) => Promise<{ proof: Groth16Proof; publicSignals: string[] }>;
 };
 
@@ -63,16 +62,15 @@ async function proveWithRust(
   const bigInput: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input)) bigInput[k] = toBig(v);
 
-  // Return the raw binary `.wtns` buffer (position-0 `1` signal included),
-  // exactly what the Rust `prove_wtns` entry point expects.
-  const witnessBytes = (await wc.calculateWitness(bigInput, true)) as Uint8Array;
+  const witnessArr = (await wc.calculateWitness(bigInput, true)) as bigint[];
+  const witnessJson = JSON.stringify(witnessArr.map((x) => x.toString()));
 
   const zkeyBytes = new Uint8Array(
     await (await fetch(zkeyPath)).arrayBuffer(),
   );
 
   const prover = await loadRustProver();
-  const res = await prover.prove_wtns(zkeyBytes, witnessBytes);
+  const res = await prover.prove(zkeyBytes, witnessJson);
   return { proof: res.proof, publicSignals: res.publicSignals };
 }
 
