@@ -37,7 +37,7 @@ function merkleForLeafZero(leaf, levels) {
   }
   const pathElements = [];
   const pathIndices = [];
-  let cur = BigInt(leaf);
+  let cur = hash([1n, BigInt(leaf)]); // LEAF_DOMAIN = 1
   for (let i = 0; i < levels; i++) {
     pathElements.push(zeros[i]); // sibling on the right
     pathIndices.push(0); // current node is always the left child
