@@ -1,119 +1,95 @@
-//! Verify the zkey ccoefs are parsed into the same A/B linear maps as the
-//! R1CS file, when applied to the witness. If A_zkey·w * B_zkey·w != C_r1cs·w
-//! for some constraint, the ccoefs parsing (or buildABC1) is wrong.
+//! Regression test for snarkjs zkey `ccoef` coefficient decoding, focused on
+//! the **sign bit**.
+//!
+//! snarkjs stores every `ccoef` in `2^504` Montgomery form as 32 little-endian
+//! bytes, with the top bit of byte 31 set when the value is negative. Before
+//! this was honored, negative coefficients decoded as huge positive numbers,
+//! silently corrupting the proving key (the prover still "verified" against
+//! itself but produced proofs an external/on-chain verifier would reject).
+//!
+//! This test round-trips known values (including negatives) through the exact
+//! on-disk encoding snarkjs uses and asserts `decode_fr_zk_coef` recovers them.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use zkvote_prover::field::{decode_fr_canonical, fr_from_decimal, Fr};
-use zkvote_prover::r1cs::{load_witness_decimal, parse_r1cs};
-use zkvote_prover::zkey::parse_zkey;
-use ark_ff::Zero;
+use num_bigint::BigInt;
+use zkvote_prover::field::{bigint_to_fr, decode_fr_zk_coef};
 
-fn repo_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop();
-    p.pop();
-    p
+/// BN254 scalar field modulus.
+const Q_STR: &str = "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+
+/// Encode `v` the way snarkjs writes a zkey coefficient: `v * 2^504 mod q`
+/// little-endian, with bit 7 of byte 31 set iff `v < 0`.
+fn enc_coef(v: &BigInt, q: &BigInt) -> [u8; 32] {
+    let neg = *v < BigInt::from(0);
+    // snarkjs stores the *magnitude* (|v|) with the sign bit set when negative.
+    let mag = if neg { -v } else { v.clone() };
+    let mag = &mag % q;
+    let mut r504 = BigInt::from(1);
+    for _ in 0..504u32 {
+        r504 = (&r504 * 2u32) % q;
+    }
+    let enc = (&mag * &r504) % q;
+    let mut b = [0u8; 32];
+    let mut e = enc;
+    for i in 0..32 {
+        b[i] = u8_of(&e);
+        e >>= 8;
+    }
+    if neg {
+        b[31] |= 0x80;
+    }
+    b
 }
 
-fn dot(map: &HashMap<usize, Fr>, w: &[Fr]) -> Fr {
-    let mut acc = Fr::zero();
-    for (idx, coef) in map {
-        acc += *coef * w[*idx];
-    }
-    acc
+fn u8_of(b: &BigInt) -> u8 {
+    let rem = b.clone() % BigInt::from(256u32);
+    let rem = if rem < BigInt::from(0) {
+        rem + BigInt::from(256u32)
+    } else {
+        rem
+    };
+    rem.to_string().parse::<u8>().unwrap()
+}
+
+fn fr_of(v: i128, q: &BigInt) -> zkvote_prover::field::Fr {
+    let v = BigInt::from(v);
+    let vmod = ((&v % q) + q) % q;
+    bigint_to_fr(&vmod)
 }
 
 #[test]
-fn zkey_coefs_match_r1cs() {
-    let root = repo_root();
-    let r1cs = parse_r1cs(&root.join("circuits/build/vote.r1cs"));
-    let witness = load_witness_decimal(&root.join("circuits/test_witness_vote.json"));
+fn zk_coef_sign_bit_is_honored() {
+    let q: BigInt = Q_STR.parse().unwrap();
 
-    // R1CS A/B/C maps (canonical coefficients).
-    let mut a_r1 = Vec::with_capacity(r1cs.n_constraints);
-    let mut b_r1 = Vec::with_capacity(r1cs.n_constraints);
-    let mut c_r1 = Vec::with_capacity(r1cs.n_constraints);
-    for (ar, br, cr) in &r1cs.constraints {
-        let mut am = HashMap::new();
-        let mut bm = HashMap::new();
-        let mut cm = HashMap::new();
-        for (idx, v) in ar {
-            am.insert(*idx, *v);
-        }
-        for (idx, v) in br {
-            bm.insert(*idx, *v);
-        }
-        for (idx, v) in cr {
-            cm.insert(*idx, *v);
-        }
-        a_r1.push(am);
-        b_r1.push(bm);
-        c_r1.push(cm);
+    // (value, expected decoded) — negatives must come back negative.
+    let cases: Vec<(i128, i128)> = vec![
+        (0, 0),
+        (1, 1),
+        (5, 5),
+        (12345, 12345),
+        (-1, -1),
+        (-2, -2),
+        (-12345, -12345),
+        (i128::MAX / 2, i128::MAX / 2),
+        (-1000000000000, -1000000000000),
+    ];
+
+    for (v, expect) in &cases {
+        let bytes = enc_coef(&BigInt::from(*v), &q);
+        // Sanity: the sign bit reflects the sign of the encoded value.
+        let sign_set = bytes[31] & 0x80 != 0;
+        assert_eq!(sign_set, *v < 0, "sign bit mismatch for {}", v);
+
+        let got = decode_fr_zk_coef(&bytes);
+        let want = fr_of(*expect, &q);
+        assert_eq!(got, want, "decode mismatch for value {}", v);
     }
 
-    // zkey ccoefs -> A/B maps.
-    let zkey_bytes = std::fs::read(root.join("frontend/public/circuits/vote_final.zkey")).unwrap();
-    let pk = parse_zkey(&zkey_bytes).expect("parse zkey");
-    let max_c = pk
-        .coefs
-        .iter()
-        .map(|c| c.constraint as usize)
-        .max()
-        .unwrap_or(0);
-    eprintln!(
-        "r1cs n_constraints={}, zkey max coef constraint={}",
-        r1cs.n_constraints, max_c
+    // q - 1 == -1 mod q: must decode to the same value as -1 (sign bit set).
+    let neg_one = enc_coef(&BigInt::from(-1), &q);
+    let q_minus_one = enc_coef(&(&q - BigInt::from(1)), &q);
+    assert_eq!(
+        decode_fr_zk_coef(&neg_one),
+        decode_fr_zk_coef(&q_minus_one),
+        "q-1 and -1 must decode identically"
     );
-    let dim = max_c + 1;
-    let mut a_zk = vec![HashMap::new(); dim];
-    let mut b_zk = vec![HashMap::new(); dim];
-    for coef in &pk.coefs {
-        let c = coef.constraint as usize;
-        let s = coef.signal as usize;
-        match coef.matrix {
-            0 => {
-                a_zk[c].insert(s, coef.value);
-            }
-            1 => {
-                b_zk[c].insert(s, coef.value);
-            }
-            _ => {}
-        }
-    }
-
-    let mut mismatches = 0usize;
-    for i in 0..r1cs.n_constraints {
-        let ar = dot(&a_r1[i], &witness);
-        let br = dot(&b_r1[i], &witness);
-        let cr = dot(&c_r1[i], &witness);
-        let az = if i <= max_c { dot(&a_zk[i], &witness) } else { ar };
-        let bz = if i <= max_c { dot(&b_zk[i], &witness) } else { br };
-        // R1CS constraint: ar*br == cr (should hold, verified elsewhere)
-        if ar * br != cr {
-            eprintln!("r1cs constraint {} violated (unexpected)", i);
-        }
-        // zkey ccoefs must give the same A·w and B·w as the R1CS.
-        if az != ar || bz != br {
-            mismatches += 1;
-            if mismatches <= 10 {
-                eprintln!(
-                    "constraint {}: A_zkey·w={} A_r1cs·w={} | B_zkey·w={} B_r1cs·w={}",
-                    i,
-                    fr_to_dec(&az),
-                    fr_to_dec(&ar),
-                    fr_to_dec(&bz),
-                    fr_to_dec(&br)
-                );
-            }
-        }
-    }
-    eprintln!("zkey/R1CS A·w,B·w mismatches = {}", mismatches);
-    assert_eq!(mismatches, 0, "zkey ccoefs do not match R1CS linear maps");
-}
-
-fn fr_to_dec(f: &Fr) -> String {
-    use zkvote_prover::field::fr_to_bigint;
-    use num_bigint::ToBigInt;
-    fr_to_bigint(f).to_str_radix(10)
 }

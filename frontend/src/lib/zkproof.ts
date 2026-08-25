@@ -50,7 +50,7 @@ let rustProverPromise: Promise<RustProver> | null = null;
 function loadRustProver(): Promise<RustProver> {
   if (!rustProverPromise) {
     rustProverPromise = (async () => {
-      const mod = await import("./zkvote_prover.js");
+      const mod = await import("./zkvote_prover/zkvote_prover.js");
       await (mod as unknown as { default: () => Promise<void> }).default();
       return mod as unknown as RustProver;
     })().catch((e) => {

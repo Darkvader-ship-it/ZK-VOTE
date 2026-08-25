@@ -183,9 +183,24 @@ pub fn decode_fr_snarkmont(bytes_le: &[u8]) -> Fr {
 /// on-disk writer then applies its own 2^248 Montgomery residue on top, so the
 /// stored bytes equal `v * 2^504 mod q`. The canonical integer is therefore
 /// recovered by dividing by `R = 2^504`.
+///
+/// The most-significant bit of the buffer (bit 255) is a **sign flag**: when
+/// set the coefficient is negative and the magnitude must be negated. snarkjs
+/// stores every `ccoef` this way, so without this handling all negative
+/// coefficients (the large majority of non-linear constraint terms) decode as
+/// the wrong (huge positive) value, silently corrupting the proving key.
 pub fn decode_fr_zk_coef(bytes_le: &[u8]) -> Fr {
-    let v = mont_to_int_bits(bytes_le, &scalar_q(), 504);
-    bigint_to_fr(&v)
+    let mut buf = [0u8; 32];
+    buf.copy_from_slice(bytes_le);
+    let sign = buf[31] & 0x80;
+    buf[31] &= 0x7f;
+    let v = mont_to_int_bits(&buf, &scalar_q(), 504);
+    let f = bigint_to_fr(&v);
+    if sign != 0 {
+        -f
+    } else {
+        f
+    }
 }
 
 /// Decode a 32-byte little-endian *canonical* (regular, non-Montgomery) field
