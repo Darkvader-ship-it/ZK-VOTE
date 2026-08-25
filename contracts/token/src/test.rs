@@ -1050,13 +1050,11 @@ fn test_balance_at_binary_search() {
     client.transfer(&alice, &bob, &100i128);
     let ledger1 = env.ledger().sequence();
 
-    env.ledger()
-        .with_mut(|l| l.sequence_number += 5);
+    env.ledger().with_mut(|l| l.sequence_number += 5);
     client.transfer(&alice, &bob, &100i128);
     let ledger2 = env.ledger().sequence();
 
-    env.ledger()
-        .with_mut(|l| l.sequence_number += 5);
+    env.ledger().with_mut(|l| l.sequence_number += 5);
     client.transfer(&alice, &bob, &100i128);
     let ledger3 = env.ledger().sequence();
 

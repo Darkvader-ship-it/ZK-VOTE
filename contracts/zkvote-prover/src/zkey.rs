@@ -1,9 +1,7 @@
 //! Parser for snarkjs Groth16 `.zkey` files (binfile v1, protocol id 1).
 
 use crate::binfile::BinFile;
-use crate::field::{
-    decode_fr_zk_coef, read_g1, read_g2, Fr, G1Affine, G2Affine,
-};
+use crate::field::{decode_fr_zk_coef, read_g1, read_g2, Fr, G1Affine, G2Affine};
 use ark_ff::Zero;
 use num_bigint::BigInt;
 
