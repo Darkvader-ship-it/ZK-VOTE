@@ -24,9 +24,6 @@ import {
   flagCommentSchema,
   manualEventSchema,
   notifyEventSchema,
-  eventsQuerySchema,
-  daosQuerySchema,
-  commentCountQuerySchema,
 } from "./validation/schemas.js";
 import { bridgeVoteSchema } from "./routes/bridge.js";
 import { circuitParamsSchema } from "./routes/circuits.js";

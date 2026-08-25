@@ -301,7 +301,7 @@ export const graduatedSlowDown = isTestMode
       delayAfter: 40,
       delayMs: (used: number) => Math.min((used - 40) * 100, 3000),
       maxDelayMs: 3000,
-      store: getStore("slowDown"),
+      store: getStore("slowDown") as any,
       keyGenerator,
       validate: { delayMs: false },
     });

@@ -28,21 +28,13 @@ import { daoParamsSchema, eventsQuerySchema, archiveParamsSchema } from "../vali
 import type { AsyncHandler } from "../types/index.js";
 import type { EventQueryOptions } from "../services/db.js";
 
-function encodeCursor(event: { id?: number; ledger?: number; timestamp?: string }, cursorField: string): string {
+function encodeCursor(event: { id?: number; ledger?: number | null; timestamp?: string | null }, cursorField: string): string {
   const payload = cursorField === "ledger"
     ? { l: event.ledger }
     : cursorField === "timestamp"
     ? { t: event.timestamp }
     : { i: event.id };
   return Buffer.from(JSON.stringify(payload)).toString("base64");
-}
-
-function decodeCursor(cursor: string): Record<string, unknown> {
-  try {
-    return JSON.parse(Buffer.from(cursor, "base64").toString("utf-8"));
-  } catch {
-    return {};
-  }
 }
 
 const router = Router();

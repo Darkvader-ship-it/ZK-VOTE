@@ -145,7 +145,7 @@ const ipfsCid = z.string().refine(
     return false;
     if (!val || typeof val !== "string") return false;
     const trimmed = val.trim();
-    if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) return false;
+    if (/[/?\\#\s\0\r\n\t]/.test(trimmed)) return false;
     return CIDV0_REGEX.test(trimmed) || CIDV1_REGEX.test(trimmed);
   },
   { message: "Invalid IPFS CID format" },

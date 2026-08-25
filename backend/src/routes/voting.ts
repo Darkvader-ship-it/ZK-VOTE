@@ -24,7 +24,6 @@ import {
 import {
   authGuard,
   tlsClientCertGuard,
-  auditLog,
   voteLimiter,
   walletRateLimiter,
   queryLimiter,
@@ -41,7 +40,6 @@ import {
 import { type AsyncHandler, ErrorCode } from "../types/index.js";
 import { ApiError } from "../utils/errors.js";
 import {
-  getTransactionLog,
   recordTransactionLog,
   updateTransactionLogStatus,
   recordProofCommitment,
@@ -165,8 +163,8 @@ router.post(
   tlsClientCertGuard,
   walletRateLimiter,
   validateBody(commitSchema),
-  (async (req: Request, res: Response) => {
-    const { daoId, proposalId, nullifier, commitmentHash, timestamp, walletAddress } = req.body;
+  (async (req: Request, res: Response, next: NextFunction) => {
+    const { daoId, proposalId, nullifier, commitmentHash, timestamp, walletAddress, choice, root, proof, scNullifier, scRoot, scProof } = req.body;
 
     const now = Date.now();
     const ageSeconds = (now - timestamp) / 1000;
@@ -240,7 +238,7 @@ router.post(
   walletRateLimiter,
   voteLimiter,
   validateBody(voteSchema),
-  (async (req: Request, res: Response) => {
+  (async (req: Request, res: Response, next: NextFunction) => {
     let body = config.stripRequestBodies ? {} : req.body;
 
     if (body.encryptedPayload) {
@@ -470,13 +468,6 @@ router.post(
           throw new Error("SIMULATION_FAILED:VOTE_REJECTED");
         }
 
-    return respondToVoteExecution(
-      res,
-      { sendResult, result },
-      nullifier,
-      daoId,
-      proposalId,
-    );
         // Prepare and sign
         const preparedTx = StellarSdk.rpc
           .assembleTransaction(tx, simResult)

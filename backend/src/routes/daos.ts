@@ -24,7 +24,7 @@ import {
 } from "../middleware/index.js";
 import { getServiceHealth } from "../services/service-health.js";
 import { daoParamsSchema, daosQuerySchema } from "../validation/schemas.js";
-import type { AsyncHandler, DaoWithRole } from "../types/index.js";
+import type { AsyncHandler } from "../types/index.js";
 
 const router = Router();
 
@@ -38,11 +38,13 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (req: R
     const allDaos = dbService.getAllCachedDaos();
     let filteredDaos = allDaos;
 
-    if (!userAddress) {
+    if (!user) {
       const syncHealth = getServiceHealth("dao_sync") as { state: string };
       if (syncHealth.state !== "healthy") {
         noteDegraded("dao_sync");
       }
+      const daos = allDaos;
+      const lastSync = dbService.getDaosSyncTime();
       return res.json({
         daos,
         total: daos.length,

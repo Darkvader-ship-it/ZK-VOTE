@@ -13,7 +13,7 @@
 import type { VaultConfig, SecretBackend, SecretManagerOptions } from "./types.js";
 import { encrypt, isEncrypted, generateMasterKey } from "./encryptor.js";
 import { auditLog, createAuditEntry } from "./audit-logger.js";
-import { checkRotationStatus, getOverallHealth } from "./rotation-monitor.js";
+import { checkRotationStatus, getOverallHealth, DEFAULT_ROTATION_INTERVALS } from "./rotation-monitor.js";
 import { log } from "../logger.js";
 import crypto from "node:crypto";
 
@@ -27,7 +27,7 @@ let backend: SecretBackend = "env";
 const rotationMetadata: Record<string, { metadata: import("./types.js").SecretMetadata | undefined }> = {};
 
 // Track in-flight fetches to avoid duplicate requests
-const pendingFetches: Map<string, Promise<string>> = new Map();
+const pendingFetches: Map<string, Promise<string | undefined>> = new Map();
 
 // ============================================
 // INITIALIZATION
@@ -286,7 +286,7 @@ export async function checkRotationHealth(): Promise<import("./types.js").Secret
       const value = process.env[key];
       if (value) {
         const meta = isEncrypted(value)
-          ? { rotationIntervalMs: DEFAULT_ROTATION_INTERVALS[key] }
+          ? { key, rotationIntervalMs: DEFAULT_ROTATION_INTERVALS[key] }
           : undefined;
         if (meta) {
           rotationMetadata[key] = { metadata: meta };

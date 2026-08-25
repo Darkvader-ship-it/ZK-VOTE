@@ -67,7 +67,7 @@ export function getWalResilienceConfig(): WalResilienceConfig {
 export function getWalHealth(db: DatabaseType, dbPath: string): WalHealth {
   const walPath = `${dbPath}-wal`;
   let walSizeBytes: number | null = null;
-  let walFileExists: boolean | null = null;
+  let walFileExists: boolean | null;
 
   try {
     walFileExists = fs.existsSync(walPath);
@@ -235,8 +235,7 @@ export function executeWithRetry<T>(
           ...context,
         });
         const deadline = Date.now() + delayMs;
-        while (Date.now() < deadline) {
-        }
+        while (Date.now() < deadline) { /* busy-wait */ }
       }
       attempt++;
     }

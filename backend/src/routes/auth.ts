@@ -349,7 +349,7 @@ router.get(
   masterKeyGuard,
   (async (req: Request, res: Response) => {
     const parsed = auditQuerySchema.safeParse(req.query);
-    const options = parsed.success ? parsed.data : {};
+    const options = (parsed.success ? parsed.data : {}) as any;
 
     const entries = getAuditEntries({
       tokenId: options.tokenId,

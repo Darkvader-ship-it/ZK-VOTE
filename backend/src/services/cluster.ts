@@ -447,7 +447,7 @@ export function startClusterMaster(): void {
           const entry = store?.get(msg.key);
           if (entry) {
             clearTimeout(entry.timer);
-            store.delete(msg.key);
+            store?.delete(msg.key);
           }
         }
         break;

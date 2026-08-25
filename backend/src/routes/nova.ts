@@ -3,7 +3,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { novaAggregatorService, VoteWitnessPayload } from '../services/nova-aggregator';
+import { novaAggregatorService, VoteWitnessPayload } from '../services/nova-aggregator.js';
 import { bodyLimit } from '../middleware/index.js';
 
 const router = Router();

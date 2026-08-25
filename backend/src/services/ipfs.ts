@@ -722,7 +722,7 @@ export function isValidCid(cid: string): boolean {
   const trimmed = cid.trim();
 
   // Reject path separators, query params, hash fragments, control characters, whitespace
-  if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) {
+  if (/[/?\\#\s\0\r\n\t]/.test(trimmed)) {
     return false;
   }
 
@@ -739,7 +739,7 @@ export function sanitizeCid(cid: string): string {
 
   const trimmed = cid.trim();
 
-  if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) {
+  if (/[/?\\#\s\0\r\n\t]/.test(trimmed)) {
     throw new Error("CID contains forbidden characters, query parameters, or path separators");
   }
 
@@ -846,7 +846,7 @@ export function isAllowedGatewayUrl(urlString: string): boolean {
         if (hostname === configuredHost || hostname.endsWith("." + configuredHost)) {
           return true;
         }
-      } catch {}
+      } catch { /* ignore */ }
     }
 
     // Match against public gateways
@@ -856,7 +856,7 @@ export function isAllowedGatewayUrl(urlString: string): boolean {
         if (hostname === gwHost) {
           return true;
         }
-      } catch {}
+      } catch { /* ignore */ }
     }
 
     return false;

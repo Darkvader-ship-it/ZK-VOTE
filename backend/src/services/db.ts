@@ -534,8 +534,6 @@ function logQuery(query: string, params: unknown[] = [], operation: string): voi
 let writeDb: DatabaseType | null = null;
 /** Readonly connection — API query path (same file, WAL concurrent readers). */
 let readDb: DatabaseType | null = null;
-/** @deprecated alias kept for internal partition DDL; always mirrors writeDb */
-let db: DatabaseType | null = null;
 
 let activeDbFile: string = DB_FILE;
 let writeHealthy = true;
@@ -680,10 +678,8 @@ export function reconnectWriteDb(): boolean {
         /* already closed */
       }
       writeDb = null;
-      db = null;
     }
     writeDb = openWriteConnection(activeDbFile);
-    db = writeDb;
     writeDb.prepare("SELECT 1").get();
     markWriteSuccess();
     try {
@@ -904,7 +900,6 @@ export function initDb(dbPath?: string): DatabaseType {
     } catch {
       try { writeDb.close(); } catch { /* ignore */ }
       writeDb = null;
-      db = null;
       try { readDb?.close(); } catch { /* ignore */ }
       readDb = null;
     }
@@ -916,7 +911,6 @@ export function initDb(dbPath?: string): DatabaseType {
     try { writeDb?.close(); } catch { /* ignore */ }
     writeDb = null;
     readDb = null;
-    db = null;
     knownPartitions.clear();
   }
 
@@ -1259,14 +1253,11 @@ export function initDb(dbPath?: string): DatabaseType {
   }
 
   writeDb = database;
-  db = database;
   markWriteSuccess();
 
   // Open readonly companion for API query isolation
+  // (prior handles already closed/nulled above when switching files)
   try {
-    if (readDb) {
-      try { readDb.close(); } catch { /* ignore */ }
-    }
     readDb = openReadConnection(dbFile);
   } catch (err) {
     log("warn", "db_read_connection_failed", {
@@ -1274,7 +1265,6 @@ export function initDb(dbPath?: string): DatabaseType {
     });
     readDb = null;
   }
-  db = database;
 
   updateConnectionGauges();
 
@@ -1317,7 +1307,6 @@ export function closeDb(): void {
       writeDb.close();
     } catch { /* ignore */ }
     writeDb = null;
-    db = null;
     knownPartitions.clear();
     writeHealthy = true;
     writeFailureReason = null;
@@ -1575,7 +1564,7 @@ export function addEvent(event: EventInput): boolean {
     throw new Error(`Invalid event type: ${event.type}`);
   }
 
-  const queryObj = kysely
+  const queryObj = (kysely as any)
     .insertInto(sql<any>`${sql.raw(tableName)}`.as("events"))
     .values({
       type: event.type,
@@ -1591,11 +1580,9 @@ export function addEvent(event: EventInput): boolean {
     "addEvent",
     () => {
       try {
-        logQuery(query, params, 'add_event');
-        database.prepare(query).run(...params);
-        markWriteSuccess();
         logQuery(compiled.sql, compiled.parameters as any[], "add_event");
         database.prepare(compiled.sql).run(...compiled.parameters);
+        markWriteSuccess();
         return true;
       } catch (err) {
         const error = err as { code?: string };
@@ -1606,7 +1593,7 @@ export function addEvent(event: EventInput): boolean {
           markWriteFailure(err);
           if (reconnectWriteDb()) {
             ensurePartitionTable(event.daoId);
-            getWriteDb().prepare(query).run(...params);
+            getWriteDb().prepare(compiled.sql).run(...compiled.parameters);
             markWriteSuccess();
             return true;
           }

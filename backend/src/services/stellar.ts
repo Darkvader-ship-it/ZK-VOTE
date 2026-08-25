@@ -20,6 +20,8 @@ import {
 import { registerCircuitBreaker, CircuitBreakerOpenError } from "./circuit-breaker.js";
 import type { Groth16Proof } from "../types/index.js";
 import { BN254_FQ_MODULUS } from "../types/index.js";
+import nodeCluster from "node:cluster";
+import { acquireClusterSequenceLock, releaseClusterSequenceLock } from "./cluster.js";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -181,7 +183,7 @@ export class SequenceManager {
 export const sequenceManager = new SequenceManager();
 
 export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
-  if (config.clusterEnabled && cluster.isWorker) {
+  if (config.clusterEnabled && nodeCluster.isWorker) {
     await acquireClusterSequenceLock();
     try {
       return await fn();

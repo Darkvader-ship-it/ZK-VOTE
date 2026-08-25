@@ -149,7 +149,10 @@ router.get("/ipfs/health", queryLimiter, (async (
       markHealthy("ipfs");
       // Best-effort drain of queued pinJSON ops
       void drainIpfsPinQueue(async (payload) =>
-        ipfsService.pinJSON(payload.data, payload.name ?? "zkvote-queued"),
+        ipfsService.pinJSON(
+          payload.data as Record<string, unknown>,
+          payload.name ?? "zkvote-queued",
+        ),
       );
     } else {
       markDegraded("ipfs", "Pinata health check failed");

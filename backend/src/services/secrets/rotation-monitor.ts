@@ -14,7 +14,7 @@ const logger = createLogger("rotation-monitor");
 /**
  * Default rotation intervals per secret type (in milliseconds)
  */
-const DEFAULT_ROTATION_INTERVALS: Record<string, number> = {
+export const DEFAULT_ROTATION_INTERVALS: Record<string, number> = {
   RELAYER_SECRET_KEY: 30 * 24 * 60 * 60 * 1000, // 30 days
   RELAYER_AUTH_TOKEN: 7 * 24 * 60 * 60 * 1000, // 7 days
   PINATA_JWT: 30 * 24 * 60 * 60 * 1000, // 30 days
