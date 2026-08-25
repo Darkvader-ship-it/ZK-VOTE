@@ -10,7 +10,23 @@
  * Run with: npm test -- --testPathPattern=quadratic
  * Requires the `circom` compiler (>= 2.2) on PATH.
  */
+const fs = require("fs");
 const path = require("path");
+const os = require("os");
+
+// Ensure ~/.cargo/bin and common install paths are in process.env.PATH for circom
+const extraPaths = [
+  path.join(os.homedir(), ".cargo", "bin"),
+  "/home/runner/.cargo/bin",
+  "/usr/local/bin",
+  "/usr/bin",
+];
+for (const p of extraPaths) {
+  if (fs.existsSync(path.join(p, "circom")) && !(process.env.PATH || "").includes(p)) {
+    process.env.PATH = `${p}:${process.env.PATH || ""}`;
+  }
+}
+
 const wasm_tester = require("circom_tester").wasm;
 const { buildPoseidon } = require("circomlibjs");
 

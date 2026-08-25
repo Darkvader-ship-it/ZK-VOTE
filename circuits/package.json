@@ -24,7 +24,7 @@
     "verify": "snarkjs groth16 verify build/verification_key.json public.json proof.json",
     "verify:artifacts": "../scripts/verify-circuits.sh",
     "checksums": "sha256sum build/vote.r1cs build/vote_js/vote.wasm build/verification_key.json build/verification_key_soroban.json > checksums.sha256",
-    "test": "PATH=\"$HOME/.cargo/bin:$PATH\" jest",
+    "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
   },
