@@ -149,6 +149,7 @@ export default function RevisionHistory({
                   <p className="text-xs text-muted-foreground mt-1">
                     {mounted
                       ? new Date(revision.content.createdAt).toLocaleString()
+                      : ""}
                   </p>
                 ) : null}
               </button>

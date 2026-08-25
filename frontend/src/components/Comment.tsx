@@ -195,8 +195,7 @@ export default function Comment({
   };
 
   return (
-    <div className={`${depth > 0 ? "ml-6 border-l-2 border-muted pl-4" : ""} ${isPending ? "opacity-60 pointer-events-none" : ""}`}>
-    <div className={`${depth > 0 ? "ml-2 sm:ml-4 md:ml-6 border-l-2 border-muted pl-2 sm:pl-4" : ""}`}>
+    <div className={`${depth > 0 ? "ml-2 sm:ml-4 md:ml-6 border-l-2 border-muted pl-2 sm:pl-4" : ""} ${isPending ? "opacity-60 pointer-events-none" : ""}`}>
       <div className="group py-3">
         {/* Header */}
         <div className="flex items-center gap-2 mb-2 flex-wrap">
