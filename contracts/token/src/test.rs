@@ -861,9 +861,9 @@ fn test_transfer_with_permit() {
     let deadline: u64 = env.ledger().timestamp() + 1000;
 
     let mut digest_data = soroban_sdk::Bytes::new(&env);
-    let contract_key = Token::address_to_32bytes(&token_id);
-    let alice_key = Token::address_to_32bytes(&alice);
-    let bob_key = Token::address_to_32bytes(&bob);
+    let contract_key = Token::address_to_32bytes(&env, &token_id);
+    let alice_key = Token::address_to_32bytes(&env, &alice);
+    let bob_key = Token::address_to_32bytes(&env, &bob);
     digest_data.extend_from_slice(&contract_key);
     digest_data.extend_from_slice(&alice_key);
     digest_data.extend_from_slice(&bob_key);

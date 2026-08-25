@@ -16,6 +16,20 @@ members = [
     "contracts/threshold-crypto",
     "tests/integration",
 ]
+default-members = [
+    "contracts/zkvote-groth16",
+    "contracts/dao-registry",
+    "contracts/membership-sbt",
+    "contracts/membership-tree",
+    "contracts/voting",
+    "contracts/comments",
+    "contracts/poc-bls12-381",
+    "contracts/bridge/soroban",
+    "contracts/circuit-registry",
+    "contracts/token",
+    "contracts/vdf",
+    "contracts/threshold-crypto",
+]
 resolver = "2"
 
 [workspace.dependencies]
