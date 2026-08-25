@@ -169,6 +169,18 @@ EXPECTED_ROOT='{"hi_hi":3286161620916250310,"hi_lo":13489905787044537510,"lo_hi"
 echo "  Expected root (from circomlib): $EXPECTED_ROOT"
 echo ""
 
+# Step 10b: Rust prover Poseidon KAT (must match circomlib for the same vector)
+# The zkvote-prover Rust Poseidon must agree with circomlib on the on-chain
+# commitment Poseidon(12345, 67890) = 0x1914879b... (see poseidon_commitment_12345_67890).
+echo "Step 10b: Verifying Rust zkvote-prover Poseidon matches circomlib..."
+if (cd "$PROJECT_ROOT" && cargo test -q -p zkvote-prover poseidon_commitment_12345_67890 2>&1 | tail -5); then
+    echo "  ✅ Rust Poseidon matches circomlib for Poseidon(12345, 67890)"
+else
+    echo "  ❌ Rust Poseidon KAT FAILED: zkvote-prover Poseidon disagrees with circomlib"
+    exit 1
+fi
+echo ""
+
 # Parse and compare
 if [ "$ACTUAL_ROOT" = "$EXPECTED_ROOT" ]; then
     echo "============================================"

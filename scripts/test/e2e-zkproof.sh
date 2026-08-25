@@ -33,6 +33,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 export NODE_PATH="$PROJECT_ROOT/frontend/node_modules"
 
+# Prover backend: "rust" (zkvote-prover) or "js" (snarkjs, default).
+PROVER="${PROVER:-js}"
+echo "Prover backend: $PROVER"
+if [ "$PROVER" = "rust" ]; then
+    ZKPROVE_BIN="${ZKPROVE_BIN:-$PROJECT_ROOT/target/release/zkprove}"
+    if [ ! -x "$ZKPROVE_BIN" ]; then
+        echo "Building zkvote-prover (release, witness feature)..."
+        (cd "$PROJECT_ROOT" && cargo build -q -p zkvote-prover --features witness --bin zkprove)
+        ZKPROVE_BIN="$PROJECT_ROOT/target/release/zkprove"
+    fi
+fi
+
 echo "Using contracts on futurenet:"
 echo "  Registry: $REGISTRY_ID"
 echo "  SBT: $SBT_ID"
@@ -249,20 +261,29 @@ const input = {
 console.log(JSON.stringify(input, null, 2));
 " 2>/dev/null > "$TEMP_DIR/input.json"
 
-# Generate witness
-echo "   Generating witness..."
-node "$PROJECT_ROOT/frontend/node_modules/snarkjs/build/cli.cjs" wtns calculate \
-    "$CIRCUIT_DIR/vote.wasm" \
-    "$TEMP_DIR/input.json" \
-    "$TEMP_DIR/witness.wtns" 2>/dev/null
+# Generate witness + proof
+echo "   Generating witness and proof..."
+if [ "$PROVER" = "rust" ]; then
+    "$ZKPROVE_BIN" \
+        --wasm "$CIRCUIT_DIR/vote.wasm" \
+        --input "$TEMP_DIR/input.json" \
+        --zkey "$CIRCUIT_DIR/vote_final.zkey" \
+        --out-proof "$TEMP_DIR/proof.json" \
+        --out-public "$TEMP_DIR/public.json"
+else
+    node "$PROJECT_ROOT/frontend/node_modules/snarkjs/build/cli.cjs" wtns calculate \
+        "$CIRCUIT_DIR/vote.wasm" \
+        "$TEMP_DIR/input.json" \
+        "$TEMP_DIR/witness.wtns" 2>/dev/null
 
-# Generate proof
-echo "   Generating Groth16 proof (this may take a few seconds)..."
-node "$PROJECT_ROOT/frontend/node_modules/snarkjs/build/cli.cjs" groth16 prove \
-    "$CIRCUIT_DIR/vote_final.zkey" \
-    "$TEMP_DIR/witness.wtns" \
-    "$TEMP_DIR/proof.json" \
-    "$TEMP_DIR/public.json" 2>/dev/null
+    # Generate proof
+    echo "   Generating Groth16 proof (this may take a few seconds)..."
+    node "$PROJECT_ROOT/frontend/node_modules/snarkjs/build/cli.cjs" groth16 prove \
+        "$CIRCUIT_DIR/vote_final.zkey" \
+        "$TEMP_DIR/witness.wtns" \
+        "$TEMP_DIR/proof.json" \
+        "$TEMP_DIR/public.json" 2>/dev/null
+fi
 
 echo "   Proof generated"
 
@@ -338,7 +359,7 @@ echo "  ✅ Poseidon commitment hash"
 echo "  ✅ Commitment registration in Merkle tree"
 echo "  ✅ Merkle path retrieval"
 echo "  ✅ Proposal creation"
-echo "  ✅ Real Groth16 proof generation (snarkjs)"
+echo "  ✅ Real Groth16 proof generation ($PROVER)"
 echo "  ✅ On-chain BN254 proof verification"
 echo "  ✅ Anonymous vote recorded"
 echo ""

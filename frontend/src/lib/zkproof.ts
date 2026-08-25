@@ -5,20 +5,43 @@
 // on-chain verifier. snarkjs remains as a transparent fallback if the Rust
 // module fails to load or errors.
 //
-// The witness is still computed by the circom WASM (via `circom_runtime`, the
-// same engine snarkjs uses) and fed to the Rust prover as a decimal JSON
-// array; the Rust prover then performs the FFT + MSM that dominates proof time.
+// The witness is computed by the circuit's compiled WASM (via `circom_runtime`,
+// the same engine the circuit was built with) and fed to the Rust prover as the
+// raw binary `.wtns` buffer; the Rust prover then performs the FFT + MSM that
+// dominates proof time. `snarkjs` is used only as a transparent fallback.
 
-import { groth16 } from "snarkjs";
+// `snarkjs` is imported ONLY as a type here and dynamically inside the fallback
+// path (see `proveWithSnarkjs`). On the default production path (Rust→WASM) it
+// is never loaded.
 import type { Groth16Proof } from "snarkjs";
 
-// Flip to false to force the legacy snarkjs prover.
-const USE_RUST_PROVER = true;
+// Default to the Rust prover. Force the legacy `snarkjs` prover by setting
+// `VITE_ZK_USE_RUST_PROVER=false` (Vite) or `ZK_USE_RUST_PROVER=false`
+// (Node/tests). The value is read once at module load.
+function rustProverEnabled(): boolean {
+  try {
+    if ((import.meta as { env?: Record<string, string> }).env?.VITE_ZK_USE_RUST_PROVER === "false")
+      return false;
+  } catch {
+    /* import.meta.env unavailable */
+  }
+  try {
+    if (
+      (globalThis as { process?: { env?: Record<string, string> } }).process?.env
+        ?.ZK_USE_RUST_PROVER === "false"
+    )
+      return false;
+  } catch {
+    /* process unavailable */
+  }
+  return true;
+}
+const USE_RUST_PROVER = rustProverEnabled();
 
 type RustProver = {
-  prove: (
+  prove_wtns: (
     zkey: Uint8Array,
-    witnessJson: string,
+    wtns: Uint8Array,
   ) => Promise<{ proof: Groth16Proof; publicSignals: string[] }>;
 };
 
@@ -62,15 +85,16 @@ async function proveWithRust(
   const bigInput: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input)) bigInput[k] = toBig(v);
 
-  const witnessArr = (await wc.calculateWitness(bigInput, true)) as bigint[];
-  const witnessJson = JSON.stringify(witnessArr.map((x) => x.toString()));
+  // Return the raw binary `.wtns` buffer (position-0 `1` signal included),
+  // exactly what the Rust `prove_wtns` entry point expects.
+  const witnessBytes = (await wc.calculateWitness(bigInput, true)) as Uint8Array;
 
   const zkeyBytes = new Uint8Array(
     await (await fetch(zkeyPath)).arrayBuffer(),
   );
 
   const prover = await loadRustProver();
-  const res = await prover.prove(zkeyBytes, witnessJson);
+  const res = await prover.prove_wtns(zkeyBytes, witnessBytes);
   return { proof: res.proof, publicSignals: res.publicSignals };
 }
 
@@ -152,6 +176,9 @@ export async function generateVoteProof(
       }
     }
 
+    // Fallback path: load `snarkjs` dynamically so it is NOT part of the
+    // default (Rust) production bundle.
+    const { groth16 } = await import("snarkjs");
     const { proof, publicSignals } = await groth16.fullProve(
       circuitInput,
       wasmPath,
@@ -208,6 +235,9 @@ export async function generateCommentProof(
       }
     }
 
+    // Fallback path: load `snarkjs` dynamically so it is NOT part of the
+    // default (Rust) production bundle.
+    const { groth16 } = await import("snarkjs");
     const { proof, publicSignals } = await groth16.fullProve(
       circuitInput,
       wasmPath,
@@ -350,6 +380,7 @@ export async function verifyProofLocally(
 ): Promise<boolean> {
   try {
     const vkey = await fetch(vkeyPath).then((r) => r.json());
+    const { groth16 } = await import("snarkjs");
     const result = await groth16.verify(vkey, publicSignals, proof);
     return result;
   } catch (error) {

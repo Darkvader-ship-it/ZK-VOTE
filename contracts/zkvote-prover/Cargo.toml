@@ -24,10 +24,20 @@ js-sys = { version = "0.3", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 getrandom = { version = "0.2", features = ["js"], optional = true }
 
+# Native witness generation: runs a compiled Circom2 witness-calculator WASM.
+wasmtime = { version = "21", optional = true }
+
 [features]
 default = []
 # Enables the browser/WASM API. Should NOT be enabled when building for soroban (wasm32v1-none).
 wasm = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen", "dep:js-sys", "dep:console_error_panic_hook", "dep:getrandom"]
+# Enables Rust witness generation (runs the circuit's compiled WASM in wasmtime).
+witness = ["dep:wasmtime", "dep:getrandom"]
+
+[[bin]]
+name = "zkprove"
+path = "src/bin/zkprove.rs"
+required-features = ["witness"]
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false

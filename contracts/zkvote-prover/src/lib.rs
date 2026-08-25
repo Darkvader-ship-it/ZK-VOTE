@@ -15,5 +15,8 @@ pub mod fft;
 pub mod groth16;
 pub mod r1cs;
 
+#[cfg(feature = "witness")]
+pub mod witness_wasm;
+
 #[cfg(feature = "wasm")]
 pub mod wasm;
