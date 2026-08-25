@@ -19,10 +19,10 @@ command -v node >/dev/null 2>&1 || { echo "node not found"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq not found"; exit 1; }
 
 # Contract IDs from frontend/src/config/contracts.ts
-REGISTRY_ID="CB6CH7UNQSEZ2R5EZSHLFLZBX4X7OWF2FVVWX23MY2BG66V75TAFUE7O"
-SBT_ID="CDVDFULVS6MT3WIE7ITCIXPZ7FYBDF2RQBXBUBQMQJH6WA6KFPKF7TFN"
-TREE_ID="CC2GRLKCBCRNAUKKVHKJBJPVKTMZ5YY2DXN67HZGRC5D67MN6Y6VQ7ZX"
-VOTING_ID="CALJTLBN6GMXT2XKBRWZG7STMQU5FUBRWGFHLXXDTZLG5MESLIXIIZ5O"
+REGISTRY_ID="CDH2BV3F4NACX6RMJYIIBG3YW6YOVNXY66FSU63S6AGYJZTLQZY4LV4J"
+SBT_ID="CDUFB7RCXEH74E5PMCB2QJQSQVRZF35RBG3QWWE5GHYVAWUL3AK4WYMS"
+TREE_ID="CCGM5HRRYXN42ZGKMCWC77NFDOYYSQYHG5B5UTV2L3NWZSU5EUAZXVRI"
+VOTING_ID="CBFRQE276ROXWUULDNS7DSN7J5E6H4V63LC7L37ZGJTFA4GOGX6EB3UD"
 
 # Network params
 RPC_URL="https://rpc-futurenet.stellar.org"
@@ -34,14 +34,14 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 export NODE_PATH="$PROJECT_ROOT/frontend/node_modules"
 
 # Prover backend: "rust" (zkvote-prover) or "js" (snarkjs, default).
-PROVER="${PROVER:-js}"
+PROVER="${PROVER:-rust}"
 echo "Prover backend: $PROVER"
 if [ "$PROVER" = "rust" ]; then
-    ZKPROVE_BIN="${ZKPROVE_BIN:-$PROJECT_ROOT/target/release/zkprove}"
+    ZKPROVE_BIN="${ZKPROVE_BIN:-$PROJECT_ROOT/target/debug/zkprove}"
     if [ ! -x "$ZKPROVE_BIN" ]; then
-        echo "Building zkvote-prover (release, witness feature)..."
+        echo "Building zkvote-prover (debug + ark-optimized, witness feature)..."
         (cd "$PROJECT_ROOT" && cargo build -q -p zkvote-prover --features witness --bin zkprove)
-        ZKPROVE_BIN="$PROJECT_ROOT/target/release/zkprove"
+        ZKPROVE_BIN="$PROJECT_ROOT/target/debug/zkprove"
     fi
 fi
 
@@ -250,7 +250,9 @@ const input = {
     daoId: '$DAO_ID',
     proposalId: '$PROPOSAL_ID',
     voteChoice: '1',
-    commitment: '$COMMITMENT',
+    // NOTE: commitment is NOT a circuit input - vote.circom derives it
+    // internally as Poseidon(secret, salt) and uses it as the Merkle leaf.
+    // Passing it would make the wasm reject the input (signal not found).
     // Private inputs
     secret: '$SECRET',
     salt: '$SALT',
@@ -326,8 +328,7 @@ invoke \
     --proposal_id $PROPOSAL_ID \
     --nullifier $NULLIFIER \
     --root $ROOT \
-    --commitment $COMMITMENT \
-    --vote_choice \
+    --vote_choice true \
     --proof "$PROOF_SOROBAN" 2>&1 | tail -5
 
 # Step 10: Verify vote was recorded
