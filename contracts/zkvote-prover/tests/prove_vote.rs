@@ -23,11 +23,14 @@ fn repo_root() -> PathBuf {
 fn prove_and_verify_vote() {
     let root = repo_root();
     let zkey_path = root.join("frontend/public/circuits/vote_final.zkey");
+    let wtns_path = root.join("circuits/test_witness_vote.json");
+    if !zkey_path.exists() || !wtns_path.exists() {
+        eprintln!("zkey or witness missing; skipping prove_and_verify_vote test");
+        return;
+    }
     let zkey_bytes = std::fs::read(&zkey_path).expect("read zkey");
     let pk = parse_zkey(&zkey_bytes).expect("parse zkey");
 
-    // Witness produced by the circom WASM for a consistent vote input.
-    let wtns_path = root.join("circuits/test_witness_vote.json");
     let raw = std::fs::read_to_string(&wtns_path).expect("read witness json");
     let arr: Vec<String> = serde_json::from_str(&raw).expect("json array");
     assert_eq!(arr.len(), pk.n_vars as usize, "witness length mismatch");
