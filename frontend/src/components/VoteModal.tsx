@@ -281,17 +281,6 @@ export default function VoteModal({
         voterSignature,
       });
 
-      // Save receipt
-      if (result.success && result.txHash) {
-        addReceipt({
-          txHash: result.txHash,
-          nullifier: toHexBE(nullifier),
-          timestamp: Date.now(),
-          daoId: Number(daoId),
-          proposalId: Number(proposalId),
-        });
-      }
-
       // Optimistic update
       const revertOptimisticUpdate = setOptimisticVote(
         daoId,
@@ -336,6 +325,17 @@ export default function VoteModal({
           const result = await response.json();
           if (import.meta.env.DEV)
             console.log("Vote submitted successfully:", result);
+
+          // Save receipt
+          if (result.txHash) {
+            addReceipt({
+              txHash: result.txHash,
+              nullifier: toHexBE(nullifier),
+              timestamp: Date.now(),
+              daoId: Number(daoId),
+              proposalId: Number(proposalId),
+            });
+          }
 
           clearPendingVote(daoId, proposalId);
         })

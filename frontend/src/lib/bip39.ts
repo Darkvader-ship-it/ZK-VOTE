@@ -2040,7 +2040,7 @@ export function entropyToMnemonic(entropy: Uint8Array): string {
   for (let i = 0; i < entropy.length; i++) {
     hashByte = (hashByte ^ entropy[i]) & 0xff;
   }
-  for (let i = csLen - 1; i >= 0; i--) {
+  for (let i = 7; i >= 8 - csLen; i--) {
     bits.push((hashByte >> i) & 1);
   }
 

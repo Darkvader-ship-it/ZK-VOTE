@@ -2,7 +2,7 @@ import {
   generateSTARKProof,
   verifySTARKProof,
   STARKFRIProof,
-} from "../../circuits/stark/stark_vote_prototype";
+} from "../../../circuits/stark/stark_vote_prototype";
 
 export interface HybridPQCommitment {
   classicalCommitment: string;
