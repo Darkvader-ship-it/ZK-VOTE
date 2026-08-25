@@ -89,9 +89,7 @@ export default function WalletConnect({
   }
 
   return (
-    <Card
-      variant="primary"
-    >
+    <Card variant="primary">
       <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
       <p className="text-sm text-muted-foreground mb-4">
         Connect your Stellar wallet (Freighter, xBull, Albedo, etc.) to interact
