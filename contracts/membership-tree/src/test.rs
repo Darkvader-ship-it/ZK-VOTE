@@ -104,7 +104,7 @@ fn test_init_tree() {
     // Set admin for DAO 1
     registry_client.set_admin(&1u64, &admin);
 
-    client.init_tree(&1u64, &18u32, &admin);
+    client.init_tree(&1u64, &18u32, &Symbol::new(&env, "BN254"), &admin);
 
     let (depth, next_index, _root) = client.get_tree_info(&1u64);
     assert_eq!(depth, 18);
@@ -119,8 +119,8 @@ fn test_init_tree_twice_fails() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &18u32, &admin);
-    client.init_tree(&1u64, &18u32, &admin);
+    client.init_tree(&1u64, &18u32, &Symbol::new(&env, "BN254"), &admin);
+    client.init_tree(&1u64, &18u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn test_init_tree_invalid_depth() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &0u32, &admin);
+    client.init_tree(&1u64, &0u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -143,7 +143,7 @@ fn test_init_tree_depth_exceeds_max_fails() {
 
     registry_client.set_admin(&1u64, &admin);
     // Depth 19 exceeds MAX_TREE_DEPTH of 18
-    client.init_tree(&1u64, &19u32, &admin);
+    client.init_tree(&1u64, &19u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn test_init_tree_depth_extremely_large_fails() {
 
     registry_client.set_admin(&1u64, &admin);
     // Depth 32 far exceeds MAX_TREE_DEPTH
-    client.init_tree(&1u64, &32u32, &admin);
+    client.init_tree(&1u64, &32u32, &Symbol::new(&env, "BN254"), &admin);
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn test_init_tree_non_admin_fails() {
 
     // Try to init with non-admin
     let non_admin = Address::generate(&env);
-    client.init_tree(&1u64, &20u32, &non_admin);
+    client.init_tree(&1u64, &20u32, &Symbol::new(&env, "BN254"), &non_admin);
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn test_register_commitment() {
 
     // Setup: set admin, init tree and give member SBT (use small depth for tests)
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let commitment = U256::from_u32(&env, 12345);
@@ -205,7 +205,7 @@ fn test_register_without_sbt_fails() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &5u32, &admin);
+    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
 
     let commitment = U256::from_u32(&env, 12345);
     client.register_with_caller(&1u64, &commitment, &member);
@@ -221,7 +221,7 @@ fn test_register_duplicate_commitment_fails() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let commitment = U256::from_u32(&env, 12345);
@@ -238,7 +238,7 @@ fn test_root_changes_after_registration() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let root_before = tree_client.current_root(&1u64);
@@ -259,7 +259,7 @@ fn test_old_root_still_valid() {
     let member = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member, &true);
 
     let root_before = tree_client.current_root(&1u64);
@@ -281,7 +281,7 @@ fn test_invalid_root_rejected() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &5u32, &admin);
+    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
 
     let fake_root = U256::from_u32(&env, 999999);
     assert!(!client.root_ok(&1u64, &fake_root));
@@ -298,8 +298,8 @@ fn test_different_daos_have_separate_trees() {
     // Init two DAOs with different depths
     registry_client.set_admin(&1u64, &admin);
     registry_client.set_admin(&2u64, &admin);
-    tree_client.init_tree(&1u64, &4u32, &admin);
-    tree_client.init_tree(&2u64, &6u32, &admin);
+    tree_client.init_tree(&1u64, &4u32, &Symbol::new(&env, "BN254"), &admin);
+    tree_client.init_tree(&2u64, &6u32, &Symbol::new(&env, "BN254"), &admin);
 
     sbt_client.set_member(&1u64, &member, &true);
     sbt_client.set_member(&2u64, &member, &true);
@@ -331,7 +331,7 @@ fn test_multiple_registrations() {
     let member3 = Address::generate(&env);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
     sbt_client.set_member(&1u64, &member1, &true);
     sbt_client.set_member(&1u64, &member2, &true);
     sbt_client.set_member(&1u64, &member3, &true);
@@ -360,7 +360,7 @@ fn test_root_history_eviction_after_30_updates() {
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
 
     // Register 31 members to trigger root eviction (MAX_ROOTS = 30)
     let mut first_root = tree_client.current_root(&1u64);
@@ -400,7 +400,7 @@ fn test_tree_full_small_depth() {
 
     // Depth 2 = max 4 leaves (2^2)
     registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &2u32, &admin);
+    tree_client.init_tree(&1u64, &2u32, &Symbol::new(&env, "BN254"), &admin);
 
     // Fill tree with 4 commitments
     for i in 0u32..4 {
@@ -415,4 +415,78 @@ fn test_tree_full_small_depth() {
     sbt_client.set_member(&1u64, &member5, &true);
     let commitment5 = U256::from_u32(&env, 500);
     tree_client.register_with_caller(&1u64, &commitment5, &member5);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn test_duplicate_commitment_different_address_fails() {
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    registry_client.set_admin(&1u64, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
+
+    let member_a = Address::generate(&env);
+    let member_b = Address::generate(&env);
+    sbt_client.set_member(&1u64, &member_a, &true);
+    sbt_client.set_member(&1u64, &member_b, &true);
+
+    let commitment = U256::from_u32(&env, 42);
+    tree_client.register_with_caller(&1u64, &commitment, &member_a);
+    tree_client.register_with_caller(&1u64, &commitment, &member_b);
+}
+
+// #167: leaves must be domain-separated (Poseidon(LEAF_DOMAIN, leaf)) before
+// entering the tree, not inserted as a raw commitment. Regression-tests that:
+//   1. the leaf's domain-tagged hash differs from the raw commitment, and
+//   2. independently reconstructing the root from get_merkle_path's siblings
+//      using that same domain-tagged leaf hash reproduces get_root's value —
+//      i.e. the on-chain tree and an off-chain verifier (frontend/circuit)
+//      that domain-tags leaves the same way stay in agreement.
+#[test]
+fn test_leaf_is_domain_separated_before_tree_insertion() {
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let member_a = Address::generate(&env);
+    let member_b = Address::generate(&env);
+
+    registry_client.set_admin(&1u64, &admin);
+    tree_client.init_tree(&1u64, &3u32, &Symbol::new(&env, "BN254"), &admin);
+    sbt_client.set_member(&1u64, &member_a, &true);
+    sbt_client.set_member(&1u64, &member_b, &true);
+
+    let commitment_a = U256::from_u32(&env, 111);
+    let commitment_b = U256::from_u32(&env, 222);
+    tree_client.register_with_caller(&1u64, &commitment_a, &member_a);
+    tree_client.register_with_caller(&1u64, &commitment_b, &member_b);
+
+    let field = Symbol::new(&env, "BN254");
+    let leaf_domain = U256::from_u32(&env, 1);
+
+    // 1. The domain-tagged leaf hash must differ from the raw commitment —
+    // otherwise leaves would still be indistinguishable from arbitrary
+    // internal-node hashes.
+    let leaf_hash_a = tree_client.test_poseidon_hash(&leaf_domain, &commitment_a, &field);
+    assert_ne!(leaf_hash_a, commitment_a);
+
+    // 2. Rebuild the root off-chain using get_merkle_path's siblings and the
+    // same domain-tagged leaf hash the circuit/frontend would compute, and
+    // confirm it matches get_root.
+    let (path_elements, path_indices) = tree_client.get_merkle_path(&1u64, &0u32);
+    let mut current = leaf_hash_a;
+    for i in 0..path_elements.len() {
+        let sibling = path_elements.get(i).unwrap();
+        let is_left = path_indices.get(i).unwrap() == 0;
+        current = if is_left {
+            tree_client.test_poseidon_hash(&current, &sibling, &field)
+        } else {
+            tree_client.test_poseidon_hash(&sibling, &current, &field)
+        };
+    }
+
+    assert_eq!(current, tree_client.get_root(&1u64));
 }

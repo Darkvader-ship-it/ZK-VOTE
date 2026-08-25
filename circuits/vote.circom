@@ -4,37 +4,56 @@ include "node_modules/circomlib/circuits/poseidon.circom";
 include "node_modules/circomlib/circuits/comparators.circom";
 include "merkle_tree.circom";
 
+// DAO domain separation tag for commitment scheme
+// SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
+// Prevents cross-protocol attacks where commitments from other systems
+// could be valid in ZK-VOTE
+
 // DaoVote Anonymous Vote Circuit
 //
 // Proves:
 // 1. Voter knows secret & salt that hash to a commitment (leaf) in the Merkle tree
 // 2. Nullifier is correctly derived from secret, daoId, and proposalId (domain-separated)
-// 3. Vote choice is binary (0 or 1)
+// 3. Vote choice (candidate index) is within [0, numCandidates)
 //
-// Public signals: [root, nullifier, daoId, proposalId, voteChoice]
-// Private signals: secret, salt, pathElements, pathIndices
+// Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates]
+// Private signals: secret, salt, blindingFactor, pathElements, pathIndices
 //
 // PRIVACY: Commitment is NOT exposed publicly. Votes are fully unlinkable across proposals.
 // Revocation is enforced via Merkle tree updates (zeroing leaves) rather than on-chain checks.
+//
+// SECURITY: numCandidates is a public input so the contract can verify the circuit enforced
+// the same candidate bound that the election was configured with. Without this binding,
+// a prover could supply a proof valid under one numCandidates value while the contract
+// tallies using a different (potentially larger) count.
 template Vote(levels) {
+    var DOMAIN_TAG = 19666041591797403834655481403982443037438503980743793537655983658411276515161;
+
     // Public inputs
     signal input root;              // Merkle tree root (verified on-chain)
     signal input nullifier;         // Prevents double voting (domain-separated)
     signal input daoId;             // DAO identifier (for domain separation)
     signal input proposalId;        // Which proposal this vote is for
-    signal input voteChoice;        // 0 = against, 1 = for
+    signal input voteChoice;        // Candidate index the voter selected
+    signal input numCandidates;     // Total number of candidates (set by election config)
 
     // Private inputs
     signal input secret;            // Voter's secret (like password)
-    signal input salt;              // Random salt for commitment
+    signal input salt;              // Salt for commitment
+    signal input blindingFactor;    // Random blinding factor for uniform distribution
     signal input pathElements[levels];  // Merkle proof siblings
     signal input pathIndices[levels];   // Merkle proof path (0=left, 1=right)
 
-    // 1. Compute identity commitment: Poseidon(secret, salt)
+    // 1. Compute identity commitment: Poseidon(DOMAIN_TAG, secret, salt, blindingFactor)
+    // Domain-separated commitment prevents cross-protocol attacks.
+    // Blinding factor ensures uniform distribution across the field even
+    // if secret and salt are correlated (e.g., derived from same wallet signature).
     // This is used as the leaf in the Merkle tree
-    component commitmentHasher = Poseidon(2);
-    commitmentHasher.inputs[0] <== secret;
-    commitmentHasher.inputs[1] <== salt;
+    component commitmentHasher = Poseidon(4);
+    commitmentHasher.inputs[0] <== DOMAIN_TAG;
+    commitmentHasher.inputs[1] <== secret;
+    commitmentHasher.inputs[2] <== salt;
+    commitmentHasher.inputs[3] <== blindingFactor;
 
     // Commitment is computed internally (private) - not exposed as public signal
     signal commitment;
@@ -62,11 +81,18 @@ template Vote(levels) {
     // Constrain computed nullifier to match public nullifier
     nullifier === nullifierHasher.out;
 
-    // 4. Verify vote choice is binary (0 or 1)
-    voteChoice * (voteChoice - 1) === 0;
+    // 4. Verify candidate index is within bounds: voteChoice < numCandidates
+    // Uses 32-bit LessThan comparator from circomlib.
+    // This prevents a voter from proving a vote for a non-existent candidate.
+    component validChoice = LessThan(32);
+    validChoice.in[0] <== voteChoice;
+    validChoice.in[1] <== numCandidates;
+    validChoice.out === 1;
 }
 
 // Default tree depth of 18 (supports ~262K members)
-// Public signals: [root, nullifier, daoId, proposalId, voteChoice] - 5 signals
+// Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates] - 6 signals
 // Commitment is computed internally from secret+salt (private)
-component main {public [root, nullifier, daoId, proposalId, voteChoice]} = Vote(18);
+component main {public [root, nullifier, daoId, proposalId, voteChoice, numCandidates]} = Vote(18);
+
+

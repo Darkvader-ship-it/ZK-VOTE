@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -18,7 +18,7 @@ fn get_real_vk(env: &Env) -> VerificationKey {
         BytesN::from_array(env, &padded)
     }
 
-    // IC needs 6 elements for 5 public signals (commitment is now private)
+    // IC needs 7 elements for 6 public signals (commitment is now private)
     // These are dummy values since we're just testing budget, not actual proof verification
     let mut ic = soroban_sdk::Vec::new(env);
     ic.push_back(hex_to_bytes(env, "0386c87c5f77037451fea91c60759229ca390a30e60d564e5ff0f0f95ffbd18207683040dab753f41635f947d3d13e057c73cb92a38d83400af26019ce24d54f"));
@@ -27,6 +27,7 @@ fn get_real_vk(env: &Env) -> VerificationKey {
     ic.push_back(hex_to_bytes(env, "2a7f1a9e3de9411015b1c5652856bc7a467110344153252026c44ca55f5dca632f0db38e6d0268092cba5ea0b5db9610e45bd8b4aac852527aeb6323c8f09804"));
     ic.push_back(hex_to_bytes(env, "09c5b9b793a6f8098f0ac918aa0a19a75b74e7f1428f726194a48af37da8ac14122edc5b3704f106fa3c095ac74f524032e460179c3e8ecd562ef050c884336a"));
     ic.push_back(hex_to_bytes(env, "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"));
+    ic.push_back(hex_to_bytes(env, "0386c87c5f77037451fea91c60759229ca390a30e60d564e5ff0f0f95ffbd18207683040dab753f41635f947d3d13e057c73cb92a38d83400af26019ce24d54f"));
 
     VerificationKey {
         alpha: hex_to_bytes(env, "2d4d9aa7e302d9df41749d5507949d05dbea33fbb16c643b22f599a2be6df2e214bedd503c37ceb061d8ec60209fe345ce89830a19230301f076caff004d1926"),
@@ -55,7 +56,11 @@ fn setup(
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let registry = DaoRegistryClient::new(env, &registry_id);
     let sbt = MembershipSbtClient::new(env, &sbt_id);
@@ -71,7 +76,7 @@ fn setup(
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(env, "BN254"), &admin);
 
     // Ensure admin has SBT so proposal creation passes membership check
     sbt.mint(&dao_id, &admin, &admin, &None);
@@ -128,7 +133,11 @@ fn budget_set_vk_within_limit() {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let registry = DaoRegistryClient::new(&env, &registry_id);
     let tree = MembershipTreeClient::new(&env, &tree_id);
@@ -144,7 +153,7 @@ fn budget_set_vk_within_limit() {
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let vk = get_real_vk(&env);
 

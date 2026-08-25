@@ -1,6 +1,7 @@
 // DAO metadata types and utilities for profile/branding management
 
 import { relayerFetch } from "./api";
+import { safeClone } from "./safeMerge";
 
 /**
  * DAO metadata stored on IPFS.
@@ -95,9 +96,9 @@ export async function fetchDAOMetadata(
     const response = await relayerFetch(`/ipfs/${cid}`);
     if (!response.ok) return null;
     const data = await response.json();
-    // Validate it's actually DAO metadata
-    if (data.version === 1 && typeof data.description === "string") {
-      return data as DAOMetadata;
+    // Validate it's actually DAO metadata and sanitize prototype pollution keys
+    if (data && typeof data === "object" && data.version === 1 && typeof data.description === "string") {
+      return safeClone(data) as DAOMetadata;
     }
     return null;
   } catch {

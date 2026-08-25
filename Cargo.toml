@@ -7,6 +7,13 @@ members = [
     "contracts/membership-tree",
     "contracts/voting",
     "contracts/comments",
+    "contracts/poc-bls12-381",
+    "contracts/bridge/soroban",
+    "contracts/circuit-registry",
+    "contracts/token",
+    "contracts/vdf",
+    "crates/nova-aggregator",
+    "contracts/threshold-crypto",
     "tests/integration",
 ]
 resolver = "2"

@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec, U256};
+    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec, U256};
 
     // Import actual contract clients
     use dao_registry::DaoRegistryClient;
@@ -35,7 +35,8 @@ mod tests {
                 (sbt.clone(), registry.clone()),
             );
             // Pass both tree and registry to voting constructor (registry cached to reduce cross-contract calls)
-            let voting = env.register(voting::Voting, (tree.clone(), registry.clone()));
+            let guardian = Address::generate(&env);
+            let voting = env.register(voting::Voting, (tree.clone(), registry.clone(), guardian));
 
             Self {
                 env,
@@ -75,9 +76,9 @@ mod tests {
                 gamma: g2_gen.clone(),
                 delta: g2_gen.clone(),
                 // IC vector: IC[0] + one for each public signal
-                // Public signals: [root, nullifier, daoId, proposalId, voteChoice] = 5 signals
+                // Public signals: [root, nullifier, daoId, proposalId, voteChoice, numCandidates] = 6 signals
                 // (commitment is now PRIVATE, not public)
-                // So IC needs 6 elements
+                // So IC needs 7 elements
                 ic: Vec::from_array(
                     &self.env,
                     [
@@ -87,6 +88,7 @@ mod tests {
                         g1_gen.clone(), // IC[3] for daoId
                         g1_gen.clone(), // IC[4] for proposalId
                         g1_gen.clone(), // IC[5] for voteChoice
+                        g1_gen.clone(), // IC[6] for numCandidates
                     ],
                 ),
             }
@@ -159,7 +161,9 @@ mod tests {
         assert_eq!(dao_info.name, dao_name);
 
         // Initialize tree for this DAO
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
     }
 
     #[test]
@@ -204,7 +208,9 @@ mod tests {
         );
 
         // Initialize tree
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
 
         // Mint SBT to member
         system.sbt_client().mint(&dao_id, &member, &admin, &None);
@@ -238,7 +244,9 @@ mod tests {
         );
 
         // Initialize tree (required for proposal creation to snapshot root)
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
 
         // Member needs SBT to create proposal
         system.sbt_client().mint(&dao_id, &member, &admin, &None);
@@ -289,7 +297,9 @@ mod tests {
         );
 
         // 2. Initialize tree
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
 
         // 3. Mint SBTs to members
         system.sbt_client().mint(&dao_id, &member1, &admin, &None);
@@ -399,7 +409,9 @@ mod tests {
             &None,
         );
 
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
 
         // Non-member (no SBT) tries to register commitment
         let commitment = U256::from_u32(&system.env, 12345);
@@ -459,7 +471,9 @@ mod tests {
             &None,
         );
 
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member, &admin, &None);
 
         let commitment = U256::from_u32(&system.env, 12345);
@@ -530,8 +544,12 @@ mod tests {
         );
 
         // Initialize trees
-        system.tree_client().init_tree(&dao1, &5, &admin1);
-        system.tree_client().init_tree(&dao2, &5, &admin2);
+        system
+            .tree_client()
+            .init_tree(&dao1, &5, &Symbol::new(&system.env, "BN254"), &admin1);
+        system
+            .tree_client()
+            .init_tree(&dao2, &5, &Symbol::new(&system.env, "BN254"), &admin2);
 
         // Mint SBTs (each admin to their own DAO)
         system.sbt_client().mint(&dao1, &member1, &admin1, &None);
@@ -604,7 +622,9 @@ mod tests {
             &None,
         );
 
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member1, &admin, &None);
         system.sbt_client().mint(&dao_id, &member2, &admin, &None);
 
@@ -684,7 +704,9 @@ mod tests {
             &None,
         );
 
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member1, &admin, &None);
         system.sbt_client().mint(&dao_id, &member2, &admin, &None);
 
@@ -749,7 +771,9 @@ mod tests {
             &None,
         );
 
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member1, &admin, &None);
 
         // Member 1 registers commitment
@@ -818,7 +842,9 @@ mod tests {
             &None,
         );
 
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member1, &admin, &None);
         system.sbt_client().mint(&dao_id, &member2, &admin, &None);
 
@@ -887,7 +913,9 @@ mod tests {
             &None,
         );
 
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member1, &admin, &None);
 
         // Member 1 registers commitment at timestamp 100
@@ -956,7 +984,9 @@ mod tests {
         );
 
         // Init tree, mint SBT, register commitment
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member, &admin, &None);
         let commitment = U256::from_u32(&system.env, 42);
         system
@@ -1039,7 +1069,9 @@ mod tests {
         assert!(mem_delta <= 50_000, "create_dao mem too high");
 
         // Initialize tree and mint SBT
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member, &admin, &None);
 
         // --- register commitment ---
@@ -1132,7 +1164,9 @@ mod tests {
             &true,
             &None,
         );
-        system.tree_client().init_tree(&dao1, &5, &admin1);
+        system
+            .tree_client()
+            .init_tree(&dao1, &5, &Symbol::new(&system.env, "BN254"), &admin1);
         system.sbt_client().mint(&dao1, &member, &admin1, &None);
         let commitment = U256::from_u32(&system.env, 123);
         system
@@ -1158,7 +1192,9 @@ mod tests {
             &true,
             &None,
         );
-        system.tree_client().init_tree(&dao2, &5, &admin2);
+        system
+            .tree_client()
+            .init_tree(&dao2, &5, &Symbol::new(&system.env, "BN254"), &admin2);
         system.sbt_client().mint(&dao2, &member, &admin2, &None);
         system
             .tree_client()
@@ -1199,7 +1235,9 @@ mod tests {
             &true,
             &None,
         );
-        system.tree_client().init_tree(&dao_id, &5, &admin);
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
         system.sbt_client().mint(&dao_id, &member, &admin, &None);
         let commitment = U256::from_u32(&system.env, 42);
         system
@@ -1235,5 +1273,60 @@ mod tests {
 
         let prop = system.voting_client().get_proposal(&dao_id, &proposal_id);
         assert_eq!(prop.yes_votes + prop.no_votes, 19);
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError")]
+    fn test_invalid_candidate_index_rejected() {
+        let system = DaoVoteSystem::new();
+
+        let admin = Address::generate(&system.env);
+        let member = Address::generate(&system.env);
+
+        let dao_id = system.registry_client().create_dao(
+            &String::from_str(&system.env, "Candidate Test DAO"),
+            &admin,
+            &false,
+            &true,
+            &None,
+        );
+
+        system
+            .tree_client()
+            .init_tree(&dao_id, &5, &Symbol::new(&system.env, "BN254"), &admin);
+        system.sbt_client().mint(&dao_id, &member, &admin, &None);
+
+        let commitment = U256::from_u32(&system.env, 55555);
+        system
+            .tree_client()
+            .register_with_caller(&dao_id, &commitment, &member);
+
+        let root = system.tree_client().current_root(&dao_id);
+
+        let vk = system.create_test_vk();
+        system.voting_client().set_vk(&dao_id, &vk, &admin);
+
+        let now = system.env.ledger().timestamp();
+        let proposal_id = system.voting_client().create_proposal(
+            &dao_id,
+            &String::from_str(&system.env, "Candidate Bound Test"),
+            &String::from_str(&system.env, ""),
+            &(now + 86400),
+            &member,
+            &VoteMode::Fixed,
+        );
+
+        // Set num_candidates=1: only candidate index 0 is valid
+        system
+            .voting_client()
+            .set_election_config(&dao_id, &proposal_id, &0, &0, &1u32);
+
+        let proof = system.create_test_proof();
+        let nullifier = U256::from_u32(&system.env, 77777);
+
+        // vote_choice=true -> index 1 >= num_candidates(1) -> should panic
+        system
+            .voting_client()
+            .vote(&dao_id, &proposal_id, &true, &nullifier, &root, &proof);
     }
 }

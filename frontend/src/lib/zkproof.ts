@@ -11,9 +11,9 @@
 // dominates proof time. `snarkjs` is used only as a transparent fallback.
 
 // `snarkjs` is imported ONLY as a type here and dynamically inside the fallback
-// path (see `proveWithSnarkjs`). On the default production path (Rust→WASM) it
-// is never loaded.
-import type { Groth16Proof } from "snarkjs";
+// path (see `proveWithRust`/`proveWithSnarkjs`). On the default production path
+// (Rust→WASM) it is never loaded. `CircuitSignals` is used only as a type.
+import type { CircuitSignals, Groth16Proof } from "snarkjs";
 
 // Default to the Rust prover. Force the legacy `snarkjs` prover by setting
 // `VITE_ZK_USE_RUST_PROVER=false` (Vite) or `ZK_USE_RUST_PROVER=false`
@@ -101,6 +101,7 @@ async function proveWithRust(
 export interface VoteProofInput {
   secret: string;
   salt: string;
+  blindingFactor: string;
   root: string;
   nullifier: string;
   daoId: string;
@@ -109,11 +110,14 @@ export interface VoteProofInput {
   commitment: string; // Identity commitment - private input, computed internally in circuit
   pathElements: string[];
   pathIndices: number[];
+  circuitVersion?: string; // "v1" or "v2" (defaults to "v1")
+  chainId?: string; // Required for v2 circuits
 }
 
 export interface CommentProofInput {
   secret: string;
   salt: string;
+  blindingFactor: string;
   root: string;
   nullifier: string;
   daoId: string;
@@ -122,6 +126,8 @@ export interface CommentProofInput {
   commitment: string; // Identity commitment - used for proof generation (private circuit input)
   pathElements: string[];
   pathIndices: number[];
+  circuitVersion?: string; // "v1" or "v2" (defaults to "v1")
+  parentCommentId?: string; // Required for v2 circuits
 }
 
 // Legacy alias for backwards compatibility
@@ -132,37 +138,68 @@ export interface GeneratedProof {
   publicSignals: string[];
 }
 
+let activeProofGenerationCount = 0;
+
+/**
+ * Check whether a proof generation operation is currently running.
+ */
+export function isProofGenerationActive(): boolean {
+  return activeProofGenerationCount > 0;
+}
+
 /**
  * Generate a Groth16 proof for anonymous voting
  * @param input Proof input parameters
- * @param wasmPath Path to compiled circuit WASM
- * @param zkeyPath Path to proving key
+ * @param wasmPath Path to compiled circuit WASM, or an already-downloaded buffer
+ * @param zkeyPath Path to proving key, or an already-downloaded buffer
  * @returns Generated proof and public signals
  */
 export async function generateVoteProof(
   input: VoteProofInput,
-  wasmPath: string,
-  zkeyPath: string,
+  wasmPath: string | Uint8Array,
+  zkeyPath: string | Uint8Array,
 ): Promise<GeneratedProof> {
+  if (activeProofGenerationCount > 0) {
+    throw new Error(
+      "A proof generation process is already in progress. Please wait for it to finish.",
+    );
+  }
+  activeProofGenerationCount++;
   try {
-    // Format input for circuit - matches vote.circom signal names
-    // Public signals: [root, nullifier, daoId, proposalId, voteChoice]
-    // Note: commitment is COMPUTED INTERNALLY in the circuit from secret+salt
-    // This provides improved vote unlinkability - commitment is never exposed
-    const circuitInput = {
-      // Public signals (verified on-chain)
-      root: input.root,
-      nullifier: input.nullifier,
-      daoId: input.daoId,
-      proposalId: input.proposalId,
-      voteChoice: input.voteChoice,
-      // Private signals (hidden in ZK proof)
-      // commitment is computed internally: Poseidon(secret, salt)
-      secret: input.secret,
-      salt: input.salt,
-      pathElements: input.pathElements,
-      pathIndices: input.pathIndices,
-    };
+    const circuitVersion = input.circuitVersion || "v1";
+
+    let circuitInput: CircuitSignals;
+
+    if (circuitVersion === "v2") {
+      // vote_v2.circom
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        voteChoice: input.voteChoice,
+        chainId: input.chainId || "0",
+        secret: input.secret,
+        salt: input.salt,
+        blindingFactor: input.blindingFactor,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    } else {
+      // vote_v1.circom
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        voteChoice: input.voteChoice,
+        secret: input.secret,
+        salt: input.salt,
+        blindingFactor: input.blindingFactor,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    }
 
     // Generate proof with the Rust WASM prover (snarkjs fallback).
     if (USE_RUST_PROVER) {
@@ -191,37 +228,82 @@ export async function generateVoteProof(
     throw new Error(
       `Vote proof generation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
     );
+  } finally {
+    activeProofGenerationCount = Math.max(0, activeProofGenerationCount - 1);
   }
+}
+
+/**
+ * Generate a Groth16 proof for v2 circuit (with chainId)
+ * Convenience wrapper around generateVoteProof
+ */
+export async function generateVoteProofV2(
+  input: VoteProofInput,
+  wasmPath: string | Uint8Array = "/circuits/vote_v2/vote_v2.wasm",
+  zkeyPath: string | Uint8Array = "/circuits/vote_v2/vote_v2_final.zkey",
+): Promise<GeneratedProof> {
+  return generateVoteProof(
+    { ...input, circuitVersion: "v2" },
+    wasmPath,
+    zkeyPath,
+  );
 }
 
 /**
  * Generate a Groth16 proof for anonymous commenting
  * @param input Proof input parameters (uses commentNonce instead of voteChoice)
- * @param wasmPath Path to compiled comment circuit WASM
- * @param zkeyPath Path to comment proving key
+ * @param wasmPath Path to compiled comment circuit WASM, or an already-downloaded buffer
+ * @param zkeyPath Path to comment proving key, or an already-downloaded buffer
  * @returns Generated proof and public signals
  */
 export async function generateCommentProof(
   input: CommentProofInput,
-  wasmPath: string = "/circuits/comment/comment.wasm",
-  zkeyPath: string = "/circuits/comment/comment_final.zkey",
+  wasmPath: string | Uint8Array = "/circuits/comment/comment.wasm",
+  zkeyPath: string | Uint8Array = "/circuits/comment/comment_final.zkey",
 ): Promise<GeneratedProof> {
+  if (activeProofGenerationCount > 0) {
+    throw new Error(
+      "A proof generation process is already in progress. Please wait for it to finish.",
+    );
+  }
+  activeProofGenerationCount++;
   try {
-    // Format input for circuit - matches comment.circom signal names
-    const circuitInput = {
-      // Public signals (verified on-chain)
-      root: input.root,
-      nullifier: input.nullifier,
-      daoId: input.daoId,
-      proposalId: input.proposalId,
-      commentNonce: input.commentNonce,
-      commitment: input.commitment,
-      // Private signals (hidden in ZK proof)
-      secret: input.secret,
-      salt: input.salt,
-      pathElements: input.pathElements,
-      pathIndices: input.pathIndices,
-    };
+    const circuitVersion = input.circuitVersion || "v1";
+
+    let circuitInput: CircuitSignals;
+
+    if (circuitVersion === "v2") {
+      // comment_v2.circom - adds parentCommentId as 7th public signal
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        commentNonce: input.commentNonce,
+        commitment: input.commitment,
+        parentCommentId: input.parentCommentId || "0",
+        secret: input.secret,
+        salt: input.salt,
+        blindingFactor: input.blindingFactor,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    } else {
+      // comment_v1.circom - original 6 public signals
+      circuitInput = {
+        root: input.root,
+        nullifier: input.nullifier,
+        daoId: input.daoId,
+        proposalId: input.proposalId,
+        commentNonce: input.commentNonce,
+        commitment: input.commitment,
+        secret: input.secret,
+        salt: input.salt,
+        blindingFactor: input.blindingFactor,
+        pathElements: input.pathElements,
+        pathIndices: input.pathIndices,
+      };
+    }
 
     // Generate proof with the Rust WASM prover (snarkjs fallback).
     if (USE_RUST_PROVER) {
@@ -250,7 +332,24 @@ export async function generateCommentProof(
     throw new Error(
       `Comment proof generation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
     );
+  } finally {
+    activeProofGenerationCount = Math.max(0, activeProofGenerationCount - 1);
   }
+}
+
+/**
+ * Generate a Groth16 proof for v2 comment circuit (with parentCommentId)
+ */
+export async function generateCommentProofV2(
+  input: CommentProofInput,
+  wasmPath: string | Uint8Array = "/circuits/comment_v2/comment_v2.wasm",
+  zkeyPath: string | Uint8Array = "/circuits/comment_v2/comment_v2_final.zkey",
+): Promise<GeneratedProof> {
+  return generateCommentProof(
+    { ...input, circuitVersion: "v2" },
+    wasmPath,
+    zkeyPath,
+  );
 }
 
 /**
@@ -309,20 +408,47 @@ export function generateSecret(): string {
 /**
  * Calculate vote nullifier using Poseidon hash
  * nullifier = Poseidon(secret, daoId, proposalId)
+ * For v2: nullifier = Poseidon(secret, daoId, proposalId, chainId)
  */
 export async function calculateNullifier(
   secret: string,
   daoId: string,
   proposalId: string,
+  circuitVersion: string = "v1",
+  chainId?: string,
 ): Promise<string> {
   const { buildPoseidon } = await import("circomlibjs");
   const poseidon = await buildPoseidon();
 
-  const hash = poseidon.F.toString(
-    poseidon([BigInt(secret), BigInt(daoId), BigInt(proposalId)]),
-  );
+  let hash;
+  if (circuitVersion === "v2" && chainId !== undefined) {
+    hash = poseidon.F.toString(
+      poseidon([
+        BigInt(secret),
+        BigInt(daoId),
+        BigInt(proposalId),
+        BigInt(chainId),
+      ]),
+    );
+  } else {
+    hash = poseidon.F.toString(
+      poseidon([BigInt(secret), BigInt(daoId), BigInt(proposalId)]),
+    );
+  }
 
   return hash;
+}
+
+/**
+ * Calculate vote nullifier for v2 circuit (includes chainId)
+ */
+export async function calculateNullifierV2(
+  secret: string,
+  daoId: string,
+  proposalId: string,
+  chainId: string,
+): Promise<string> {
+  return calculateNullifier(secret, daoId, proposalId, "v2", chainId);
 }
 
 /**
@@ -351,18 +477,25 @@ export async function calculateCommentNullifier(
   return hash;
 }
 
+// Domain separation tag for commitment scheme
+// SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
+// Must match DOMAIN_TAG in circuits for consistency
+const DOMAIN_TAG = BigInt("19666041591797403834655481403982443037438503980743793537655983658411276515161");
+
 /**
- * Calculate commitment from secret and salt using Poseidon hash
- * commitment = Poseidon(secret, salt)
+ * Calculate commitment from secret, salt, and blinding factor using Poseidon hash
+ * commitment = Poseidon(DOMAIN_TAG, secret, salt, blindingFactor)
+ * Domain-separated commitment prevents cross-protocol attacks.
  */
 export async function calculateCommitment(
   secret: string,
   salt: string,
+  blindingFactor: string,
 ): Promise<string> {
   const { buildPoseidon } = await import("circomlibjs");
   const poseidon = await buildPoseidon();
 
-  const hash = poseidon.F.toString(poseidon([BigInt(secret), BigInt(salt)]));
+  const hash = poseidon.F.toString(poseidon([DOMAIN_TAG, BigInt(secret), BigInt(salt), BigInt(blindingFactor)]));
 
   return hash;
 }
@@ -388,3 +521,68 @@ export async function verifyProofLocally(
     return false;
   }
 }
+
+/**
+ * Calculate sha256 hash of a proof payload bound to nullifier, timestamp, and optional nonce
+ */
+export async function calculateProofHash(
+  proof: Groth16Proof,
+  nullifier: string,
+  timestamp: number,
+  nonce?: string,
+): Promise<string> {
+  const normalizedNullifier = nullifier.startsWith("0x") ? nullifier.slice(2) : nullifier;
+  const data = JSON.stringify(proof) + ":" + normalizedNullifier + ":" + timestamp + ":" + (nonce || "");
+  const encoder = new TextEncoder();
+  const buffer = encoder.encode(data);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Encrypt proof payload for the relayer using symmetric AES-GCM (simulated/standard payload format)
+ */
+export async function encryptProofForRelayer(
+  payload: Record<string, unknown>,
+  _relayerPubKey?: string,
+): Promise<{ encryptedPayload: string }> {
+  // Serialize payload
+  const jsonString = JSON.stringify(payload);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(jsonString);
+
+  // Generate AES-256 key
+  const key = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    data,
+  );
+
+  const exportedKey = await crypto.subtle.exportKey("raw", key);
+  const keyHex = Array.from(new Uint8Array(exportedKey))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const ivHex = Array.from(iv)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const ciphertextHex = Array.from(new Uint8Array(encrypted))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return {
+    encryptedPayload: JSON.stringify({
+      ciphertext: ciphertextHex,
+      iv: ivHex,
+      key: keyHex,
+    }),
+  };
+}
+

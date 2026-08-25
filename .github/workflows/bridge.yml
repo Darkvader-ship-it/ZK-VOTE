@@ -1,0 +1,184 @@
+name: Bridge CI
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "circuits/bridge.circom"
+      - "circuits/evm_verifier.circom"
+      - "contracts/bridge/**"
+      - "backend/src/routes/bridge.ts"
+      - "backend/src/services/bridge.ts"
+      - "tests/bridge/**"
+      - ".github/workflows/bridge.yml"
+  pull_request:
+
+jobs:
+  bridge-circuits:
+    name: Bridge Circuits
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: circuits
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: circuits/package-lock.json
+      - name: Install circom
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cargo
+          cargo install --git https://github.com/iden3/circom.git
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Install dependencies
+        run: npm ci
+      - name: Compile bridge circuit
+        run: bash compile_bridge.sh
+      - name: Run bridge tests
+        run: npx jest --testPathPattern=bridge --passWithNoTests
+
+  evm-contracts:
+    name: EVM Bridge Contracts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/bridge/evm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+      - name: Compile contracts
+        run: npx hardhat compile
+      - name: Run tests
+        run: npx hardhat test
+      - name: Gas report
+        run: npx hardhat test --grep "Gas" || true
+
+  soroban-contracts:
+    name: Soroban Bridge Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Add WASM target
+        run: rustup target add wasm32v1-none
+      - name: Build bridge contract
+        run: cargo build -p bridge-soroban --target wasm32v1-none --release
+      - name: Run bridge contract tests
+        run: cargo test -p bridge-soroban
+
+  backend-bridge:
+    name: Backend Bridge
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check bridge files
+        run: npx tsc --noEmit src/routes/bridge.ts src/services/bridge.ts || true
+      - name: Run backend tests
+        run: npm test
+        env:
+          RELAYER_TEST_MODE: "true"
+          SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
+          NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+          RELAYER_SECRET_KEY: "SCZANGBA5AKIA7VTJQXBDKPQOBFZD3NWKNR3CQULPSFMJUADSHWFUCS"
+          RELAYER_AUTH_TOKEN: "ci-test-token-placeholder-32-chars-min"
+          VOTING_CONTRACT_ID: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+          TREE_CONTRACT_ID: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+          COMMENTS_CONTRACT_ID: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+          BRIDGE_CONTRACT_ID: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+
+  cross-chain-integration:
+    name: Cross-Chain Integration
+    runs-on: ubuntu-latest
+    needs: [evm-contracts, soroban-contracts]
+    services:
+      anvil:
+        image: ghcr.io/foundry-rs/foundry:latest
+        ports:
+          - 8545:8545
+        options: --entrypoint anvil
+        command: --host 0.0.0.0 --block-time 1
+      soroban:
+        image: stellar/quickstart:soroban-dev
+        ports:
+          - 8000:8000
+        command: --standalone --enable-soroban-rpc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: |
+          cd contracts/bridge/evm && npm ci --legacy-peer-deps
+          cd ../../.. && npm ci
+          cd tests/bridge && npm ci
+      - name: Debug Soroban service
+        if: always()
+        run: |
+          docker ps -a
+          docker logs $(docker ps -aq --filter "ancestor=stellar/quickstart:soroban-dev") 2>&1 | tail -50 || true
+      - name: Wait for services
+        run: |
+          # wait for Anvil RPC
+          for i in {1..40}; do
+            resp=$(curl -sS -X POST http://localhost:8545 \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' || true)
+            echo "$resp" | grep -q '"jsonrpc":"2.0"' && break
+            [ "$i" -eq 40 ] && echo "Anvil RPC not ready" && exit 1
+            sleep 2
+          done
+          echo "Anvil RPC is up"
+
+          # wait for Soroban RPC (must respond without "data stores not initialized")
+          for i in {1..60}; do
+            resp=$(curl -sS -X POST http://localhost:8000/soroban/rpc \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger","params":[]}' || true)
+            echo "$resp" | grep -q '"data stores are not initialized"' && sleep 5 && continue
+            echo "$resp" | grep -q '"jsonrpc"' && break
+            [ "$i" -eq 60 ] && echo "Soroban RPC not ready" && exit 1
+            sleep 2
+          done
+          echo "Soroban RPC is up"
+      - name: Deploy EVM contracts
+        id: deploy_evm
+        run: |
+          cd contracts/bridge/evm
+          output=$(npx hardhat run scripts/deploy.js --network localhost 2>&1)
+          echo "$output"
+          # Extract bridge address from deploy output
+          bridge_addr=$(echo "$output" | grep -oP 'Bridge deployed to: \K0x[0-9a-fA-F]{40}' || true)
+          echo "bridge_address=$bridge_addr" >> "$GITHUB_OUTPUT"
+      - name: Run cross-chain tests
+        run: |
+          cd tests/bridge
+          npx jest cross-chain.test.js
+        env:
+          ANVIL_URL: http://localhost:8545
+          SOROBAN_RPC_URL: http://localhost:8000/soroban/rpc
+          BRIDGE_ADDRESS: ${{ steps.deploy_evm.outputs.bridge_address }}

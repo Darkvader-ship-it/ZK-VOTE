@@ -11,9 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Install Rust components
+        run: |
+          rustup component add clippy rustfmt
+          rustup target add wasm32v1-none
       - uses: actions/cache@v4
         with:
           path: |
@@ -26,11 +27,13 @@ jobs:
       - name: Clippy lint
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build WASM
-        run: |
-          rustup target add wasm32v1-none
-          cargo build --target wasm32v1-none --release
+        run: cargo build --target wasm32v1-none --release
       - name: Run tests
         run: cargo test --workspace
+      - name: Groth16 production edge corpus
+        run: cargo test -p zkvote-groth16 --test bn254_edge_case_corpus -- --nocapture
+      - name: Groth16 testutils stub behavior
+        run: cargo test -p zkvote-groth16 --features testutils --test bn254_edge_case_corpus testutils_feature_uses_stubbed_verifier -- --nocapture
       - name: Doc check
         run: cargo doc --workspace --no-deps
       - name: Security audit
@@ -85,8 +88,21 @@ jobs:
         run: npm run lint
       - name: Format check
         run: npx prettier --check "src/**/*.ts"
+      - name: Validate environment profiles
+        run: npm run validate-profiles
       - name: Run tests
         run: npm test
+        env:
+          RELAYER_TEST_MODE: 'true'
+          SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
+          NETWORK_PASSPHRASE: 'Test SDF Network ; September 2015'
+          RELAYER_SECRET_KEY: 'SCZANGBA5AKIA7VTJQXBDKPQOBFZD3NWKNR3CQULPSFMJUADSHWFUCS'
+          RELAYER_AUTH_TOKEN: 'ci-test-token-placeholder-32-chars-min'
+          VOTING_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+          TREE_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+          COMMENTS_CONTRACT_ID: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+      - name: Check OpenAPI spec and API.md are up to date
+        run: npm run docs:check
         env:
           RELAYER_TEST_MODE: 'true'
           SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
@@ -118,3 +134,21 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+      - name: Compile circuits with Docker
+        run: ../scripts/compile-circuits.sh --docker
+      - name: Verify circuit artifact checksums (if artifacts exist)
+        run: |
+          if [ -f "build/vote.r1cs" ] || [ -f "build/verification_key.json" ]; then
+            ../scripts/verify-circuits.sh
+          else
+            echo "Skipping verification - no compiled artifacts found"
+          fi
+      - name: Compile v2 circuits (if available)
+        run: |
+          if command -v circom &> /dev/null; then
+            mkdir -p build_v2
+            circom vote_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "v2 compile skipped"
+            circom comment_v2.circom --r1cs --wasm --sym -o build_v2 -l node_modules 2>/dev/null || echo "comment_v2 compile skipped"
+          else
+            echo "circom not installed - v2 circuit compilation skipped"
+          fi

@@ -1,0 +1,16 @@
+{
+  "circuit": "vote",
+  "circuitPath": "../vote.circom",
+  "minContributors": 20,
+  "contributionTimeout": 43200,
+  "phase1PtauPower": 16,
+  "bitcoinBeaconBlock": null,
+  "coordinatorPort": 3000,
+  "transcriptDir": "./transcript",
+  "ceremony": {
+    "name": "ZK-VOTE Groth16 Trusted Setup",
+    "description": "Multi-party computation ceremony for anonymous voting",
+    "startDate": null,
+    "endDate": null
+  }
+}

@@ -22,6 +22,7 @@ pub enum SbtError {
     NotMember = 3,
     NotOpenMembership = 4,
     AlreadyInitialized = 5,
+    CooldownActive = 6,
 }
 
 #[contracttype]
@@ -32,6 +33,10 @@ pub enum DataKey {
     Revoked(u64, Address),   // (dao_id, address) -> bool (revocation flag)
     MemberCount(u64),        // dao_id -> total member count
     MemberAtIndex(u64, u64), // (dao_id, index) -> Address
+    /// Cooldown timestamp: prevents member from leaving/re-joining during active election
+    TransferCooldown(u64, Address), // (dao_id, address) -> u64 (cooldown end timestamp)
+    /// Election participation flag: true if member is registered in an active election
+    InActiveElection(u64, Address), // (dao_id, address) -> bool
 }
 
 // Typed Events
@@ -284,10 +289,20 @@ impl MembershipSbt {
 
     /// Leave DAO voluntarily (member self-revokes)
     /// Sets revocation flag, keeping member entry and alias intact
+    /// Prevents leaving if member is in an active election cooldown
     pub fn leave(env: Env, dao_id: u64, member: Address) {
         Self::bump_instance(&env);
         // Member must authorize their own departure
         member.require_auth();
+
+        // Check cooldown: cannot leave during active election
+        let cooldown_key = DataKey::TransferCooldown(dao_id, member.clone());
+        let cooldown_end: Option<u64> = env.storage().persistent().get(&cooldown_key);
+        if let Some(end) = cooldown_end {
+            if env.ledger().timestamp() < end {
+                panic_with_error!(&env, SbtError::CooldownActive);
+            }
+        }
 
         // Member must exist
         let member_key = DataKey::Member(dao_id, member.clone());
@@ -444,6 +459,51 @@ impl MembershipSbt {
         }
 
         members
+    }
+
+    // ── Anti-Flash Loan: Transfer Cooldown ──────────────────────────────────
+
+    /// Set a member's transfer cooldown during an active election.
+    /// Prevents the member from leaving or having their SBT revoked while voting.
+    pub fn set_election_cooldown(env: Env, dao_id: u64, member: Address, cooldown_end: u64) {
+        Self::bump_instance(&env);
+        let key = DataKey::TransferCooldown(dao_id, member);
+        env.storage().persistent().set(&key, &cooldown_end);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Clear a member's transfer cooldown after an election ends.
+    pub fn clear_election_cooldown(env: Env, dao_id: u64, member: Address) {
+        Self::bump_instance(&env);
+        let key = DataKey::TransferCooldown(dao_id, member);
+        env.storage().persistent().remove(&key);
+    }
+
+    /// Check if a member is in transfer cooldown.
+    /// Returns true if cooldown is active (cannot leave DAO during active election).
+    pub fn is_in_cooldown(env: Env, dao_id: u64, member: Address) -> bool {
+        Self::bump_instance(&env);
+        let key = DataKey::TransferCooldown(dao_id, member);
+        let cooldown_end: Option<u64> = env.storage().persistent().get(&key);
+        match cooldown_end {
+            Some(end) => env.ledger().timestamp() < end,
+            None => false,
+        }
+    }
+
+    /// Mark a member as participating in an active election.
+    pub fn set_in_active_election(env: Env, dao_id: u64, member: Address, active: bool) {
+        Self::bump_instance(&env);
+        let key = DataKey::InActiveElection(dao_id, member);
+        env.storage().persistent().set(&key, &active);
+        Self::bump_persistent(&env, &key);
+    }
+
+    /// Check if a member is participating in an active election.
+    pub fn is_in_active_election(env: Env, dao_id: u64, member: Address) -> bool {
+        Self::bump_instance(&env);
+        let key = DataKey::InActiveElection(dao_id, member);
+        env.storage().persistent().get(&key).unwrap_or(false)
     }
 
     /// Contract version for upgrade tracking.

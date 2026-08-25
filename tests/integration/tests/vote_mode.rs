@@ -6,6 +6,7 @@
 //
 // These tests use REAL Groth16 proof data (BE-encoded) for accurate BN254 verification.
 
+use soroban_sdk::Symbol;
 use soroban_sdk::{
     testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec as SdkVec, U256,
 };
@@ -24,7 +25,11 @@ fn setup_contracts(env: &Env) -> (Address, Address, Address, Address, Address) {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let admin = Address::generate(env);
 
@@ -48,7 +53,7 @@ fn hex_str_to_u256(env: &Env, hex: &str) -> U256 {
 }
 
 // Real verification key from circuits/build/verification_key_soroban_be.json (BIG-ENDIAN)
-// 6 IC elements for 5 public signals: root, nullifier, daoId, proposalId, voteChoice
+// 7 IC elements for 6 public signals: root, nullifier, daoId, proposalId, voteChoice, numCandidates
 // (commitment is now a PRIVATE signal for improved privacy)
 fn get_real_vk(env: &Env) -> VerificationKey {
     let mut ic = SdkVec::new(env);
@@ -58,7 +63,7 @@ fn get_real_vk(env: &Env) -> VerificationKey {
     ic.push_back(hex_to_bytes(env, "2a7f1a9e3de9411015b1c5652856bc7a467110344153252026c44ca55f5dca632f0db38e6d0268092cba5ea0b5db9610e45bd8b4aac852527aeb6323c8f09804"));
     ic.push_back(hex_to_bytes(env, "09c5b9b793a6f8098f0ac918aa0a19a75b74e7f1428f726194a48af37da8ac14122edc5b3704f106fa3c095ac74f524032e460179c3e8ecd562ef050c884336a"));
     ic.push_back(hex_to_bytes(env, "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"));
-    // Removed 7th IC element (was for commitment public signal)
+    ic.push_back(hex_to_bytes(env, "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"));
 
     VerificationKey {
         alpha: hex_to_bytes(env, "2d4d9aa7e302d9df41749d5507949d05dbea33fbb16c643b22f599a2be6df2e214bedd503c37ceb061d8ec60209fe345ce89830a19230301f076caff004d1926"),
@@ -135,7 +140,7 @@ fn test_trailing_mode_churn_across_parallel_proposals() {
         &true,
         &None,
     );
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
     // Use mock VK/proof; in testutils path verification is bypassed.
     let vk = create_mock_vk(&env);
     voting_client.set_vk(&dao_id, &vk, &admin);
@@ -249,7 +254,8 @@ fn create_mock_vk(env: &Env) -> VerificationKey {
             g1_gen.clone(),
             g1_gen.clone(),
             g1_gen.clone(),
-            g1_gen.clone(), // 6 elements for 5 public signals + 1
+            g1_gen.clone(),
+            g1_gen, // 7 elements for 6 public signals + 1
         ],
     }
 }
@@ -289,7 +295,7 @@ fn test_fixed_mode_late_joiner_cannot_vote() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK (mock is fine since we fail before proof verification)
     let vk = create_mock_vk(&env);
@@ -360,7 +366,7 @@ fn test_trailing_mode_late_joiner_can_vote() {
     assert_eq!(dao_id, 1, "First DAO must have ID 1 to match proof");
 
     // Initialize tree with depth 18 (matching the proof)
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set REAL VK
     let vk = get_real_vk(&env);
@@ -441,7 +447,7 @@ fn test_trailing_mode_late_joiner_can_vote_real_member2() {
         &true,
         &None,
     );
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Use real VK
     let vk = get_real_vk(&env);
@@ -517,7 +523,7 @@ fn test_trailing_mode_removed_member_cannot_vote_on_new_proposal() {
     );
 
     // Initialize tree and set VK (mock is fine since we fail before proof verification)
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let vk = create_mock_vk(&env);
     voting_client.set_vk(&dao_id, &vk, &admin);
@@ -592,7 +598,7 @@ fn test_trailing_mode_removed_member_cannot_vote_on_old_proposal() {
     );
 
     // Initialize tree and set VK (mock is fine since we fail before proof verification)
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     let vk = create_mock_vk(&env);
     voting_client.set_vk(&dao_id, &vk, &admin);

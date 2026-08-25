@@ -4,6 +4,7 @@
 // We use a real proof generated for root_A, but pass root_B to the contract.
 // The vote MUST fail with "root must match proposal eligible root".
 
+use soroban_sdk::Symbol;
 use soroban_sdk::{
     testutils::Address as _, Address, Bytes, BytesN, Env, String, Vec as SdkVec, U256,
 };
@@ -49,7 +50,7 @@ fn get_real_proof(env: &Env) -> Proof {
 
 fn get_verification_key(env: &Env) -> VerificationKey {
     // VK from circuits/build/verification_key_soroban_be.json (BIG-ENDIAN)
-    // 6 IC elements for 5 public signals (root, nullifier, daoId, proposalId, voteChoice)
+    // 7 IC elements for 6 public signals (root, nullifier, daoId, proposalId, voteChoice, numCandidates)
     // (commitment is now a PRIVATE signal for improved privacy)
     let mut ic = SdkVec::new(env);
 
@@ -59,7 +60,7 @@ fn get_verification_key(env: &Env) -> VerificationKey {
     ic.push_back(hex_to_bytes(env, "2a7f1a9e3de9411015b1c5652856bc7a467110344153252026c44ca55f5dca632f0db38e6d0268092cba5ea0b5db9610e45bd8b4aac852527aeb6323c8f09804"));
     ic.push_back(hex_to_bytes(env, "09c5b9b793a6f8098f0ac918aa0a19a75b74e7f1428f726194a48af37da8ac14122edc5b3704f106fa3c095ac74f524032e460179c3e8ecd562ef050c884336a"));
     ic.push_back(hex_to_bytes(env, "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"));
-    // Removed 7th IC element (was for commitment public signal)
+    ic.push_back(hex_to_bytes(env, "143c06565aad1cacd0ddbc0cfc6dd131c70392d29c16d8c80ed7f62ada52587b13e189e68fe2fe8806b272da3c5762a18b23680cdeda63faef014b7dd6806f21"));
 
     VerificationKey {
         alpha: hex_to_bytes(env, "2d4d9aa7e302d9df41749d5507949d05dbea33fbb16c643b22f599a2be6df2e214bedd503c37ceb061d8ec60209fe345ce89830a19230301f076caff004d1926"),
@@ -85,7 +86,11 @@ fn test_vote_with_wrong_root_fails() {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let admin = Address::generate(&env);
     let member = Address::generate(&env);
@@ -104,7 +109,7 @@ fn test_vote_with_wrong_root_fails() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Give admin an SBT (needed to create proposals)
     sbt_client.mint(&dao_id, &admin, &admin, &None);
@@ -236,7 +241,11 @@ fn test_vote_with_correct_root_succeeds() {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let admin = Address::generate(&env);
     let member = Address::generate(&env);
@@ -255,7 +264,7 @@ fn test_vote_with_correct_root_succeeds() {
         &None,
     );
 
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Give admin an SBT (needed to create proposals)
     sbt_client.mint(&dao_id, &admin, &admin, &None);
