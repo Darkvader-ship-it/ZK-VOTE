@@ -932,9 +932,7 @@ export function initDb(dbPath?: string): DatabaseType {
   }
 
   activeDbFile = dbFile;
-  let database: DatabaseType;
-  const dbFile = dbPath ?? DB_FILE;
-  const database = new Database(dbFile);
+  let database = new Database(dbFile);
   
   // SECURITY: Enable WAL mode and foreign key constraints
   database.pragma("journal_mode = WAL");
@@ -1505,7 +1503,6 @@ export function getMetadata<T>(key: string): T | null {
  */
 export function setMetadata<T>(key: string, value: T): void {
   const database = getWriteDb();
-  const database = initDb();
   const compiled = kysely
     .insertInto("metadata")
     .values({ key, value: JSON.stringify(value) })

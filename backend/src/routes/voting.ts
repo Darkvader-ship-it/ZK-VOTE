@@ -213,6 +213,7 @@ router.post(
         daoId,
         proposalId,
       );
+    }
     const existingCommitment = getProofCommitment(commitmentHash);
     if (existingCommitment && existingCommitment.status === "REVEALED") {
       return res.status(400).json({ error: "Proof commitment already revealed" });

@@ -244,6 +244,10 @@ router.post("/csp-report", bodyLimit("100kb"), (req: Request, res: Response) => 
   } catch (err) {
     log("error", "csp_report_failed", { error: (err as Error).message });
     res.status(400).json({ error: "Invalid CSP report" });
+  }
+});
+
+/**
  * GET /debug/heap
  * Writes a V8 heap snapshot and returns it for download (admin only).
  * Used to diagnose memory leaks in the long-running relayer process.

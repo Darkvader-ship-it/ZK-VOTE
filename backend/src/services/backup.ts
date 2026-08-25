@@ -193,7 +193,6 @@ export async function verifyBackup(backupFilePath: string): Promise<Verification
       } catch (_) {
         // best-effort close; nothing to recover
       }
-      } catch (_) { /* noop */ }
     }
   }
 }

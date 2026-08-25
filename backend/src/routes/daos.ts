@@ -48,6 +48,8 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (req: R
         total: daos.length,
         lastSync,
         cached: true,
+      });
+    }
       if (user) {
       if (!/^[GC][A-Z2-7]{55}$/.test(user)) {
         return res.status(400).json({ error: "Invalid Stellar address format" });

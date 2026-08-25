@@ -630,8 +630,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     log("info", "shutdown_component_stopped", { component: "ttl_renewal" });
     stopPinMonitor();
     stopAuthScheduler();
-    process.exit(0);
-  });
     log("info", "shutdown_component_stopped", { component: "pin_monitor" });
     stopMemoryMonitor();
     stopWalResilience();

@@ -241,7 +241,7 @@ function cmdRotate(flags: Record<string, string | boolean | number>): void {
     }
 
     const results = runTokenRotation();
-    console.info(`\n=== SCHEDULED ROTATION ===");
+    console.info(`\n=== SCHEDULED ROTATION ===`);
     console.info(`Rotated ${results.length} tokens.\n`);
 
     for (const r of results) {
