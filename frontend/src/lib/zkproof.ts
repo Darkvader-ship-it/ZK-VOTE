@@ -20,15 +20,18 @@ import type { CircuitSignals, Groth16Proof } from "snarkjs";
 // (Node/tests). The value is read once at module load.
 function rustProverEnabled(): boolean {
   try {
-    if ((import.meta as { env?: Record<string, string> }).env?.VITE_ZK_USE_RUST_PROVER === "false")
+    if (
+      (import.meta as { env?: Record<string, string> }).env
+        ?.VITE_ZK_USE_RUST_PROVER === "false"
+    )
       return false;
   } catch {
     /* import.meta.env unavailable */
   }
   try {
     if (
-      (globalThis as { process?: { env?: Record<string, string> } }).process?.env
-        ?.ZK_USE_RUST_PROVER === "false"
+      (globalThis as { process?: { env?: Record<string, string> } }).process
+        ?.env?.ZK_USE_RUST_PROVER === "false"
     )
       return false;
   } catch {
@@ -69,9 +72,7 @@ async function proveWithRust(
 ): Promise<GeneratedProof> {
   // Compute the witness with the circom WASM (snarkjs' engine).
   const { WitnessCalculatorBuilder } = await import("circom_runtime");
-  const wasmBytes = new Uint8Array(
-    await (await fetch(wasmPath)).arrayBuffer(),
-  );
+  const wasmBytes = new Uint8Array(await (await fetch(wasmPath)).arrayBuffer());
   const wc = await WitnessCalculatorBuilder(wasmBytes, {});
 
   // circom_runtime expects field elements as BigInt (snarkjs does the same
@@ -87,11 +88,12 @@ async function proveWithRust(
 
   // Return the raw binary `.wtns` buffer (position-0 `1` signal included),
   // exactly what the Rust `prove_wtns` entry point expects.
-  const witnessBytes = (await wc.calculateWitness(bigInput, true)) as Uint8Array;
+  const witnessBytes = (await wc.calculateWitness(
+    bigInput,
+    true,
+  )) as Uint8Array;
 
-  const zkeyBytes = new Uint8Array(
-    await (await fetch(zkeyPath)).arrayBuffer(),
-  );
+  const zkeyBytes = new Uint8Array(await (await fetch(zkeyPath)).arrayBuffer());
 
   const prover = await loadRustProver();
   const res = await prover.prove_wtns(zkeyBytes, witnessBytes);
@@ -206,10 +208,7 @@ export async function generateVoteProof(
       try {
         return await proveWithRust(circuitInput, wasmPath, zkeyPath);
       } catch (e) {
-        console.warn(
-          "Rust vote prover failed; falling back to snarkjs.",
-          e,
-        );
+        console.warn("Rust vote prover failed; falling back to snarkjs.", e);
       }
     }
 
@@ -310,10 +309,7 @@ export async function generateCommentProof(
       try {
         return await proveWithRust(circuitInput, wasmPath, zkeyPath);
       } catch (e) {
-        console.warn(
-          "Rust comment prover failed; falling back to snarkjs.",
-          e,
-        );
+        console.warn("Rust comment prover failed; falling back to snarkjs.", e);
       }
     }
 
@@ -480,7 +476,9 @@ export async function calculateCommentNullifier(
 // Domain separation tag for commitment scheme
 // SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
 // Must match DOMAIN_TAG in circuits for consistency
-const DOMAIN_TAG = BigInt("19666041591797403834655481403982443037438503980743793537655983658411276515161");
+const DOMAIN_TAG = BigInt(
+  "19666041591797403834655481403982443037438503980743793537655983658411276515161",
+);
 
 /**
  * Calculate commitment from secret, salt, and blinding factor using Poseidon hash
@@ -495,7 +493,14 @@ export async function calculateCommitment(
   const { buildPoseidon } = await import("circomlibjs");
   const poseidon = await buildPoseidon();
 
-  const hash = poseidon.F.toString(poseidon([DOMAIN_TAG, BigInt(secret), BigInt(salt), BigInt(blindingFactor)]));
+  const hash = poseidon.F.toString(
+    poseidon([
+      DOMAIN_TAG,
+      BigInt(secret),
+      BigInt(salt),
+      BigInt(blindingFactor),
+    ]),
+  );
 
   return hash;
 }
@@ -531,8 +536,17 @@ export async function calculateProofHash(
   timestamp: number,
   nonce?: string,
 ): Promise<string> {
-  const normalizedNullifier = nullifier.startsWith("0x") ? nullifier.slice(2) : nullifier;
-  const data = JSON.stringify(proof) + ":" + normalizedNullifier + ":" + timestamp + ":" + (nonce || "");
+  const normalizedNullifier = nullifier.startsWith("0x")
+    ? nullifier.slice(2)
+    : nullifier;
+  const data =
+    JSON.stringify(proof) +
+    ":" +
+    normalizedNullifier +
+    ":" +
+    timestamp +
+    ":" +
+    (nonce || "");
   const encoder = new TextEncoder();
   const buffer = encoder.encode(data);
   const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
@@ -585,4 +599,3 @@ export async function encryptProofForRelayer(
     }),
   };
 }
-

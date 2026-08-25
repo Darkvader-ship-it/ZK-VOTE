@@ -11,7 +11,9 @@ import {
  * non-critical / background services (#204).
  */
 export function ServiceDegradationBanner() {
-  const [services, setServices] = useState<string[]>(() => getDegradedServices());
+  const [services, setServices] = useState<string[]>(() =>
+    getDegradedServices(),
+  );
   const [detail, setDetail] = useState<HealthServicesSnapshot | null>(null);
 
   useEffect(() => {
@@ -38,9 +40,7 @@ export function ServiceDegradationBanner() {
 
   if (services.length === 0) return null;
 
-  const labels = services
-    .map((s) => s.replace(/_/g, " "))
-    .join(", ");
+  const labels = services.map((s) => s.replace(/_/g, " ")).join(", ");
 
   return (
     <div
@@ -50,7 +50,10 @@ export function ServiceDegradationBanner() {
     >
       <span>
         Reduced functionality: {labels}. Core voting remains available
-        {detail?.status === "degraded" ? " while auxiliary services recover" : ""}.
+        {detail?.status === "degraded"
+          ? " while auxiliary services recover"
+          : ""}
+        .
       </span>
     </div>
   );

@@ -44,7 +44,7 @@ export async function generateHybridPQCommitment(
   salt: string,
   daoId: number,
   proposalId: number,
-  classicalCommitment: string
+  classicalCommitment: string,
 ): Promise<HybridPQCommitment> {
   const pqInput = `ZKVOTE_PQ_COMMITMENT_V1:${secret}:${salt}:${daoId}:${proposalId}`;
   const postQuantumCommitment = sha256Hex(pqInput);
@@ -69,13 +69,13 @@ export function verifyHybridPQCommitment(
   salt: string,
   daoId: number,
   proposalId: number,
-  hybrid: HybridPQCommitment
+  hybrid: HybridPQCommitment,
 ): boolean {
   const expectedPQCommitment = sha256Hex(
-    `ZKVOTE_PQ_COMMITMENT_V1:${secret}:${salt}:${daoId}:${proposalId}`
+    `ZKVOTE_PQ_COMMITMENT_V1:${secret}:${salt}:${daoId}:${proposalId}`,
   );
   const expectedPQNullifier = sha256Hex(
-    `ZKVOTE_PQ_NULLIFIER_V1:${secret}:${daoId}:${proposalId}`
+    `ZKVOTE_PQ_NULLIFIER_V1:${secret}:${daoId}:${proposalId}`,
   );
 
   return (

@@ -37,7 +37,9 @@ function detectBrowserLanguage(): Language {
   return "en";
 }
 
-export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
   const [language, setLanguageState] = useState<Language>(() => {
     if (typeof window !== "undefined") {
       const stored = localStorage.getItem(LANGUAGE_KEY);
@@ -70,7 +72,10 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (params) {
       Object.entries(params).forEach(([pKey, pVal]) => {
-        text = text.replace(new RegExp(`{{\\s*${pKey}\\s*}}`, "g"), String(pVal));
+        text = text.replace(
+          new RegExp(`{{\\s*${pKey}\\s*}}`, "g"),
+          String(pVal),
+        );
       });
     }
 

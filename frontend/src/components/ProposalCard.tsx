@@ -308,7 +308,11 @@ export default function ProposalCard({
                         e.stopPropagation();
                         setShowVoteModal(true);
                       }}
-                      disabled={!isRegistered || isPastDeadline || proposal.isPendingVote}
+                      disabled={
+                        !isRegistered ||
+                        isPastDeadline ||
+                        proposal.isPendingVote
+                      }
                       variant="outline"
                       size="sm"
                     >

@@ -95,11 +95,12 @@ export function useOptimisticComment() {
   const addOptimisticComment = (
     daoId: number,
     proposalId: number,
-    comment: CommentWithContent
+    comment: CommentWithContent,
   ) => {
     const queryKey = queryKeys.comments.list(daoId, proposalId);
 
-    const previousComments = queryClient.getQueryData<CommentWithContent[]>(queryKey);
+    const previousComments =
+      queryClient.getQueryData<CommentWithContent[]>(queryKey);
 
     queryClient.setQueryData<CommentWithContent[]>(queryKey, (old) => {
       if (!old) return [comment];

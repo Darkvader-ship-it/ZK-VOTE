@@ -44,7 +44,10 @@ describe("HD Key Derivation & BIP-39 Mnemonic Hierarchy", () => {
 
   it("satisfies circuit compatibility: derived secrets stay within BN254 scalar field", async () => {
     const masterSecret = generateMasterSecret();
-    const electionKeys = await deriveElectionSecret(masterSecret, "election-77");
+    const electionKeys = await deriveElectionSecret(
+      masterSecret,
+      "election-77",
+    );
 
     const secretBigInt = BigInt(electionKeys.electionSecret);
     const commitmentBigInt = BigInt(electionKeys.commitment);
@@ -63,8 +66,14 @@ describe("HD Key Derivation & BIP-39 Mnemonic Hierarchy", () => {
   it("tests UNLINKABILITY: election secrets derived from the same master secret for different elections appear random and distinct", async () => {
     const masterSecret = generateMasterSecret();
 
-    const keysElectionA = await deriveElectionSecret(masterSecret, "election-A");
-    const keysElectionB = await deriveElectionSecret(masterSecret, "election-B");
+    const keysElectionA = await deriveElectionSecret(
+      masterSecret,
+      "election-A",
+    );
+    const keysElectionB = await deriveElectionSecret(
+      masterSecret,
+      "election-B",
+    );
 
     // Election secrets must be distinct
     expect(keysElectionA.electionSecret).not.toBe(keysElectionB.electionSecret);
@@ -81,7 +90,8 @@ describe("HD Key Derivation & BIP-39 Mnemonic Hierarchy", () => {
   });
 
   it("derives valid secrets from BIP-39 mnemonic phrase", async () => {
-    const mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const mnemonic =
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const keys = await deriveElectionSecret(mnemonic, "election-101");
 
     expect(keys.electionSecret).toBeDefined();

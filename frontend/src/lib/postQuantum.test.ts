@@ -20,7 +20,7 @@ describe("Post-Quantum Fallback & STARK Circuit Suite (#115)", () => {
       salt,
       daoId,
       proposalId,
-      classicalCommitment
+      classicalCommitment,
     );
 
     expect(hybrid.quantumAlgorithm).toBe("SHA3-256");
@@ -34,7 +34,7 @@ describe("Post-Quantum Fallback & STARK Circuit Suite (#115)", () => {
       salt,
       daoId,
       proposalId,
-      hybrid
+      hybrid,
     );
     expect(isValid).toBe(true);
 
@@ -44,7 +44,7 @@ describe("Post-Quantum Fallback & STARK Circuit Suite (#115)", () => {
       salt,
       daoId,
       102, // Wrong proposal ID
-      hybrid
+      hybrid,
     );
     expect(isTampered).toBe(false);
   });
@@ -63,7 +63,7 @@ describe("Post-Quantum Fallback & STARK Circuit Suite (#115)", () => {
       daoId,
       proposalId,
       voteChoice,
-      merklePath
+      merklePath,
     );
 
     expect(starkProof.proofType).toBe("STARK_FRI_PLONKY3_PROTOTYPE");

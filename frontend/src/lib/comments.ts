@@ -169,7 +169,10 @@ export async function fetchComments(
   const response = await relayerFetch(url);
   if (!response.ok) {
     if (response.status === 404) {
-      return { data: [], pagination: { cursor: undefined, hasMore: false, total: 0 } };
+      return {
+        data: [],
+        pagination: { cursor: undefined, hasMore: false, total: 0 },
+      };
     }
     throw new Error("Failed to fetch comments");
   }

@@ -6,7 +6,9 @@ import { CONTRACTS, NETWORK_CONFIG } from "../config/contracts";
 // Domain separation tag for commitment scheme
 // SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
 // Must match DOMAIN_TAG in circuits
-const DOMAIN_TAG = BigInt("19666041591797403834655481403982443037438503980743793537655983658411276515161");
+const DOMAIN_TAG = BigInt(
+  "19666041591797403834655481403982443037438503980743793537655983658411276515161",
+);
 
 export interface ZKCredentials {
   secret: string;
@@ -89,7 +91,10 @@ By signing, you acknowledge that anyone who obtains this signature can vote on y
 
   // Derive blinding factor with a third domain separator
   const blindingInput = new TextEncoder().encode(`blinding:${signedMessage}`);
-  const blindingHashBuffer = await crypto.subtle.digest("SHA-256", blindingInput);
+  const blindingHashBuffer = await crypto.subtle.digest(
+    "SHA-256",
+    blindingInput,
+  );
   const blindingHashArray = new Uint8Array(blindingHashBuffer);
 
   const blindingFactor = BigInt(
@@ -102,7 +107,9 @@ By signing, you acknowledge that anyone who obtains this signature can vote on y
   // Compute commitment: Poseidon(DOMAIN_TAG, secret, salt, blindingFactor)
   // Domain-separated commitment prevents cross-protocol attacks.
   // Blinding factor ensures uniform distribution even if secret/salt are correlated.
-  const commitment = poseidon.F.toString(poseidon([DOMAIN_TAG, secret, salt, blindingFactor]));
+  const commitment = poseidon.F.toString(
+    poseidon([DOMAIN_TAG, secret, salt, blindingFactor]),
+  );
 
   return {
     secret: secret.toString(),
@@ -140,7 +147,9 @@ export async function generateRandomZKCredentials(): Promise<ZKCredentials> {
   );
 
   // Compute commitment: Poseidon(DOMAIN_TAG, secret, salt, blindingFactor)
-  const commitment = poseidon.F.toString(poseidon([DOMAIN_TAG, secret, salt, blindingFactor]));
+  const commitment = poseidon.F.toString(
+    poseidon([DOMAIN_TAG, secret, salt, blindingFactor]),
+  );
 
   return {
     secret: secret.toString(),
@@ -306,7 +315,9 @@ export async function generateFakeZKCredentials(): Promise<ZKCredentials> {
         .join(""),
   );
 
-  const commitment = poseidon.F.toString(poseidon([DOMAIN_TAG, secret, salt, blindingFactor]));
+  const commitment = poseidon.F.toString(
+    poseidon([DOMAIN_TAG, secret, salt, blindingFactor]),
+  );
 
   return {
     secret: secret.toString(),
@@ -325,7 +336,12 @@ export async function computeCommitment(
 ): Promise<string> {
   const poseidon = await buildPoseidon();
   const commitment = poseidon.F.toString(
-    poseidon([DOMAIN_TAG, BigInt(secret), BigInt(salt), BigInt(blindingFactor)]),
+    poseidon([
+      DOMAIN_TAG,
+      BigInt(secret),
+      BigInt(salt),
+      BigInt(blindingFactor),
+    ]),
   );
   return commitment;
 }

@@ -669,7 +669,10 @@ export default function ManageMembers({
         ) : (
           <div className="space-y-3">
             {members.map((member) => (
-              <div key={member.address} className="p-4 bg-muted/40 border border-border/60 rounded-xl space-y-3 sm:space-y-0">
+              <div
+                key={member.address}
+                className="p-4 bg-muted/40 border border-border/60 rounded-xl space-y-3 sm:space-y-0"
+              >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-start sm:items-center gap-3 flex-1 min-w-0">
                     <div className="flex flex-col flex-1 min-w-0">

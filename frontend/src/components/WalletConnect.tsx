@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useMounted } from "../hooks/useMounted";
 import { Button, Card, Banner } from "@stellar/design-system";
-import { isFreighterInstalled, FREIGHTER_INSTALL_URL } from "../services/freighter";
+import {
+  isFreighterInstalled,
+  FREIGHTER_INSTALL_URL,
+} from "../services/freighter";
 
 interface WalletConnectProps {
   onConnect: () => Promise<void>;
@@ -90,7 +93,10 @@ export default function WalletConnect({
   }
 
   return (
-    <Card variant="primary" className="w-full max-w-full overflow-hidden p-4 sm:p-6">
+    <Card
+      variant="primary"
+      className="w-full max-w-full overflow-hidden p-4 sm:p-6"
+    >
       <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
       <p className="text-sm text-muted-foreground mb-4">
         Connect your Stellar wallet (Freighter, xBull, Albedo, etc.) to interact

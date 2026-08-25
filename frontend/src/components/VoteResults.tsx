@@ -80,7 +80,10 @@ const VoteResults = memo(function VoteResults({
       </div>
 
       {totalVotes > 0 && (
-        <div className="flex justify-between text-xs text-muted-foreground" aria-hidden="true">
+        <div
+          className="flex justify-between text-xs text-muted-foreground"
+          aria-hidden="true"
+        >
           <span>{yesPercentage.toFixed(1)}% Yes</span>
           <span>{noPercentage.toFixed(1)}% No</span>
         </div>

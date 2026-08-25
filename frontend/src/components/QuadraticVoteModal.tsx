@@ -66,7 +66,10 @@ export default function QuadraticVoteModal({
   };
 
   const canSubmit =
-    cost.withinBudget && cost.withinRange && cost.totalCreditsSpent > 0 && !isSubmitting;
+    cost.withinBudget &&
+    cost.withinRange &&
+    cost.totalCreditsSpent > 0 &&
+    !isSubmitting;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

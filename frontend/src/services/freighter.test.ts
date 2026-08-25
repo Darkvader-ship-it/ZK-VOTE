@@ -36,7 +36,7 @@ describe("freighter service", () => {
 
   it("throws clear install error when connecting without Freighter installed", async () => {
     await expect(connectFreighter()).rejects.toThrow(
-      `Freighter is not installed. Please install Freighter from ${FREIGHTER_INSTALL_URL}`
+      `Freighter is not installed. Please install Freighter from ${FREIGHTER_INSTALL_URL}`,
     );
   });
 
@@ -53,7 +53,7 @@ describe("freighter service", () => {
     };
 
     await expect(connectFreighter()).rejects.toThrow(
-      "Freighter wallet is locked. Please unlock your Freighter wallet and try again."
+      "Freighter wallet is locked. Please unlock your Freighter wallet and try again.",
     );
   });
 
@@ -65,26 +65,34 @@ describe("freighter service", () => {
       getPublicKey: vi.fn(),
       getNetwork: vi.fn(),
       getNetworkDetails: vi.fn(),
-      requestAccess: vi.fn().mockRejectedValue(new Error("User declined access")),
+      requestAccess: vi
+        .fn()
+        .mockRejectedValue(new Error("User declined access")),
       isLocked: vi.fn().mockResolvedValue(false),
     };
 
     await expect(connectFreighter()).rejects.toThrow(
-      "Connection request declined by user."
+      "Connection request declined by user.",
     );
   });
 
   it("persists connection intent in localStorage", () => {
     let storage: Record<string, string> = {};
     const originalLocalStorage = window.localStorage;
-    Object.defineProperty(window, 'localStorage', {
+    Object.defineProperty(window, "localStorage", {
       value: {
         getItem: (key: string) => storage[key] || null,
-        setItem: (key: string, value: string) => { storage[key] = value; },
-        removeItem: (key: string) => { delete storage[key]; },
-        clear: () => { storage = {}; }
+        setItem: (key: string, value: string) => {
+          storage[key] = value;
+        },
+        removeItem: (key: string) => {
+          delete storage[key];
+        },
+        clear: () => {
+          storage = {};
+        },
       },
-      writable: true
+      writable: true,
     });
 
     expect(hasConnectionIntent()).toBe(false);
@@ -93,9 +101,9 @@ describe("freighter service", () => {
     persistConnectionIntent(false);
     expect(hasConnectionIntent()).toBe(false);
 
-    Object.defineProperty(window, 'localStorage', {
+    Object.defineProperty(window, "localStorage", {
       value: originalLocalStorage,
-      writable: true
+      writable: true,
     });
   });
 });

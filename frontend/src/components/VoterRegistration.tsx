@@ -13,7 +13,13 @@ import {
   ChevronRight,
   Lock,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./ui/Card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "./ui/Card";
 import { LoadingSpinner } from "./ui";
 import {
   deriveElectionSecret,
@@ -42,7 +48,9 @@ export default function VoterRegistration({
   const [showMnemonic, setShowMnemonic] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [isDeriving, setIsDeriving] = useState<boolean>(false);
-  const [derivedKeys, setDerivedKeys] = useState<DerivedElectionKeys | null>(null);
+  const [derivedKeys, setDerivedKeys] = useState<DerivedElectionKeys | null>(
+    null,
+  );
   const [activeTab, setActiveTab] = useState<"generate" | "import">("generate");
   const [error, setError] = useState<string | null>(null);
 
@@ -87,7 +95,9 @@ export default function VoterRegistration({
       setError(null);
       const trimmed = customInput.trim();
       if (!trimmed) {
-        setError("Please enter a valid 12-word mnemonic phrase or master secret");
+        setError(
+          "Please enter a valid 12-word mnemonic phrase or master secret",
+        );
         return;
       }
 
@@ -156,7 +166,9 @@ Anyone with this phrase can derive all your election voting keys.
   };
 
   return (
-    <Card className={`w-full border shadow-lg bg-card text-card-foreground ${className}`}>
+    <Card
+      className={`w-full border shadow-lg bg-card text-card-foreground ${className}`}
+    >
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -164,9 +176,12 @@ Anyone with this phrase can derive all your election voting keys.
               <Key className="w-5 h-5" />
             </div>
             <div>
-              <CardTitle className="text-lg font-bold">HD Multi-Election Identity</CardTitle>
+              <CardTitle className="text-lg font-bold">
+                HD Multi-Election Identity
+              </CardTitle>
               <CardDescription>
-                Single Master Secret for all elections with zero-knowledge domain separation
+                Single Master Secret for all elections with zero-knowledge
+                domain separation
               </CardDescription>
             </div>
           </div>
@@ -214,21 +229,30 @@ Anyone with this phrase can derive all your election voting keys.
             <div className="p-4 rounded-xl border bg-muted/30 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5" /> BIP-39 Seed Mnemonic (12 Words)
+                  <Lock className="w-3.5 h-3.5" /> BIP-39 Seed Mnemonic (12
+                  Words)
                 </span>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setShowMnemonic(!showMnemonic)}
                     className="p-1.5 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-muted transition-colors flex items-center gap-1"
                   >
-                    {showMnemonic ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    {showMnemonic ? (
+                      <EyeOff className="w-3.5 h-3.5" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5" />
+                    )}
                     {showMnemonic ? "Hide" : "Reveal"}
                   </button>
                   <button
                     onClick={handleCopyMnemonic}
                     className="p-1.5 text-xs text-muted-foreground hover:text-foreground rounded hover:bg-muted transition-colors flex items-center gap-1"
                   >
-                    {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? (
+                      <Check className="w-3.5 h-3.5 text-green-500" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
                     {copied ? "Copied" : "Copy"}
                   </button>
                   <button
@@ -248,7 +272,9 @@ Anyone with this phrase can derive all your election voting keys.
                     key={idx}
                     className="px-2.5 py-1.5 rounded-lg bg-background border text-xs flex items-center justify-between font-mono"
                   >
-                    <span className="text-muted-foreground select-none">{idx + 1}.</span>
+                    <span className="text-muted-foreground select-none">
+                      {idx + 1}.
+                    </span>
                     <span className="font-semibold text-foreground">
                       {showMnemonic ? word : "•••••"}
                     </span>
@@ -257,7 +283,10 @@ Anyone with this phrase can derive all your election voting keys.
               </div>
 
               <div className="pt-2 flex items-center justify-between text-xs text-muted-foreground border-t border-border/50">
-                <span>Backup this phrase to recover voting rights across all elections</span>
+                <span>
+                  Backup this phrase to recover voting rights across all
+                  elections
+                </span>
                 <button
                   onClick={handleGenerateNewMasterSecret}
                   className="text-primary hover:underline flex items-center gap-1"
@@ -304,7 +333,9 @@ Anyone with this phrase can derive all your election voting keys.
           {isDeriving ? (
             <div className="p-4 text-center">
               <LoadingSpinner size="sm" color="blue" />
-              <p className="text-xs text-muted-foreground mt-2">Deriving circuit-compatible election secret...</p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Deriving circuit-compatible election secret...
+              </p>
             </div>
           ) : derivedKeys ? (
             <div className="space-y-2 text-xs font-mono">
@@ -313,7 +344,8 @@ Anyone with this phrase can derive all your election voting keys.
                   Election Secret (Derived via Poseidon KDF)
                 </span>
                 <span className="text-foreground truncate block font-bold">
-                  {derivedKeys.electionSecret.slice(0, 16)}...{derivedKeys.electionSecret.slice(-16)}
+                  {derivedKeys.electionSecret.slice(0, 16)}...
+                  {derivedKeys.electionSecret.slice(-16)}
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -322,7 +354,8 @@ Anyone with this phrase can derive all your election voting keys.
                     Identity Commitment (Poseidon)
                   </span>
                   <span className="text-emerald-600 dark:text-emerald-400 truncate block font-semibold">
-                    {derivedKeys.commitment.slice(0, 12)}...{derivedKeys.commitment.slice(-12)}
+                    {derivedKeys.commitment.slice(0, 12)}...
+                    {derivedKeys.commitment.slice(-12)}
                   </span>
                 </div>
                 <div className="p-2.5 rounded-lg bg-muted/40 border">
@@ -330,7 +363,8 @@ Anyone with this phrase can derive all your election voting keys.
                     Nullifier Hash (Poseidon)
                   </span>
                   <span className="text-blue-600 dark:text-blue-400 truncate block font-semibold">
-                    {derivedKeys.nullifier.slice(0, 12)}...{derivedKeys.nullifier.slice(-12)}
+                    {derivedKeys.nullifier.slice(0, 12)}...
+                    {derivedKeys.nullifier.slice(-12)}
                   </span>
                 </div>
               </div>

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { buildPoseidon } from "circomlibjs";
 
-const DOMAIN_TAG = BigInt("19666041591797403834655481403982443037438503980743793537655983658411276515161");
+const DOMAIN_TAG = BigInt(
+  "19666041591797403834655481403982443037438503980743793537655983658411276515161",
+);
 
 const BN254_FIELD =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -13,7 +15,12 @@ async function computeCommitment(
 ): Promise<string> {
   const poseidon = await buildPoseidon();
   return poseidon.F.toString(
-    poseidon([DOMAIN_TAG, BigInt(secret), BigInt(salt), BigInt(blindingFactor)]),
+    poseidon([
+      DOMAIN_TAG,
+      BigInt(secret),
+      BigInt(salt),
+      BigInt(blindingFactor),
+    ]),
   );
 }
 
@@ -148,8 +155,16 @@ describe("Commitment Scheme Statistical Analysis", () => {
     const secret = randomFieldElement().toString();
     const salt = randomFieldElement().toString();
 
-    const comm1 = await computeCommitment(secret, salt, randomFieldElement().toString());
-    const comm2 = await computeCommitment(secret, salt, randomFieldElement().toString());
+    const comm1 = await computeCommitment(
+      secret,
+      salt,
+      randomFieldElement().toString(),
+    );
+    const comm2 = await computeCommitment(
+      secret,
+      salt,
+      randomFieldElement().toString(),
+    );
 
     expect(comm1).not.toBe(comm2);
   });

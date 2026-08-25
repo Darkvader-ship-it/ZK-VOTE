@@ -3,7 +3,12 @@ import { Button } from "./ui/Button";
 import Alert from "./ui/Alert";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import { initializeContractClients } from "../lib/contracts";
-import { relayerFetch, parseApiError, getApiErrorCode, ErrorCode } from "../lib/api";
+import {
+  relayerFetch,
+  parseApiError,
+  getApiErrorCode,
+  ErrorCode,
+} from "../lib/api";
 import {
   generateVoteProof,
   formatProofForSoroban,
@@ -62,7 +67,11 @@ export default function VoteModal({
 
       // Step 1: Load registration data (or regenerate from wallet)
       setProgress("Loading voting credentials...");
-      let secret: string, salt: string, blindingFactor: string, commitment: string, leafIndex: number;
+      let secret: string,
+        salt: string,
+        blindingFactor: string,
+        commitment: string,
+        leafIndex: number;
 
       const cached = getZKCredentials(daoId, publicKey);
 
@@ -242,15 +251,24 @@ export default function VoteModal({
       try {
         setProgress("Signing vote with your wallet...");
         const { signVotePayload } = await import("../services/freighter");
-        const { getFreighterNetworkDetails } = await import("../services/freighter");
+        const { getFreighterNetworkDetails } =
+          await import("../services/freighter");
         const networkDetails = await getFreighterNetworkDetails();
-        const networkPassphrase = networkDetails?.networkPassphrase || "Public Global Stellar Network ; September 2015";
-        
+        const networkPassphrase =
+          networkDetails?.networkPassphrase ||
+          "Public Global Stellar Network ; September 2015";
+
         const payloadToSign = JSON.stringify(votePayload);
-        voterSignature = await signVotePayload(payloadToSign, publicKey, networkPassphrase);
-        
+        voterSignature = await signVotePayload(
+          payloadToSign,
+          publicKey,
+          networkPassphrase,
+        );
+
         if (import.meta.env.DEV) {
-          console.log("Vote payload signed:", { signature: voterSignature.slice(0, 16) + "..." });
+          console.log("Vote payload signed:", {
+            signature: voterSignature.slice(0, 16) + "...",
+          });
         }
       } catch (err) {
         console.warn("Failed to sign vote payload:", err);
@@ -275,8 +293,12 @@ export default function VoteModal({
       }
 
       // Optimistic update
-      const revertOptimisticUpdate = setOptimisticVote(daoId, proposalId, choice);
-      
+      const revertOptimisticUpdate = setOptimisticVote(
+        daoId,
+        proposalId,
+        choice,
+      );
+
       // Close the modal immediately to show optimistic UI state
       setStep("success");
       onComplete();
@@ -289,37 +311,42 @@ export default function VoteModal({
         },
         body: requestBody,
       })
-      .then(async (response) => {
-        if (!response.ok) {
-          const errorData = await response.json();
-          const errorMsg = parseApiError(errorData);
-          const errorCode = getApiErrorCode(errorData);
+        .then(async (response) => {
+          if (!response.ok) {
+            const errorData = await response.json();
+            const errorMsg = parseApiError(errorData);
+            const errorCode = getApiErrorCode(errorData);
 
-          // Detect double-vote error
-          if (
-            errorCode === ErrorCode.VOTE_ALREADY_CAST ||
-            errorMsg.includes("already voted") ||
-            errorMsg.includes("UnreachableCodeReached")
-          ) {
-            alert("You have already voted on this proposal. Each member can only vote once per proposal.");
-          } else {
-            alert(errorMsg);
+            // Detect double-vote error
+            if (
+              errorCode === ErrorCode.VOTE_ALREADY_CAST ||
+              errorMsg.includes("already voted") ||
+              errorMsg.includes("UnreachableCodeReached")
+            ) {
+              alert(
+                "You have already voted on this proposal. Each member can only vote once per proposal.",
+              );
+            } else {
+              alert(errorMsg);
+            }
+            revertOptimisticUpdate();
+            return;
           }
-          revertOptimisticUpdate();
-          return;
-        }
 
-        const result = await response.json();
-        if (import.meta.env.DEV)
-          console.log("Vote submitted successfully:", result);
-          
-        clearPendingVote(daoId, proposalId);
-      })
-      .catch((err) => {
-        console.error("Vote submission background failure:", err);
-        alert("Background vote submission failed: " + (err instanceof Error ? err.message : "Network error"));
-        revertOptimisticUpdate();
-      });
+          const result = await response.json();
+          if (import.meta.env.DEV)
+            console.log("Vote submitted successfully:", result);
+
+          clearPendingVote(daoId, proposalId);
+        })
+        .catch((err) => {
+          console.error("Vote submission background failure:", err);
+          alert(
+            "Background vote submission failed: " +
+              (err instanceof Error ? err.message : "Network error"),
+          );
+          revertOptimisticUpdate();
+        });
     } catch (err) {
       setStep("error");
       let errorMsg =
@@ -359,9 +386,15 @@ export default function VoteModal({
         {/* Header with inline close button */}
         <div className="flex items-start justify-between p-4 sm:p-6 border-b border-border/60 shrink-0">
           <div>
-            <h3 id="vote-modal-title" className="text-xl font-bold tracking-tight text-foreground">Cast Anonymous Vote</h3>
+            <h3
+              id="vote-modal-title"
+              className="text-xl font-bold tracking-tight text-foreground"
+            >
+              Cast Anonymous Vote
+            </h3>
             <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-              Your vote will be verified using zero-knowledge proofs to ensure anonymity while proving membership.
+              Your vote will be verified using zero-knowledge proofs to ensure
+              anonymity while proving membership.
             </p>
           </div>
           <Button
@@ -389,7 +422,11 @@ export default function VoteModal({
                 </Alert>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2" role="group" aria-label="Vote options">
+              <div
+                className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2"
+                role="group"
+                aria-label="Vote options"
+              >
                 <Button
                   onClick={() => handleVote(true)}
                   variant="outline"
@@ -442,9 +479,16 @@ export default function VoteModal({
           )}
 
           {step === "success" && (
-            <div className="py-8 flex flex-col items-center text-center space-y-4" aria-live="assertive" aria-atomic="true">
+            <div
+              className="py-8 flex flex-col items-center text-center space-y-4"
+              aria-live="assertive"
+              aria-atomic="true"
+            >
               <div className="h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-2">
-                <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" aria-hidden="true" />
+                <CheckCircle
+                  className="h-8 w-8 text-green-600 dark:text-green-400"
+                  aria-hidden="true"
+                />
               </div>
               <div className="space-y-1">
                 <h3 className="font-bold text-xl">Vote Submitted!</h3>

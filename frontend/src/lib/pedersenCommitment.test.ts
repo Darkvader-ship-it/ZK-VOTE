@@ -59,7 +59,10 @@ describe("Pedersen Commitment", () => {
 
     for (let i = 0; i < NUM_SAMPLES; i++) {
       const blinding = generateBlindingFactor();
-      const { commitment } = await computePedersenCommitment(fixedSecret, blinding);
+      const { commitment } = await computePedersenCommitment(
+        fixedSecret,
+        blinding,
+      );
       const bin = Number(BigInt(commitment) % BigInt(NUM_BINS));
       bins[bin]++;
     }
@@ -89,8 +92,14 @@ describe("Pedersen Commitment", () => {
     const secretB = 222n;
     const results: string[] = [];
     for (let i = 0; i < 10; i++) {
-      results.push((await computePedersenCommitment(secretA, generateBlindingFactor())).commitment);
-      results.push((await computePedersenCommitment(secretB, generateBlindingFactor())).commitment);
+      results.push(
+        (await computePedersenCommitment(secretA, generateBlindingFactor()))
+          .commitment,
+      );
+      results.push(
+        (await computePedersenCommitment(secretB, generateBlindingFactor()))
+          .commitment,
+      );
     }
     // No collisions expected across 20 random samples.
     expect(new Set(results).size).toEqual(results.length);
