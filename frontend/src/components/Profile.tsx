@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { useReceipts, VoterReceipt } from "../hooks/useReceipts";
+import { useReceipts, type VoterReceipt } from "../hooks/useReceipts";
 import { Button } from "./ui/Button";
 import {
   Card,
@@ -19,7 +19,7 @@ interface ProfileProps {
 }
 
 export default function Profile({ publicKey, isConnected }: ProfileProps) {
-  const { receipts, importReceipts, clearReceipts } = useReceipts();
+  const { receipts, importReceipts } = useReceipts();
   const [verifying, setVerifying] = useState<Record<string, boolean>>({});
   const [verificationResult, setVerificationResult] = useState<
     Record<string, boolean>

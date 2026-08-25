@@ -1,5 +1,4 @@
-use ark_ff::{PrimeField, Zero};
-use num_bigint::ToBigInt;
+use ark_ff::Zero;
 use zkvote_prover::fft::{fft, ifft, roots};
 use zkvote_prover::field::{fr_to_bigint, Fr};
 
@@ -7,7 +6,7 @@ use zkvote_prover::field::{fr_to_bigint, Fr};
 fn fft_matches_snarkjs() {
     let n = 16u32;
     let (omega, _inc) = roots(n);
-    let mut x: Vec<_> = (1..=n as u64).map(|i| ark_bn254::Fr::from(i)).collect();
+    let mut x: Vec<_> = (1..=n as u64).map(ark_bn254::Fr::from).collect();
     fft(&mut x, omega);
     let out: Vec<String> = x.iter().map(|v| fr_to_bigint(v).to_str_radix(10)).collect();
     println!("RUST_FFT_OUT={}", serde_json::to_string(&out).unwrap());
@@ -42,7 +41,7 @@ fn fft_roundtrip_16384() {
     // output; this guards large-n correctness + invertibility.
     let n = 16384u32;
     let (omega, inc) = roots(n);
-    let mut x: Vec<Fr> = (1..=n as u64).map(|i| ark_bn254::Fr::from(i)).collect();
+    let mut x: Vec<Fr> = (1..=n as u64).map(ark_bn254::Fr::from).collect();
     let x0 = x.clone();
 
     fft(&mut x, omega);
@@ -62,7 +61,6 @@ fn fft_roundtrip_16384() {
 #[test]
 fn print_roots_16384() {
     let (omega, inc) = roots(16384);
-    use num_bigint::ToBigInt;
     use zkvote_prover::field::fr_to_bigint;
     println!("RUST_omega={}", fr_to_bigint(&omega).to_str_radix(10));
     println!("RUST_inc   ={}", fr_to_bigint(&inc).to_str_radix(10));

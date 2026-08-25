@@ -67,12 +67,15 @@ function loadRustProver(): Promise<RustProver> {
 
 async function proveWithRust(
   input: Record<string, unknown>,
-  wasmPath: string,
-  zkeyPath: string,
+  wasmPath: string | Uint8Array,
+  zkeyPath: string | Uint8Array,
 ): Promise<GeneratedProof> {
   // Compute the witness with the circom WASM (snarkjs' engine).
   const { WitnessCalculatorBuilder } = await import("circom_runtime");
-  const wasmBytes = new Uint8Array(await (await fetch(wasmPath)).arrayBuffer());
+  const wasmBytes =
+    wasmPath instanceof Uint8Array
+      ? wasmPath
+      : new Uint8Array(await (await fetch(wasmPath)).arrayBuffer());
   const wc = await WitnessCalculatorBuilder(wasmBytes, {});
 
   // circom_runtime expects field elements as BigInt (snarkjs does the same
@@ -93,7 +96,10 @@ async function proveWithRust(
     true,
   )) as Uint8Array;
 
-  const zkeyBytes = new Uint8Array(await (await fetch(zkeyPath)).arrayBuffer());
+  const zkeyBytes =
+    zkeyPath instanceof Uint8Array
+      ? zkeyPath
+      : new Uint8Array(await (await fetch(zkeyPath)).arrayBuffer());
 
   const prover = await loadRustProver();
   const res = await prover.prove_wtns(zkeyBytes, witnessBytes);

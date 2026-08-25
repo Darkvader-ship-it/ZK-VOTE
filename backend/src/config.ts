@@ -81,12 +81,16 @@ export const config = {
   // Soroban RPC
   rpcUrl: process.env.SOROBAN_RPC_URL || "http://localhost:8000/soroban/rpc",
   rpcUrls: process.env.SOROBAN_RPC_URLS
-    ? process.env.SOROBAN_RPC_URLS.split(",").map((s) => s.trim()).filter(Boolean)
+    ? process.env.SOROBAN_RPC_URLS.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
     : [process.env.SOROBAN_RPC_URL || "http://localhost:8000/soroban/rpc"],
   networkPassphrase:
     process.env.NETWORK_PASSPHRASE || "Standalone Network ; February 2017",
   rpcTimeoutMs: Number(process.env.RPC_TIMEOUT_MS || 30_000),
-  shutdownDrainTimeoutMs: Number(process.env.SHUTDOWN_DRAIN_TIMEOUT_MS || 30_000),
+  shutdownDrainTimeoutMs: Number(
+    process.env.SHUTDOWN_DRAIN_TIMEOUT_MS || 30_000,
+  ),
 
   // Authentication (read from env as fallback; see getSecret() for dynamic retrieval)
   relayerAuthToken: process.env.RELAYER_AUTH_TOKEN,
@@ -203,9 +207,7 @@ export const config = {
   archivalIntervalMs: Number(process.env.ARCHIVAL_INTERVAL_MS || 86_400_000),
 
   // Audit log rotation and archival
-  auditLogRetentionDays: Number(
-    process.env.AUDIT_LOG_RETENTION_DAYS || 90,
-  ),
+  auditLogRetentionDays: Number(process.env.AUDIT_LOG_RETENTION_DAYS || 90),
   auditLogRotationIntervalMs: Number(
     process.env.AUDIT_LOG_ROTATION_INTERVAL_MS || 86_400_000,
   ),
@@ -216,7 +218,9 @@ export const config = {
   maxProofAgeSeconds: Number(process.env.MAX_PROOF_AGE_SECONDS || 300),
   requireClientCert: process.env.REQUIRE_CLIENT_CERT === "true",
   walletRateLimitMax: Number(process.env.WALLET_RATE_LIMIT_MAX || 5),
-  walletRateLimitWindowMs: Number(process.env.WALLET_RATE_LIMIT_WINDOW_MS || 60_000),
+  walletRateLimitWindowMs: Number(
+    process.env.WALLET_RATE_LIMIT_WINDOW_MS || 60_000,
+  ),
   relayerPublicKey: process.env.RELAYER_PUBLIC_KEY || "",
   // Circuit Breakers
   circuitBreakerRpcFailureThreshold: Number(
@@ -255,19 +259,29 @@ export const config = {
 
   // Database / WAL Resilience
   dbBusyTimeoutMs: Number(process.env.DB_BUSY_TIMEOUT_MS || 5000),
-  dbCheckpointIntervalMs: Number(process.env.DB_CHECKPOINT_INTERVAL_MS || 60000),
-  dbCheckpointTransactionCount: Number(process.env.DB_CHECKPOINT_TRANSACTION_COUNT || 1000),
-  dbWalWarningThresholdBytes: Number(process.env.DB_WAL_WARNING_THRESHOLD_BYTES || 100 * 1024 * 1024),
+  dbCheckpointIntervalMs: Number(
+    process.env.DB_CHECKPOINT_INTERVAL_MS || 60000,
+  ),
+  dbCheckpointTransactionCount: Number(
+    process.env.DB_CHECKPOINT_TRANSACTION_COUNT || 1000,
+  ),
+  dbWalWarningThresholdBytes: Number(
+    process.env.DB_WAL_WARNING_THRESHOLD_BYTES || 100 * 1024 * 1024,
+  ),
   dbBackupIntervalMs: Number(process.env.DB_BACKUP_INTERVAL_MS || 3600000),
   dbRetryCount: Number(process.env.DB_RETRY_COUNT || 5),
   dbRetryBaseDelayMs: Number(process.env.DB_RETRY_BASE_DELAY_MS || 50),
   dbRetryMaxDelayMs: Number(process.env.DB_RETRY_MAX_DELAY_MS || 2000),
 
   // Sequence manager
-  maxSequenceRetryAttempts: Number(process.env.MAX_SEQUENCE_RETRY_ATTEMPTS || 1),
+  maxSequenceRetryAttempts: Number(
+    process.env.MAX_SEQUENCE_RETRY_ATTEMPTS || 1,
+  ),
 
   // Vote submission idempotency
-  voteSubmissionPendingTtlMs: Number(process.env.VOTE_SUBMISSION_PENDING_TTL_MS || 300_000),
+  voteSubmissionPendingTtlMs: Number(
+    process.env.VOTE_SUBMISSION_PENDING_TTL_MS || 300_000,
+  ),
 
   // Test mode
   testMode: process.env.RELAYER_TEST_MODE === "true",
@@ -340,7 +354,9 @@ export function validateEnv(): void {
     console.error(
       JSON.stringify({ level: "error", event: "missing_env", missing }),
     );
-    console.error("\nRun ./scripts/init-local.sh to generate backend/.env or configure your environment variables.");
+    console.error(
+      "\nRun ./scripts/init-local.sh to generate backend/.env or configure your environment variables.",
+    );
     process.exit(1);
   }
 
@@ -352,8 +368,9 @@ export function validateEnv(): void {
     config.relayerSecretKey &&
     config.relayerSecretKey.startsWith("S") &&
     config.relayerSecretKey.length === 56 &&
-    !config.testMode && 
-    config.relayerSecretKey !== "SCZANGBA5AKIA7VTJQXBDKPQOBFZD3NWKNR3CQULPSFMJUADSHWFUCS" // allow the specific test key
+    !config.testMode &&
+    config.relayerSecretKey !==
+      "SCZANGBA5AKIA7VTJQXBDKPQOBFZD3NWKNR3CQULPSFMJUADSHWFUCS" // allow the specific test key
   ) {
     console.warn(
       JSON.stringify({
@@ -361,7 +378,9 @@ export function validateEnv(): void {
         event: "production_secret_in_non_prod",
       }),
     );
-    console.warn("WARNING: A valid Stellar Secret Key is being used in a non-production environment. Please use placeholders (e.g. S_PLACEHOLDER...) for non-production profiles unless you explicitly need a real key.");
+    console.warn(
+      "WARNING: A valid Stellar Secret Key is being used in a non-production environment. Please use placeholders (e.g. S_PLACEHOLDER...) for non-production profiles unless you explicitly need a real key.",
+    );
   }
 
   // Validate auth token strength (minimum 32 characters for security)

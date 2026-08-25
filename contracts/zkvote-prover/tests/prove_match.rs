@@ -86,17 +86,17 @@ fn prove_matches_ref() {
     // Diagnose resH vs C_w.
     let n_public = pk.n_public as usize;
     let c_w: G1Projective = G1Projective::msm(&pk.c, &witness[n_public + 1..]).expect("c_w");
-    let resH_mine = G1Projective::from(proof.pi_c) - c_w;
+    let res_h_mine = G1Projective::from(proof.pi_c) - c_w;
     let p_buf = std::fs::read(root.join("circuits/_dbg/buffPodd_T_snarkjs.bin")).unwrap();
     let n = pk.domain_size as usize;
     let p_ref: Vec<Fr> = (0..n)
         .map(|i| decode_fr_bits(&p_buf[i * 32..i * 32 + 32], 0))
         .collect();
-    let resH_ref: G1Projective = G1Projective::msm(&pk.h, &p_ref).expect("resH_ref");
-    let c_w_ref = G1Projective::from(r_pi_c) - resH_ref;
+    let res_h_ref: G1Projective = G1Projective::msm(&pk.h, &p_ref).expect("resH_ref");
+    let c_w_ref = G1Projective::from(r_pi_c) - res_h_ref;
     eprintln!(
         "resH_mine == resH_ref (snark buffers)? {}",
-        resH_mine.into_affine() == resH_ref.into_affine()
+        res_h_mine.into_affine() == res_h_ref.into_affine()
     );
     eprintln!(
         "c_w_mine  == c_w_ref (snark buffers)? {}",

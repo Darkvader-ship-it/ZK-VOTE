@@ -115,7 +115,9 @@ function egcd(a: bigint, b: bigint): { g: bigint; x: bigint; y: bigint } {
 export function modInverse(a: bigint, m: bigint): bigint {
   const { g, x } = egcd(((a % m) + m) % m, m);
   if (g !== 1n) {
-    throw new BlindSignatureError("modular inverse does not exist (not coprime)");
+    throw new BlindSignatureError(
+      "modular inverse does not exist (not coprime)",
+    );
   }
   return ((x % m) + m) % m;
 }
@@ -136,7 +138,8 @@ function randomBigIntBelow(max: bigint): bigint {
     if (typeof crypto !== "undefined" && crypto.getRandomValues) {
       crypto.getRandomValues(bytes);
     } else {
-      for (let i = 0; i < bytesNeeded; i++) bytes[i] = Math.floor(Math.random() * 256);
+      for (let i = 0; i < bytesNeeded; i++)
+        bytes[i] = Math.floor(Math.random() * 256);
     }
     candidate = 0n;
     for (const b of bytes) candidate = (candidate << 8n) | BigInt(b);
@@ -187,15 +190,25 @@ export function signBlinded(blinded: bigint, key: RsaBlindKeyPair): bigint {
  * on the blinded value, producing a valid signature on the original
  * (unblinded) message.
  */
-export function unblind(blindSig: bigint, r: bigint, pub: RsaBlindPublicKey): bigint {
+export function unblind(
+  blindSig: bigint,
+  r: bigint,
+  pub: RsaBlindPublicKey,
+): bigint {
   const rInv = modInverse(r, pub.n);
   return (blindSig * rInv) % pub.n;
 }
 
 /** Verify that `signature` is a valid RSA signature on `message` under `pub`. */
-export function verify(message: bigint, signature: bigint, pub: RsaBlindPublicKey): boolean {
+export function verify(
+  message: bigint,
+  signature: bigint,
+  pub: RsaBlindPublicKey,
+): boolean {
   if (signature < 0n || signature >= pub.n) return false;
-  return modPow(signature, pub.e, pub.n) === ((message % pub.n) + pub.n) % pub.n;
+  return (
+    modPow(signature, pub.e, pub.n) === ((message % pub.n) + pub.n) % pub.n
+  );
 }
 
 /**

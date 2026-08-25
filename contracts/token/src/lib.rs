@@ -355,8 +355,8 @@ impl Token {
 
         // Prune old checkpoints beyond retention period
         let retention = Self::get_checkpoint_retention(env);
-        if retention > 0 && checkpoints.len() > retention as u32 {
-            let prune_count = checkpoints.len() - retention as u32;
+        if retention > 0 && checkpoints.len() > retention {
+            let prune_count = checkpoints.len() - retention;
             let mut pruned = Vec::new(env);
             for i in prune_count..checkpoints.len() {
                 if let Some(cp) = checkpoints.get(i) {

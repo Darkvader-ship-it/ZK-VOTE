@@ -21,7 +21,7 @@ interface UseCommentsQueryOptions {
 /**
  * Fetch paginated comments for a proposal (first page only).
  */
-async function fetchPaginatedComments(
+export async function fetchPaginatedComments(
   daoId: number,
   proposalId: number,
   cursor?: string,
@@ -59,7 +59,7 @@ async function fetchAllCommentsWithContent(
 export function useCommentsQuery({
   daoId,
   proposalId,
-  pageSize,
+  pageSize: _pageSize,
   enabled = true,
 }: UseCommentsQueryOptions) {
   return useQuery({

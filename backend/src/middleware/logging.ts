@@ -20,14 +20,17 @@ import crypto from "crypto";
 // import { config } from "../config.js"; // Unused - kept for reference
 import { log, hashIp, getRedactionPolicy } from "../services/logger.js";
 
-const TRACEPARENT_RE = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+const TRACEPARENT_RE =
+  /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
 
 /**
  * Parses an inbound W3C `traceparent` header (version-traceid-parentid-flags,
  * https://www.w3.org/TR/trace-context/#traceparent-header) and returns its
  * trace ID, or `undefined` if the header is absent or malformed.
  */
-export function parseIncomingTraceId(header: string | undefined): string | undefined {
+export function parseIncomingTraceId(
+  header: string | undefined,
+): string | undefined {
   if (!header) return undefined;
   const match = TRACEPARENT_RE.exec(header.trim());
   if (!match) return undefined;
@@ -52,7 +55,9 @@ export function requestLogger(
   // W3C Trace Context (#141): continue an inbound trace ID when present so
   // this request can be correlated across services, otherwise start a new
   // trace. The span ID always identifies this hop.
-  const traceId = parseIncomingTraceId(req.get("traceparent")) || crypto.randomBytes(16).toString("hex");
+  const traceId =
+    parseIncomingTraceId(req.get("traceparent")) ||
+    crypto.randomBytes(16).toString("hex");
   const spanId = crypto.randomBytes(8).toString("hex");
   req.traceId = traceId;
   res.setHeader("traceparent", `00-${traceId}-${spanId}-01`);
@@ -60,7 +65,7 @@ export function requestLogger(
   // Build IP meta based on configuration
   const policy = getRedactionPolicy();
   let ipMeta: Record<string, string> = {};
-  
+
   if (policy.showClientIp === "plain") {
     ipMeta = { ip: req.ip || "" };
   } else if (policy.showClientIp === "hash") {
@@ -118,6 +123,6 @@ export function errorLogger(
     // In production, don't log stack traces
     ...(isProduction ? {} : { stack: err.stack }),
   });
-  
+
   next(err);
 }

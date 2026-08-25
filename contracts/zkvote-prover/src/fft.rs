@@ -5,7 +5,7 @@
 use crate::field::{fr_modulus, Fr};
 use ark_ff::{Field, Zero};
 use num_bigint::BigInt;
-use num_traits::{One, Pow};
+use num_traits::One;
 
 /// Compute the coset FFT roots for a domain of size `domain_size` (= 2^power):
 /// * `omega` = primitive `domain_size`-th root of unity
@@ -27,7 +27,7 @@ pub fn roots(domain_size: u32) -> (Fr, Fr) {
         nqr += &one;
     }
 
-    let power = domain_size.trailing_zeros() as u32;
+    let power = domain_size.trailing_zeros();
     let root_pow = &r_minus_1 >> power; // (r-1) / 2^power
     let inc_pow = &r_minus_1 >> (power + 1); // (r-1) / 2^(power+1)
 
@@ -51,7 +51,7 @@ pub fn fft(a: &mut [Fr], omega: Fr) {
     let mut len = 2;
     while len <= n {
         // wlen = omega^(n/len): primitive len-th root
-        let wlen = omega.pow(&[(n / len) as u64]);
+        let wlen = omega.pow([(n / len) as u64]);
         let mut i = 0;
         while i < n {
             let mut w = Fr::one();

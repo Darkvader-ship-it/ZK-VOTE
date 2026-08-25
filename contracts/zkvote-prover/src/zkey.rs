@@ -2,7 +2,7 @@
 
 use crate::binfile::BinFile;
 use crate::field::{
-    decode_fr_canonical, decode_fr_zk_coef, read_fq_int, read_g1, read_g2, Fr, G1Affine, G2Affine,
+    decode_fr_zk_coef, read_g1, read_g2, Fr, G1Affine, G2Affine,
 };
 use ark_ff::Zero;
 use num_bigint::BigInt;
@@ -43,6 +43,7 @@ fn read_u32(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 
+#[allow(dead_code)]
 fn read_u64(b: &[u8], off: usize) -> u64 {
     u64::from_le_bytes([
         b[off],
@@ -59,6 +60,7 @@ fn read_u64(b: &[u8], off: usize) -> u64 {
 fn read_g1_slice(b: &[u8]) -> G1Affine {
     read_g1(&b[0..64])
 }
+#[allow(dead_code)]
 fn read_g1_canonical_slice(b: &[u8]) -> G1Affine {
     use crate::field::decode_fq_canonical;
     let x = decode_fq_canonical(&b[0..32]);
@@ -85,7 +87,7 @@ pub fn parse_zkey(buf: &[u8]) -> Result<ProvingKey, String> {
     // Section 2: groth16 header
     let s2 = bf.section(2).ok_or("missing header section")?;
     let n8q = read_u32(s2, 0) as usize;
-    let q = read_bigint_le(&s2[4..4 + n8q]);
+    let _q = read_bigint_le(&s2[4..4 + n8q]);
     let off_r = 4 + n8q;
     let n8r = read_u32(s2, off_r) as usize;
     let r_mod = read_bigint_le(&s2[off_r + 4..off_r + 4 + n8r]);
@@ -178,6 +180,7 @@ fn read_bigint_le(b: &[u8]) -> BigInt {
     acc
 }
 
+#[allow(dead_code)]
 fn read_fr_from(b: &[u8]) -> Fr {
     use crate::field::decode_fr;
     decode_fr(b)
@@ -197,6 +200,7 @@ fn read_g2_vec(b: &[u8], n: usize) -> Vec<G2Affine> {
     }
     v
 }
+#[allow(dead_code)]
 fn read_g1_vec_canonical(b: &[u8], n: usize) -> Vec<G1Affine> {
     let mut v = Vec::with_capacity(n);
     for i in 0..n {

@@ -98,11 +98,11 @@ export function createTokenRecord(params: {
   });
 
   logger.info("token_created", {
-      tokenId: id,
-      clientId: params.clientId,
-      isLegacy: params.isLegacy ?? false,
-      hasExpiration: !!expiresAt,
-    });
+    tokenId: id,
+    clientId: params.clientId,
+    isLegacy: params.isLegacy ?? false,
+    hasExpiration: !!expiresAt,
+  });
 
   return {
     id,
@@ -151,9 +151,9 @@ export function migrateLegacyToken(): void {
   });
 
   logger.info("legacy_token_migrated", {
-      tokenId: LEGACY_TOKEN_ID,
-      expiresAt,
-    });
+    tokenId: LEGACY_TOKEN_ID,
+    expiresAt,
+  });
 }
 
 // ============================================
@@ -227,7 +227,10 @@ export function createNewToken(params: {
   return result;
 }
 
-export function revokeToken(tokenId: string, revokedByClientId?: string): boolean {
+export function revokeToken(
+  tokenId: string,
+  revokedByClientId?: string,
+): boolean {
   const token = getAuthTokenById(tokenId);
   if (!token) {
     logger.warn("token_revoke_not_found", { tokenId });
@@ -252,10 +255,10 @@ export function revokeToken(tokenId: string, revokedByClientId?: string): boolea
   });
 
   logger.info("token_revoked", {
-      tokenId,
-      clientId: token.clientId,
-      revokedBy: revokedByClientId ?? "unknown",
-    });
+    tokenId,
+    clientId: token.clientId,
+    revokedBy: revokedByClientId ?? "unknown",
+  });
 
   return true;
 }
@@ -310,11 +313,11 @@ export function rotateSingleToken(oldToken: AuthToken): GeneratedToken | null {
   });
 
   logger.info("token_rotated", {
-      oldTokenId: oldToken.id,
-      newTokenId: newToken.id,
-      clientId: oldToken.clientId,
-      rotationGroupId,
-    });
+    oldTokenId: oldToken.id,
+    newTokenId: newToken.id,
+    clientId: oldToken.clientId,
+    rotationGroupId,
+  });
 
   return newToken;
 }
@@ -329,7 +332,9 @@ export function runTokenRotation(): Array<{
     return [];
   }
 
-  const tokensToRotate = getTokensNeedingRotation(config.tokenRotationIntervalMs);
+  const tokensToRotate = getTokensNeedingRotation(
+    config.tokenRotationIntervalMs,
+  );
 
   const results: Array<{
     oldTokenId: string;

@@ -1,6 +1,8 @@
 // AUTO-GENERATED from circomlib poseidon_constants.circom (BN254).
 // Matches the production circuit Poseidon parameters exactly.
 
+#![allow(dead_code, non_snake_case)]
+
 pub const POSEIDON_NROUNDS_P: [usize; 16] = [
     56, 57, 56, 60, 60, 63, 64, 63, 60, 66, 60, 65, 70, 60, 64, 68,
 ];

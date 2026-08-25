@@ -19,7 +19,11 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, "..", "..", "data");
 const QUEUE_FILE = path.join(DATA_DIR, "degraded-write-queue.json");
 
-export type ServiceTier = "critical" | "important" | "non_critical" | "background";
+export type ServiceTier =
+  | "critical"
+  | "important"
+  | "non_critical"
+  | "background";
 export type ServiceState = "healthy" | "degraded" | "unavailable";
 
 export type ServiceName =
@@ -152,7 +156,9 @@ export function markUnavailable(name: ServiceName, error?: string): void {
   log("error", "service_unavailable", { service: name, error: error ?? null });
 }
 
-export function getServiceHealth(name?: ServiceName): ServiceHealthEntry | ServiceHealthEntry[] {
+export function getServiceHealth(
+  name?: ServiceName,
+): ServiceHealthEntry | ServiceHealthEntry[] {
   if (name) return health.get(name) ?? initEntry(name);
   return Array.from(health.values());
 }
@@ -186,7 +192,11 @@ interface LkgEntry {
 const lkg = new Map<string, LkgEntry>();
 const DEFAULT_LKG_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
-export function setLkg(key: string, value: unknown, ttlMs = DEFAULT_LKG_TTL_MS): void {
+export function setLkg(
+  key: string,
+  value: unknown,
+  ttlMs = DEFAULT_LKG_TTL_MS,
+): void {
   lkg.set(key, { value, storedAt: Date.now(), ttlMs });
 }
 
@@ -284,9 +294,14 @@ export function updateQueuedWriteError(id: string, error: string): void {
  * handler should return the resulting CID or throw.
  */
 export async function drainIpfsPinQueue(
-  handler: (payload: { data: unknown; name?: string }) => Promise<{ cid: string; size?: number }>,
+  handler: (payload: {
+    data: unknown;
+    name?: string;
+  }) => Promise<{ cid: string; size?: number }>,
 ): Promise<{ drained: number; failed: number }> {
-  const items = listQueuedWrites("ipfs").filter((i) => i.operation === "pinJSON");
+  const items = listQueuedWrites("ipfs").filter(
+    (i) => i.operation === "pinJSON",
+  );
   let drained = 0;
   let failed = 0;
   for (const item of items) {

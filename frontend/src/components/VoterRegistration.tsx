@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import {
   Key,
   ShieldCheck,
@@ -8,9 +8,7 @@ import {
   Check,
   RefreshCw,
   Download,
-  FileText,
   AlertTriangle,
-  ChevronRight,
   Lock,
 } from "lucide-react";
 import {
@@ -26,7 +24,7 @@ import {
   generateMnemonic,
   mnemonicToMasterSecret,
   masterSecretToMnemonic,
-  DerivedElectionKeys,
+  type DerivedElectionKeys,
 } from "../lib/crypto";
 
 interface VoterRegistrationProps {

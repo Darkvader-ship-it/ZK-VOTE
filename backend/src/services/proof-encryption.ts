@@ -29,8 +29,17 @@ export function calculateProofHash(
   timestamp: number,
   nonce?: string,
 ): string {
-  const normalizedNullifier = nullifier.startsWith("0x") ? nullifier.slice(2) : nullifier;
-  const data = JSON.stringify(proof) + ":" + normalizedNullifier + ":" + timestamp + ":" + (nonce || "");
+  const normalizedNullifier = nullifier.startsWith("0x")
+    ? nullifier.slice(2)
+    : nullifier;
+  const data =
+    JSON.stringify(proof) +
+    ":" +
+    normalizedNullifier +
+    ":" +
+    timestamp +
+    ":" +
+    (nonce || "");
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
@@ -56,11 +65,23 @@ export function decryptProofPayload(encryptedPayload: string | object): any {
 
   try {
     const parsed = JSON.parse(encryptedPayload);
-    if (parsed && typeof parsed === "object" && parsed.ciphertext && parsed.iv && parsed.key) {
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      parsed.ciphertext &&
+      parsed.iv &&
+      parsed.key
+    ) {
       const keyBuffer = Buffer.from(parsed.key, "hex");
       const ivBuffer = Buffer.from(parsed.iv, "hex");
-      const authTagBuffer = parsed.authTag ? Buffer.from(parsed.authTag, "hex") : undefined;
-      const decipher = crypto.createDecipheriv("aes-256-gcm", keyBuffer, ivBuffer);
+      const authTagBuffer = parsed.authTag
+        ? Buffer.from(parsed.authTag, "hex")
+        : undefined;
+      const decipher = crypto.createDecipheriv(
+        "aes-256-gcm",
+        keyBuffer,
+        ivBuffer,
+      );
       if (authTagBuffer) {
         decipher.setAuthTag(authTagBuffer);
       }
@@ -93,7 +114,10 @@ export function createSubmissionReceipt(
   const receiptId = crypto.randomUUID();
   const secret = config.relayerSecretKey || "fallback-secret";
   const payloadToSign = `${receiptId}:${txHash}:${nullifier}:${daoId}:${proposalId}:${commitmentHash}:${serverTimestamp}`;
-  const signature = crypto.createHmac("sha256", secret).update(payloadToSign).digest("hex");
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(payloadToSign)
+    .digest("hex");
 
   return {
     receiptId,
@@ -110,9 +134,17 @@ export function createSubmissionReceipt(
 /**
  * Verifies a submission receipt signature.
  */
-export function verifySubmissionReceipt(receipt: ProofSubmissionReceipt): boolean {
+export function verifySubmissionReceipt(
+  receipt: ProofSubmissionReceipt,
+): boolean {
   const secret = config.relayerSecretKey || "fallback-secret";
   const payloadToSign = `${receipt.receiptId}:${receipt.txHash}:${receipt.nullifier}:${receipt.daoId}:${receipt.proposalId}:${receipt.commitmentHash}:${receipt.serverTimestamp}`;
-  const expectedSignature = crypto.createHmac("sha256", secret).update(payloadToSign).digest("hex");
-  return crypto.timingSafeEqual(Buffer.from(receipt.signature, "hex"), Buffer.from(expectedSignature, "hex"));
+  const expectedSignature = crypto
+    .createHmac("sha256", secret)
+    .update(payloadToSign)
+    .digest("hex");
+  return crypto.timingSafeEqual(
+    Buffer.from(receipt.signature, "hex"),
+    Buffer.from(expectedSignature, "hex"),
+  );
 }

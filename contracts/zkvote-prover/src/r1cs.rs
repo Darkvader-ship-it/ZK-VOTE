@@ -5,6 +5,7 @@ use crate::field::{decode_fr_canonical, fr_from_decimal, Fr};
 use ark_ff::Zero;
 use std::path::Path;
 
+#[allow(clippy::type_complexity)]
 pub struct R1cs {
     pub n_vars: usize,
     pub n_public: usize,

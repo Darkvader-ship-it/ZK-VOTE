@@ -23,7 +23,12 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 
 import { log } from "../services/logger.js";
-import { queryLimiter, validateBody, validateParams, bodyLimit } from "../middleware/index.js";
+import {
+  queryLimiter,
+  validateBody,
+  validateParams,
+  bodyLimit,
+} from "../middleware/index.js";
 import type { AsyncHandler } from "../types/index.js";
 
 const router = Router();
@@ -107,11 +112,17 @@ export function aggregateTally(ballots: QvBallotReveal[]): {
   const totals = new Map<number, number>();
   for (const ballot of ballots) {
     for (const a of ballot.allocations) {
-      totals.set(a.proposalId, (totals.get(a.proposalId) ?? 0) + a.voiceCredits);
+      totals.set(
+        a.proposalId,
+        (totals.get(a.proposalId) ?? 0) + a.voiceCredits,
+      );
     }
   }
   const tally: QvTallyEntry[] = [...totals.entries()]
-    .map(([proposalId, totalVoiceCredits]) => ({ proposalId, totalVoiceCredits }))
+    .map(([proposalId, totalVoiceCredits]) => ({
+      proposalId,
+      totalVoiceCredits,
+    }))
     .sort((a, b) => a.proposalId - b.proposalId);
   return { tally, totalBallots: ballots.length };
 }

@@ -128,7 +128,7 @@ export interface PaginatedResult<T> {
 }
 
 // Fetch all comments for a proposal (paginated, auto-loads all pages)
-async function fetchAllComments(
+export async function fetchAllComments(
   daoId: number,
   proposalId: number,
 ): Promise<CommentInfo[]> {

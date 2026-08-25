@@ -150,7 +150,11 @@ const headerOptions = {
  * Key generator for wallet address rate limiter
  */
 const walletKeyGenerator = (req: Express.Request): string => {
-  const wallet = (req as any).body?.walletAddress || (req as any).headers?.["x-wallet-address"] || (req as any).ip || "";
+  const wallet =
+    (req as any).body?.walletAddress ||
+    (req as any).headers?.["x-wallet-address"] ||
+    (req as any).ip ||
+    "";
   return crypto.createHash("sha256").update(String(wallet)).digest("hex");
 };
 
@@ -178,7 +182,10 @@ export const walletRateLimiter = isTestMode
   : rateLimit({
       windowMs: 60 * 1000,
       max: 5,
-      message: { error: "Too many proof submissions for this wallet address, please try again later" },
+      message: {
+        error:
+          "Too many proof submissions for this wallet address, please try again later",
+      },
       standardHeaders: true,
       legacyHeaders: true,
       keyGenerator: walletKeyGenerator,

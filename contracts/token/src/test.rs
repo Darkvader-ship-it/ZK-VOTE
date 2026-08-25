@@ -2,7 +2,7 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{ed25519::Sign, Address as _, Events as _, Ledger as _},
+    testutils::{Address as _, Events as _, Ledger as _},
     Env,
 };
 
@@ -963,7 +963,7 @@ fn test_mint_without_cap_has_no_limit() {
 
 #[test]
 fn test_checkpoint_created_on_mint() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (_env, _admin, alice, _bob, client) = setup_token_with_balance();
 
     let checkpoints = client.get_checkpoints(&alice);
     assert_eq!(checkpoints.len(), 1);
@@ -1044,19 +1044,19 @@ fn test_checkpoint_retention_configurable() {
 
 #[test]
 fn test_balance_at_binary_search() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, alice, bob, client) = setup_token_with_balance();
 
     // Create multiple checkpoints at different ledgers
     client.transfer(&alice, &bob, &100i128);
     let ledger1 = env.ledger().sequence();
 
     env.ledger()
-        .with_mut(|l| l.sequence_number = l.sequence_number + 5);
+        .with_mut(|l| l.sequence_number += 5);
     client.transfer(&alice, &bob, &100i128);
     let ledger2 = env.ledger().sequence();
 
     env.ledger()
-        .with_mut(|l| l.sequence_number = l.sequence_number + 5);
+        .with_mut(|l| l.sequence_number += 5);
     client.transfer(&alice, &bob, &100i128);
     let ledger3 = env.ledger().sequence();
 
@@ -1072,7 +1072,7 @@ fn test_balance_at_binary_search() {
 
 #[test]
 fn test_balance_at_zero_address() {
-    let (env, admin, alice, bob, client) = setup_token_with_balance();
+    let (env, _admin, _alice, _bob, client) = setup_token_with_balance();
 
     // Address that never had a balance
     let nobody = Address::generate(&env);

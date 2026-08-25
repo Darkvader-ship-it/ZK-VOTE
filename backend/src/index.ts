@@ -63,7 +63,10 @@ import {
   stopAuthScheduler,
   ensureLegacyTokenMigrated,
 } from "./services/authScheduler.js";
-import { startMemoryMonitor, stopMemoryMonitor } from "./services/memory-monitor.js";
+import {
+  startMemoryMonitor,
+  stopMemoryMonitor,
+} from "./services/memory-monitor.js";
 import { closeDb } from "./services/db.js";
 
 // Middleware
@@ -165,7 +168,11 @@ app.use((_req, res, next) => {
 // since some routes (e.g. /api-docs, /ipfs/image/:cid) are fine to cache.
 // See #140 — per-route CSP exceptions for the IPFS image endpoint are left
 // as follow-up (needs its own directive design, not a 2-3 line change).
-const noStore = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+const noStore = (
+  _req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) => {
   res.setHeader("Cache-Control", "no-store");
   next();
 };
@@ -189,7 +196,12 @@ const corsOptions: cors.CorsOptions = {
     "X-Master-Key",
     "X-CSRF-Token",
   ],
-  exposedHeaders: ["X-Token-Id", "X-Client-Id", "X-Service-Degraded", "X-Service-Status"],
+  exposedHeaders: [
+    "X-Token-Id",
+    "X-Client-Id",
+    "X-Service-Degraded",
+    "X-Service-Status",
+  ],
   maxAge: 86400, // 24 hours
 };
 app.use(cors(corsOptions));
@@ -309,7 +321,11 @@ async function gracefulShutdown(reason: string): Promise<void> {
   shuttingDown = true;
 
   const DRAIN_TIMEOUT_MS = config.shutdownDrainTimeoutMs;
-  log("info", "shutdown_start", { reason, drainTimeoutMs: DRAIN_TIMEOUT_MS, pid: process.pid });
+  log("info", "shutdown_start", {
+    reason,
+    drainTimeoutMs: DRAIN_TIMEOUT_MS,
+    pid: process.pid,
+  });
 
   const forceExitTimer = setTimeout(() => {
     log("warn", "shutdown_forced", {
@@ -329,7 +345,10 @@ async function gracefulShutdown(reason: string): Promise<void> {
     }
     httpServer.close((err: Error | undefined) => {
       if (err) {
-        log("error", "shutdown_http_close_error", { error: err.message, pid: process.pid });
+        log("error", "shutdown_http_close_error", {
+          error: err.message,
+          pid: process.pid,
+        });
       } else {
         log("info", "shutdown_component_stopped", { component: "http_server" });
       }
@@ -340,7 +359,9 @@ async function gracefulShutdown(reason: string): Promise<void> {
   stopBackgroundServices();
   stopAuthScheduler();
   stopWalResilience();
-  log("info", "shutdown_component_stopped", { component: "background_services" });
+  log("info", "shutdown_component_stopped", {
+    component: "background_services",
+  });
 
   await httpClosed;
 
@@ -364,7 +385,11 @@ async function gracefulShutdown(reason: string): Promise<void> {
   }
 
   clearTimeout(forceExitTimer);
-  log("info", "shutdown_complete", { reason, cleanDrain: drained, pid: process.pid });
+  log("info", "shutdown_complete", {
+    reason,
+    cleanDrain: drained,
+    pid: process.pid,
+  });
   process.exit(drained ? 0 : 1);
 }
 
@@ -372,7 +397,10 @@ async function startBackgroundServices(): Promise<void> {
   if (backgroundServicesStarted) return;
   backgroundServicesStarted = true;
 
-  log("info", "starting_background_services", { pid: process.pid, isLeader: isLeaderWorker() });
+  log("info", "starting_background_services", {
+    pid: process.pid,
+    isLeader: isLeaderWorker(),
+  });
 
   // Initialize Pinata and IPFS redundancy layer
   if (config.ipfsEnabled && config.pinataJwt) {
@@ -444,9 +472,7 @@ async function startBackgroundServices(): Promise<void> {
   ) {
     console.log("\nDAO Cache Endpoints:");
     console.log("  GET  /daos                - Get all DAOs (cached)");
-    console.log(
-      "  GET  /daos?user=ADDRESS   - Get DAOs with membership info",
-    );
+    console.log("  GET  /daos?user=ADDRESS   - Get DAOs with membership info");
     console.log("  GET  /dao/:daoId          - Get single DAO (cached)");
     console.log("  POST /daos/sync           - Trigger DAO sync (admin)");
     startDaoSync();
@@ -473,12 +499,16 @@ async function startBackgroundServices(): Promise<void> {
     startWalMonitor(database, dbPath);
     startPeriodicBackups(database, dbPath);
   } catch (err) {
-    log("warn", "wal_resilience_start_failed", { error: (err as Error).message });
+    log("warn", "wal_resilience_start_failed", {
+      error: (err as Error).message,
+    });
   }
 
   // Triggers a graceful restart if usage crosses the critical threshold (#191).
   startMemoryMonitor(() => {
-    log("warn", "memory_threshold_exceeded_triggering_shutdown", { pid: process.pid });
+    log("warn", "memory_threshold_exceeded_triggering_shutdown", {
+      pid: process.pid,
+    });
     void gracefulShutdown("memory_threshold");
   });
 }
@@ -562,10 +592,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (config.clusterEnabled) {
         onLeaderChange(async (isLeader) => {
           if (isLeader) {
-            log("info", "worker_elected_as_primary_starting_background_services", { pid: process.pid });
+            log(
+              "info",
+              "worker_elected_as_primary_starting_background_services",
+              { pid: process.pid },
+            );
             await startBackgroundServices();
           } else {
-            log("info", "worker_demoted_stopping_background_services", { pid: process.pid });
+            log("info", "worker_demoted_stopping_background_services", {
+              pid: process.pid,
+            });
             stopBackgroundServices();
           }
         });

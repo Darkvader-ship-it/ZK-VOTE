@@ -31,7 +31,10 @@ const router = Router();
 /**
  * GET /daos - Get all DAOs with limit/offset pagination
  */
-router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (req: Request, res: Response) => {
+router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (
+  req: Request,
+  res: Response,
+) => {
   const { limit, offset, user } = (req as any).validatedQuery;
 
   try {
@@ -52,9 +55,11 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (req: R
         cached: true,
       });
     }
-      if (user) {
+    if (user) {
       if (!/^[GC][A-Z2-7]{55}$/.test(user)) {
-        return res.status(400).json({ error: "Invalid Stellar address format" });
+        return res
+          .status(400)
+          .json({ error: "Invalid Stellar address format" });
       }
       filteredDaos = allDaos.map((dao) => {
         const adminAddr = daoAdminsCache.get(dao.id) || dao.creator;
@@ -100,31 +105,42 @@ router.get("/daos", queryLimiter, validateQuery(daosQuerySchema), (async (req: R
 /**
  * GET /dao/:daoId - Get specific DAO from cache
  */
-router.get("/dao/:daoId", queryLimiter, validateParams(daoParamsSchema), (req: Request, res: Response) => {
-  const { daoId } = (req as any).validatedParams;
-  try {
-    const dao = dbService.getCachedDao(daoId);
-    if (!dao) {
-      return res.status(404).json({ error: "DAO not found in cache" });
+router.get(
+  "/dao/:daoId",
+  queryLimiter,
+  validateParams(daoParamsSchema),
+  (req: Request, res: Response) => {
+    const { daoId } = (req as any).validatedParams;
+    try {
+      const dao = dbService.getCachedDao(daoId);
+      if (!dao) {
+        return res.status(404).json({ error: "DAO not found in cache" });
+      }
+      res.json({ dao, cached: true });
+    } catch (err) {
+      log("error", "get_dao_failed", { daoId, error: (err as Error).message });
+      res.status(500).json({ error: "Failed to get DAO" });
     }
-    res.json({ dao, cached: true });
-  } catch (err) {
-    log("error", "get_dao_failed", { daoId, error: (err as Error).message });
-    res.status(500).json({ error: "Failed to get DAO" });
-  }
-});
+  },
+);
 
 /**
  * POST /daos/sync - Trigger manual DAO sync (admin only)
  */
-router.post("/daos/sync", bodyLimit("1kb"), authGuard, auditLog("daos_sync"), (async (req: Request, res: Response) => {
-  try {
-    const synced = await syncDaosFromContract();
-    res.json({ success: true, synced });
-  } catch (err) {
-    log("error", "dao_sync_failed", { error: (err as Error).message });
-    res.status(500).json({ error: "Failed to sync DAOs" });
-  }
-}) as AsyncHandler);
+router.post(
+  "/daos/sync",
+  bodyLimit("1kb"),
+  authGuard,
+  auditLog("daos_sync"),
+  (async (req: Request, res: Response) => {
+    try {
+      const synced = await syncDaosFromContract();
+      res.json({ success: true, synced });
+    } catch (err) {
+      log("error", "dao_sync_failed", { error: (err as Error).message });
+      res.status(500).json({ error: "Failed to sync DAOs" });
+    }
+  }) as AsyncHandler,
+);
 
 export default router;

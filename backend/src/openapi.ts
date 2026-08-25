@@ -268,7 +268,13 @@ export const ENDPOINTS: EndpointDef[] = [
       proposalId: idParam("1", "Proposal identifier"),
     },
     query: {
-      limit: z.number().int().min(1).max(500).optional().openapi({ example: 100 }),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .openapi({ example: 100 }),
       cursor: z.string().optional().openapi({ example: "eyJpIjoxMjN9" }),
     },
     responseExample: {
@@ -343,12 +349,22 @@ export const ENDPOINTS: EndpointDef[] = [
     method: "get",
     path: "/daos",
     tag: "DAOs",
-    summary: "List cached DAOs with pagination, optionally including user membership role",
+    summary:
+      "List cached DAOs with pagination, optionally including user membership role",
     auth: false,
     rateLimit: "queryLimiter",
     query: {
-      user: z.string().optional().openapi({ example: "GABCDEF...", description: "Stellar address" }),
-      limit: z.number().int().min(1).max(500).optional().openapi({ example: 100 }),
+      user: z
+        .string()
+        .optional()
+        .openapi({ example: "GABCDEF...", description: "Stellar address" }),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .openapi({ example: 100 }),
       cursor: z.string().optional().openapi({ example: "100" }),
     },
     responseExample: {
@@ -476,12 +492,30 @@ export const ENDPOINTS: EndpointDef[] = [
     rateLimit: "queryLimiter",
     params: { daoId: idParam("0", "DAO identifier") },
     query: {
-      limit: z.number().int().min(1).max(500).optional().openapi({ example: 100 }),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .optional()
+        .openapi({ example: 100 }),
       cursor: z.string().optional().openapi({ example: "eyJpIjoxMjN9" }),
-      types: z.string().optional().openapi({ example: "vote_cast,proposal_created" }),
-      orderBy: z.enum(['id', 'timestamp', 'ledger', 'type', 'verified', 'created_at']).optional().openapi({ example: "timestamp" }),
-      orderDirection: z.enum(['ASC', 'DESC']).optional().openapi({ example: "DESC" }),
-      cursorField: z.enum(['id', 'ledger', 'timestamp']).optional().openapi({ example: "id" }),
+      types: z
+        .string()
+        .optional()
+        .openapi({ example: "vote_cast,proposal_created" }),
+      orderBy: z
+        .enum(["id", "timestamp", "ledger", "type", "verified", "created_at"])
+        .optional()
+        .openapi({ example: "timestamp" }),
+      orderDirection: z
+        .enum(["ASC", "DESC"])
+        .optional()
+        .openapi({ example: "DESC" }),
+      cursorField: z
+        .enum(["id", "ledger", "timestamp"])
+        .optional()
+        .openapi({ example: "id" }),
     },
     responseExample: {
       data: [],

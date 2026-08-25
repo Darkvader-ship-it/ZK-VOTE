@@ -15,11 +15,20 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { timeQuery, invalidateCachePrefix, getDbStats as getMonitorDbStats, profileEventQueries } from "./dbMonitor.js";
+import {
+  timeQuery,
+  invalidateCachePrefix,
+  getDbStats as getMonitorDbStats,
+  profileEventQueries,
+} from "./dbMonitor.js";
 import { migrateUp } from "./migrate.js";
 import { kysely } from "./kysely.js";
 import { sql } from "kysely";
-import { initWalResilience, configureWalResilience, incrementTransactionCounter } from "./walResilience.js";
+import {
+  initWalResilience,
+  configureWalResilience,
+  incrementTransactionCounter,
+} from "./walResilience.js";
 import { config } from "../config.js";
 
 /** Optional Prometheus sink — wired from boot so db.ts stays testable without prom-client. */
@@ -333,7 +342,12 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "revoked_at", type: "TEXT", notNull: false, primaryKey: false },
       { name: "last_used_at", type: "TEXT", notNull: false, primaryKey: false },
       { name: "use_count", type: "INTEGER", notNull: true, primaryKey: false },
-      { name: "rotation_group_id", type: "TEXT", notNull: false, primaryKey: false },
+      {
+        name: "rotation_group_id",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "is_legacy", type: "INTEGER", notNull: true, primaryKey: false },
     ],
     indexes: [
@@ -341,7 +355,10 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "idx_auth_tokens_client_id", columns: ["client_id"] },
       { name: "idx_auth_tokens_status", columns: ["status"] },
       { name: "idx_auth_tokens_expires_at", columns: ["expires_at"] },
-      { name: "idx_auth_tokens_rotation_group", columns: ["rotation_group_id"] },
+      {
+        name: "idx_auth_tokens_rotation_group",
+        columns: ["rotation_group_id"],
+      },
     ],
   },
   auth_token_audit: {
@@ -354,7 +371,12 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
       { name: "method", type: "TEXT", notNull: false, primaryKey: false },
       { name: "ip_hash", type: "TEXT", notNull: false, primaryKey: false },
       { name: "success", type: "INTEGER", notNull: true, primaryKey: false },
-      { name: "error_message", type: "TEXT", notNull: false, primaryKey: false },
+      {
+        name: "error_message",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
     ],
     indexes: [
@@ -367,7 +389,12 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
   vote_submissions: {
     columns: [
       { name: "id", type: "INTEGER", notNull: true, primaryKey: true },
-      { name: "nullifier_hash", type: "TEXT", notNull: true, primaryKey: false },
+      {
+        name: "nullifier_hash",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: false,
+      },
       { name: "status", type: "TEXT", notNull: true, primaryKey: false },
       { name: "tx_hash", type: "TEXT", notNull: false, primaryKey: false },
       { name: "created_at", type: "INTEGER", notNull: true, primaryKey: false },
@@ -379,11 +406,26 @@ const EXPECTED_SCHEMA: Record<string, ExpectedTable> = {
   },
   proof_commitments: {
     columns: [
-      { name: "commitment_hash", type: "TEXT", notNull: true, primaryKey: true },
+      {
+        name: "commitment_hash",
+        type: "TEXT",
+        notNull: true,
+        primaryKey: true,
+      },
       { name: "nullifier", type: "TEXT", notNull: true, primaryKey: false },
       { name: "dao_id", type: "INTEGER", notNull: true, primaryKey: false },
-      { name: "proposal_id", type: "INTEGER", notNull: true, primaryKey: false },
-      { name: "wallet_address", type: "TEXT", notNull: false, primaryKey: false },
+      {
+        name: "proposal_id",
+        type: "INTEGER",
+        notNull: true,
+        primaryKey: false,
+      },
+      {
+        name: "wallet_address",
+        type: "TEXT",
+        notNull: false,
+        primaryKey: false,
+      },
       { name: "timestamp", type: "INTEGER", notNull: true, primaryKey: false },
       { name: "status", type: "TEXT", notNull: true, primaryKey: false },
       { name: "created_at", type: "TEXT", notNull: true, primaryKey: false },
@@ -413,41 +455,43 @@ function normalizeType(t: string): string {
 
 /** Allowlisted event types for dynamic filtering */
 const ALLOWED_EVENT_TYPES = new Set([
-  'dao_create',
-  'admin_transfer', 
-  'member_added',
-  'member_revoked',
-  'member_left',
-  'tree_init',
-  'voter_registered',
-  'voter_removed',
-  'voter_reinstated',
-  'vk_updated',
-  'proposal_created',
-  'proposal_closed',
-  'proposal_archived',
-  'vote_cast'
+  "dao_create",
+  "admin_transfer",
+  "member_added",
+  "member_revoked",
+  "member_left",
+  "tree_init",
+  "voter_registered",
+  "voter_removed",
+  "voter_reinstated",
+  "vk_updated",
+  "proposal_created",
+  "proposal_closed",
+  "proposal_archived",
+  "vote_cast",
 ]);
 
 /** Allowlisted column names for dynamic ORDER BY clauses */
 const ALLOWED_ORDER_COLUMNS = new Set([
-  'id',
-  'timestamp',
-  'ledger',
-  'type',
-  'verified',
-  'created_at'
+  "id",
+  "timestamp",
+  "ledger",
+  "type",
+  "verified",
+  "created_at",
 ]);
 
 /** Allowlisted sort directions */
-const ALLOWED_SORT_DIRECTIONS = new Set(['ASC', 'DESC']);
+const ALLOWED_SORT_DIRECTIONS = new Set(["ASC", "DESC"]);
 
 /**
  * Validate and sanitize DAO ID to prevent table name injection
  */
 function validateDaoId(daoId: number): number {
   if (!Number.isInteger(daoId) || daoId < 1 || daoId > 999999) {
-    throw new Error(`Invalid DAO ID: ${daoId}. Must be positive integer ≤ 999999`);
+    throw new Error(
+      `Invalid DAO ID: ${daoId}. Must be positive integer ≤ 999999`,
+    );
   }
   return daoId;
 }
@@ -456,9 +500,9 @@ function validateDaoId(daoId: number): number {
  * Validate event types against allowlist
  */
 function validateEventTypes(types: string[]): string[] {
-  const invalid = types.filter(type => !ALLOWED_EVENT_TYPES.has(type));
+  const invalid = types.filter((type) => !ALLOWED_EVENT_TYPES.has(type));
   if (invalid.length > 0) {
-    throw new Error(`Invalid event types: ${invalid.join(', ')}`);
+    throw new Error(`Invalid event types: ${invalid.join(", ")}`);
   }
   return types;
 }
@@ -466,7 +510,10 @@ function validateEventTypes(types: string[]): string[] {
 /**
  * Decode a base64-encoded cursor back into its components.
  */
-function decodeCursor(cursor: string, cursorField: string): { i?: number; l?: number; t?: string } {
+function decodeCursor(
+  cursor: string,
+  cursorField: string,
+): { i?: number; l?: number; t?: string } {
   try {
     const decoded = JSON.parse(Buffer.from(cursor, "base64").toString("utf-8"));
     return decoded;
@@ -478,16 +525,21 @@ function decodeCursor(cursor: string, cursorField: string): { i?: number; l?: nu
 /**
  * Validate and sanitize ORDER BY parameters
  */
-function validateOrderBy(column: string, direction: string = 'DESC'): { column: string; direction: string } {
+function validateOrderBy(
+  column: string,
+  direction: string = "DESC",
+): { column: string; direction: string } {
   if (!ALLOWED_ORDER_COLUMNS.has(column)) {
-    throw new Error(`Invalid order column: ${column}. Allowed: ${Array.from(ALLOWED_ORDER_COLUMNS).join(', ')}`);
+    throw new Error(
+      `Invalid order column: ${column}. Allowed: ${Array.from(ALLOWED_ORDER_COLUMNS).join(", ")}`,
+    );
   }
-  
+
   const normalizedDirection = direction.toUpperCase();
   if (!ALLOWED_SORT_DIRECTIONS.has(normalizedDirection)) {
     throw new Error(`Invalid sort direction: ${direction}. Allowed: ASC, DESC`);
   }
-  
+
   return { column, direction: normalizedDirection };
 }
 
@@ -509,20 +561,24 @@ const log = (
 /**
  * Log SQL queries with parameter redaction for security
  */
-function logQuery(query: string, params: unknown[] = [], operation: string): void {
+function logQuery(
+  query: string,
+  params: unknown[] = [],
+  operation: string,
+): void {
   // Redact sensitive parameters (keep first 4 chars for debugging)
   const redactedParams = params.map((param, index) => {
-    if (typeof param === 'string' && param.length > 8) {
+    if (typeof param === "string" && param.length > 8) {
       return `${param.slice(0, 4)}****[REDACTED]`;
     }
     return param;
   });
-  
-  log('debug', 'sql_query_executed', {
+
+  log("debug", "sql_query_executed", {
     operation,
-    query: query.replace(/\s+/g, ' ').trim(),
+    query: query.replace(/\s+/g, " ").trim(),
     paramCount: params.length,
-    redactedParams: redactedParams.slice(0, 5) // Limit to first 5 params
+    redactedParams: redactedParams.slice(0, 5), // Limit to first 5 params
   });
 }
 
@@ -577,7 +633,9 @@ export function getWalSizeBytes(dbFile: string = activeDbFile): number {
 }
 
 function readDataVersion(database: DatabaseType): number {
-  const ver = database.pragma("data_version", { simple: true }) as number | string;
+  const ver = database.pragma("data_version", { simple: true }) as
+    | number
+    | string;
   return typeof ver === "number" ? ver : Number(ver) || 0;
 }
 
@@ -594,13 +652,17 @@ export function getReadReplicaLagMs(): number {
     if (writeVer === readVer) {
       try {
         metricsSink()?.setReadLagMs(0);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       return 0;
     }
     const lag = lastWriteAtMs > 0 ? Math.max(0, Date.now() - lastWriteAtMs) : 0;
     try {
       metricsSink()?.setReadLagMs(lag);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return lag;
   } catch {
     return 0;
@@ -653,7 +715,10 @@ function openWriteConnection(dbFile: string): DatabaseType {
 }
 
 function openReadConnection(dbFile: string): DatabaseType {
-  const database = new Database(dbFile, { readonly: true, fileMustExist: true });
+  const database = new Database(dbFile, {
+    readonly: true,
+    fileMustExist: true,
+  });
   database.pragma("foreign_keys = ON");
   database.pragma("busy_timeout = 5000");
   try {
@@ -684,14 +749,18 @@ export function reconnectWriteDb(): boolean {
     markWriteSuccess();
     try {
       metricsSink()?.incWriteFailover("success");
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     log("info", "db_write_reconnect_success", { path: activeDbFile });
     return true;
   } catch (err) {
     markWriteFailure(err);
     try {
       metricsSink()?.incWriteFailover("failure");
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     log("error", "db_write_reconnect_failed", {
       error: err instanceof Error ? err.message : String(err),
     });
@@ -705,7 +774,9 @@ export function reopenReadDb(): void {
   if (readDb) {
     try {
       readDb.close();
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     readDb = null;
   }
   try {
@@ -825,12 +896,12 @@ function ensurePartitionTable(daoId: number): void {
   if (knownPartitions.has(daoId)) return;
   const database = getWriteDb();
   const tableName = partitionTableName(daoId); // This validates daoId
-  
+
   // SECURITY: Use allowlisted event types in CHECK constraint
   const allowedEventTypesString = Array.from(ALLOWED_EVENT_TYPES)
-    .map(type => `'${type}'`)
-    .join(',');
-  
+    .map((type) => `'${type}'`)
+    .join(",");
+
   const createTableSQL = `
     CREATE TABLE IF NOT EXISTS ${tableName} (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -848,10 +919,10 @@ function ensurePartitionTable(daoId: number): void {
     CREATE INDEX IF NOT EXISTS idx_${tableName}_ledger ON ${tableName}(ledger DESC);
     CREATE INDEX IF NOT EXISTS idx_${tableName}_verified ON ${tableName}(verified);
   `;
-  
-  logQuery(createTableSQL, [], 'ensure_partition_table');
+
+  logQuery(createTableSQL, [], "ensure_partition_table");
   database.exec(createTableSQL);
-  
+
   knownPartitions.add(daoId);
   // Record this partition in metadata for cross-DAO queries
   recordPartitionDaoId(database, daoId);
@@ -898,17 +969,33 @@ export function initDb(dbPath?: string): DatabaseType {
       writeDb.prepare("SELECT 1").get();
       return writeDb;
     } catch {
-      try { writeDb.close(); } catch { /* ignore */ }
+      try {
+        writeDb.close();
+      } catch {
+        /* ignore */
+      }
       writeDb = null;
-      try { readDb?.close(); } catch { /* ignore */ }
+      try {
+        readDb?.close();
+      } catch {
+        /* ignore */
+      }
       readDb = null;
     }
   }
 
   // Switching files (or reopening after close): drop prior handles
   if (writeDb || readDb) {
-    try { readDb?.close(); } catch { /* ignore */ }
-    try { writeDb?.close(); } catch { /* ignore */ }
+    try {
+      readDb?.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      writeDb?.close();
+    } catch {
+      /* ignore */
+    }
     writeDb = null;
     readDb = null;
     knownPartitions.clear();
@@ -927,7 +1014,7 @@ export function initDb(dbPath?: string): DatabaseType {
 
   activeDbFile = dbFile;
   let database = new Database(dbFile);
-  
+
   // SECURITY: Enable WAL mode and foreign key constraints
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
@@ -944,7 +1031,7 @@ export function initDb(dbPath?: string): DatabaseType {
     retryMaxDelayMs: config.dbRetryMaxDelayMs,
   });
   initWalResilience(database, dbFile);
-  
+
   // SECURITY: Enable strict mode if available (better-sqlite3 v8+)
   try {
     database = openWriteConnection(dbFile);
@@ -1299,13 +1386,17 @@ export function closeDb(): void {
   if (readDb) {
     try {
       readDb.close();
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     readDb = null;
   }
   if (writeDb) {
     try {
       writeDb.close();
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     writeDb = null;
     knownPartitions.clear();
     writeHealthy = true;
@@ -1593,7 +1684,9 @@ export function addEvent(event: EventInput): boolean {
           markWriteFailure(err);
           if (reconnectWriteDb()) {
             ensurePartitionTable(event.daoId);
-            getWriteDb().prepare(compiled.sql).run(...compiled.parameters);
+            getWriteDb()
+              .prepare(compiled.sql)
+              .run(...compiled.parameters);
             markWriteSuccess();
             return true;
           }
@@ -1650,7 +1743,11 @@ export function verifyEvent(txHash: string, ledger: number): void {
   }
 
   // SECURITY: Basic input validation
-  if (typeof txHash !== 'string' || txHash.length === 0 || txHash.length > 128) {
+  if (
+    typeof txHash !== "string" ||
+    txHash.length === 0 ||
+    txHash.length > 128
+  ) {
     throw new Error(`Invalid txHash: ${txHash}`);
   }
   if (!Number.isInteger(ledger) || ledger < 0) {
@@ -1664,8 +1761,8 @@ export function verifyEvent(txHash: string, ledger: number): void {
     const tableName = partitionTableName(daoId); // Validates daoId
     const query = `UPDATE ${tableName} SET verified = 1, ledger = ? WHERE tx_hash = ? AND verified = 0`;
     const params = [ledger, txHash];
-    
-    logQuery(query, params, 'verify_event');
+
+    logQuery(query, params, "verify_event");
     const result = database.prepare(query).run(...params);
     if (result.changes > 0) return; // Done
   }
@@ -1693,10 +1790,10 @@ export function getEventsForDao(
     offset = 0,
     types = null,
     verifiedOnly = false,
-    orderBy = 'timestamp',
-    orderDirection = 'DESC',
+    orderBy = "timestamp",
+    orderDirection = "DESC",
     cursor,
-    cursorField = 'id',
+    cursorField = "id",
   } = options;
 
   // SECURITY: Validate limit and offset
@@ -1704,7 +1801,10 @@ export function getEventsForDao(
   const validOffset = Math.max(0, offset);
 
   // SECURITY: Validate ORDER BY parameters
-  const { column: orderColumn, direction } = validateOrderBy(orderBy, orderDirection);
+  const { column: orderColumn, direction } = validateOrderBy(
+    orderBy,
+    orderDirection,
+  );
 
   let query = kysely
     .selectFrom(sql<any>`${sql.raw(tableName)}`.as("events"))
@@ -1741,7 +1841,9 @@ export function getEventsForDao(
   const compiled = query.compile();
 
   logQuery(compiled.sql, compiled.parameters as any[], "get_events_for_dao");
-  const events = database.prepare(compiled.sql).all(...compiled.parameters) as EventRow[];
+  const events = database
+    .prepare(compiled.sql)
+    .all(...compiled.parameters) as EventRow[];
 
   // Add dao_id to each row (partition tables don't store it)
   const enrichedEvents = events.map((e) => ({ ...e, dao_id: daoId }));
@@ -1758,7 +1860,11 @@ export function getEventsForDao(
   }
 
   const countCompiled = countQuery.compile();
-  logQuery(countCompiled.sql, countCompiled.parameters as any[], "count_events_for_dao");
+  logQuery(
+    countCompiled.sql,
+    countCompiled.parameters as any[],
+    "count_events_for_dao",
+  );
   const countResult = database
     .prepare(countCompiled.sql)
     .get(...countCompiled.parameters) as CountRow;
@@ -1888,7 +1994,9 @@ export interface TransactionLogRow {
 /**
  * Get transaction log by nullifier hash.
  */
-export function getTransactionLog(nullifierHash: string): TransactionLogRow | null {
+export function getTransactionLog(
+  nullifierHash: string,
+): TransactionLogRow | null {
   const database = getReadDb();
   const row = database
     .prepare("SELECT * FROM transaction_log WHERE nullifier_hash = ?")
@@ -1970,7 +2078,9 @@ export interface VoteSubmissionRow {
 /**
  * Look up an existing vote submission by nullifier hash.
  */
-export function getVoteSubmission(nullifierHash: string): VoteSubmissionRow | null {
+export function getVoteSubmission(
+  nullifierHash: string,
+): VoteSubmissionRow | null {
   const database = getReadDb();
   const row = database
     .prepare("SELECT * FROM vote_submissions WHERE nullifier_hash = ?")
@@ -2142,9 +2252,10 @@ export function insertAuditLog(entry: AuditLogInput): AuditLogRow {
 /**
  * Paginated audit log query (newest first), optionally filtered by action.
  */
-export function getAuditLogs(
-  options: AuditLogQueryOptions = {},
-): { logs: AuditLogRow[]; total: number } {
+export function getAuditLogs(options: AuditLogQueryOptions = {}): {
+  logs: AuditLogRow[];
+  total: number;
+} {
   const database = getReadDb();
   const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
   const offset = Math.max(0, options.offset ?? 0);
@@ -2423,7 +2534,7 @@ export function migrateFromJson(jsonPath: string): number {
           log("warn", "json_migration_invalid_dao_id", { daoIdStr });
           continue;
         }
-        
+
         const tableName = partitionTableName(daoId); // This validates daoId
         ensurePartitionTable(daoId);
 
@@ -2437,9 +2548,9 @@ export function migrateFromJson(jsonPath: string): number {
           try {
             // SECURITY: Validate event type
             if (!ALLOWED_EVENT_TYPES.has(event.type)) {
-              log("warn", "json_migration_invalid_event_type", { 
-                type: event.type, 
-                daoId 
+              log("warn", "json_migration_invalid_event_type", {
+                type: event.type,
+                daoId,
               });
               continue;
             }
@@ -2448,10 +2559,8 @@ export function migrateFromJson(jsonPath: string): number {
             const timestamp = event.timestamp ?? new Date().toISOString();
             if (
               event.timestamp &&
-              (
-                !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp) ||
-                Number.isNaN(Date.parse(event.timestamp))
-              )
+              (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(event.timestamp) ||
+                Number.isNaN(Date.parse(event.timestamp)))
             ) {
               log("warn", "json_migration_invalid_timestamp", {
                 timestamp: event.timestamp,
@@ -2468,14 +2577,14 @@ export function migrateFromJson(jsonPath: string): number {
               timestamp,
             ];
 
-            logQuery(insertQuery, params, 'migrate_from_json');
+            logQuery(insertQuery, params, "migrate_from_json");
             insertStmt.run(...params);
             migrated++;
           } catch (err) {
-            log("warn", "json_migration_event_failed", { 
+            log("warn", "json_migration_event_failed", {
               error: (err as Error).message,
               daoId,
-              eventType: event.type 
+              eventType: event.type,
             });
             // Skip this event and continue
           }
@@ -2483,7 +2592,11 @@ export function migrateFromJson(jsonPath: string): number {
       }
 
       // Save last ledger
-      if (data.lastLedger && Number.isInteger(data.lastLedger) && data.lastLedger > 0) {
+      if (
+        data.lastLedger &&
+        Number.isInteger(data.lastLedger) &&
+        data.lastLedger > 0
+      ) {
         setMetadata("lastLedger", data.lastLedger);
       }
     })();
@@ -3069,10 +3182,7 @@ export function markTokenRotated(oldId: string, newId: string): void {
   })();
 }
 
-export function recordTokenUsage(
-  id: string,
-  ipHash: string | null,
-): void {
+export function recordTokenUsage(id: string, ipHash: string | null): void {
   const database = initDb();
   const query =
     "UPDATE auth_tokens SET last_used_at = CURRENT_TIMESTAMP, use_count = use_count + 1 WHERE id = ?";
@@ -3111,7 +3221,9 @@ export function cleanupRevokedTokens(maxAgeMs = 7_776_000_000): number {
 export function getAuthTokensByClient(clientId: string): AuthToken[] {
   const database = initDb();
   const rows = database
-    .prepare("SELECT * FROM auth_tokens WHERE client_id = ? ORDER BY created_at DESC")
+    .prepare(
+      "SELECT * FROM auth_tokens WHERE client_id = ? ORDER BY created_at DESC",
+    )
     .all(clientId) as Record<string, unknown>[];
   return rows.map(rowToAuthToken);
 }
@@ -3183,10 +3295,20 @@ export function recordProofCommitment(
        VALUES (?, ?, ?, ?, ?, ?, 'COMMITTED', ?)
        ON CONFLICT(commitment_hash) DO UPDATE SET timestamp = excluded.timestamp, status = 'COMMITTED'`,
     )
-    .run(commitmentHash, nullifier, daoId, proposalId, walletAddress || null, timestamp, createdAt);
+    .run(
+      commitmentHash,
+      nullifier,
+      daoId,
+      proposalId,
+      walletAddress || null,
+      timestamp,
+      createdAt,
+    );
 }
 
-export function getProofCommitment(commitmentHash: string): ProofCommitmentRecord | null {
+export function getProofCommitment(
+  commitmentHash: string,
+): ProofCommitmentRecord | null {
   const database = initDb();
   const row = database
     .prepare("SELECT * FROM proof_commitments WHERE commitment_hash = ?")
@@ -3265,7 +3387,10 @@ export function getAuditLog(
   query += " ORDER BY id DESC LIMIT ? OFFSET ?";
   params.push(limit, offset);
 
-  const rows = database.prepare(query).all(...params) as Record<string, unknown>[];
+  const rows = database.prepare(query).all(...params) as Record<
+    string,
+    unknown
+  >[];
   return rows.map(rowToAuditEntry);
 }
 
@@ -3283,7 +3408,8 @@ export function updateProofCommitmentStatus(
 ): void {
   const database = initDb();
   database
-    .prepare("UPDATE proof_commitments SET status = ? WHERE commitment_hash = ?")
+    .prepare(
+      "UPDATE proof_commitments SET status = ? WHERE commitment_hash = ?",
+    )
     .run(status, commitmentHash);
 }
-

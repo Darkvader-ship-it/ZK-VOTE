@@ -157,8 +157,7 @@ const DANGEROUS_CONTROL_CHARS =
 // Tags dropped together with their contents: executable script and CSS.
 const SCRIPT_TAG_RE =
   /<script\b[^<]*(?:(?!<\/script\s*>)<[^<]*)*<\/script\s*>/gi;
-const STYLE_TAG_RE =
-  /<style\b[^<]*(?:(?!<\/style\s*>)<[^<]*)*<\/style\s*>/gi;
+const STYLE_TAG_RE = /<style\b[^<]*(?:(?!<\/style\s*>)<[^<]*)*<\/style\s*>/gi;
 // Leftover/standalone occurrences (including malformed split tags) of the
 // content-bearing elements above and of active-markup containers.
 const STANDALONE_TAG_RE =
@@ -176,8 +175,7 @@ const STYLE_ATTR_UNQUOTED_RE = /\sstyle\s*=[^\s>]*/gi;
 // tabs/newlines inside scheme names ("java\tscript:").
 const JS_SCHEME_RE =
   /j[\s]*a[\s]*v[\s]*a[\s]*s[\s]*c[\s]*r[\s]*i[\s]*p[\s]*t[\s]*:/gi;
-const VB_SCHEME_RE =
-  /v[\s]*b[\s]*s[\s]*c[\s]*r[\s]*i[\s]*p[\s]*t[\s]*:/gi;
+const VB_SCHEME_RE = /v[\s]*b[\s]*s[\s]*c[\s]*r[\s]*i[\s]*p[\s]*t[\s]*:/gi;
 const LIVESCRIPT_SCHEME_RE =
   /l[\s]*i[\s]*v[\s]*e[\s]*s[\s]*c[\s]*r[\s]*i[\s]*p[\s]*t[\s]*:/gi;
 const MOCHA_SCHEME_RE = /m[\s]*o[\s]*c[\s]*h[\s]*a[\s]*:/gi;
@@ -371,9 +369,7 @@ export function validateMetadataSchema(
  * "prototype", or any "__"-prefixed name).
  */
 function isDangerousKey(key: string): boolean {
-  return (
-    key.startsWith("__") || key === "constructor" || key === "prototype"
-  );
+  return key.startsWith("__") || key === "constructor" || key === "prototype";
 }
 
 /**
@@ -454,7 +450,10 @@ function sanitizeValue(
     }
     // Sanitize both keys and values
     const sanitizedKey = sanitizeString(key);
-    if (isDangerousKey(sanitizedKey) || isDangerousKey(canonicalizeKey(sanitizedKey))) {
+    if (
+      isDangerousKey(sanitizedKey) ||
+      isDangerousKey(canonicalizeKey(sanitizedKey))
+    ) {
       continue;
     }
     sanitized[sanitizedKey] = sanitizeValue(
@@ -658,13 +657,10 @@ export async function pinFile(
 
   // SDK v2.x: pinata.upload.public.file() with chainable methods
   const result = await pinataBreaker.execute(async () =>
-    pinata!.upload.public
-      .file(file)
-      .name(filename)
-      .keyvalues({
-        app: "zkvote",
-        type: "proposal-image",
-      }),
+    pinata!.upload.public.file(file).name(filename).keyvalues({
+      app: "zkvote",
+      type: "proposal-image",
+    }),
   );
 
   const sizeBytes = result.size || buffer.length;
@@ -740,7 +736,9 @@ export function sanitizeCid(cid: string): string {
   const trimmed = cid.trim();
 
   if (/[/?\\#\s\0\r\n\t]/.test(trimmed)) {
-    throw new Error("CID contains forbidden characters, query parameters, or path separators");
+    throw new Error(
+      "CID contains forbidden characters, query parameters, or path separators",
+    );
   }
 
   if (!isValidCid(trimmed)) {
@@ -843,10 +841,15 @@ export function isAllowedGatewayUrl(urlString: string): boolean {
     if (gatewayUrl) {
       try {
         const configuredHost = new URL(gatewayUrl).hostname.toLowerCase();
-        if (hostname === configuredHost || hostname.endsWith("." + configuredHost)) {
+        if (
+          hostname === configuredHost ||
+          hostname.endsWith("." + configuredHost)
+        ) {
           return true;
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     // Match against public gateways
@@ -856,7 +859,9 @@ export function isAllowedGatewayUrl(urlString: string): boolean {
         if (hostname === gwHost) {
           return true;
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     return false;
@@ -898,7 +903,9 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
   }
 
   if (!isAllowedGatewayUrl(url)) {
-    throw new Error("Target URL is not an allowed gateway or resolves to a restricted IP address");
+    throw new Error(
+      "Target URL is not an allowed gateway or resolves to a restricted IP address",
+    );
   }
 
   const controller = new AbortController();
@@ -986,7 +993,9 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
   }
 
   if (!isAllowedGatewayUrl(url)) {
-    throw new Error("Target URL is not an allowed gateway or resolves to a restricted IP address");
+    throw new Error(
+      "Target URL is not an allowed gateway or resolves to a restricted IP address",
+    );
   }
 
   const controller = new AbortController();

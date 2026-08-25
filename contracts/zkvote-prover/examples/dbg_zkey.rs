@@ -17,7 +17,6 @@ fn main() {
         );
     }
 
-    use ark_ec::CurveGroup;
     use zkvote_prover::field::{fq_to_bigint, read_g1};
     let s5 = bf.section(5).unwrap();
     let p0 = read_g1(&s5[0..64]);

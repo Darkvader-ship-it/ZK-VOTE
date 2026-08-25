@@ -5,10 +5,10 @@
  * generation of compressed recursive proofs, and relaying to Soroban.
  */
 
-import { exec } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-import { promisify } from 'util';
+import { exec } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
+import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
@@ -43,7 +43,7 @@ export class NovaAggregatorService {
   private tempDir: string;
 
   constructor(tempDir?: string) {
-    this.tempDir = tempDir || path.join(process.cwd(), 'temp', 'nova');
+    this.tempDir = tempDir || path.join(process.cwd(), "temp", "nova");
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }
@@ -56,31 +56,39 @@ export class NovaAggregatorService {
     daoId: number,
     proposalId: number,
     root: string,
-    witnesses: VoteWitnessPayload[]
+    witnesses: VoteWitnessPayload[],
   ): Promise<RecursiveProofPayload> {
     const timestamp = Date.now();
-    const batchPath = path.join(this.tempDir, `batch_${daoId}_${proposalId}_${timestamp}.json`);
-    const outputPath = path.join(this.tempDir, `proof_${daoId}_${proposalId}_${timestamp}.json`);
+    const batchPath = path.join(
+      this.tempDir,
+      `batch_${daoId}_${proposalId}_${timestamp}.json`,
+    );
+    const outputPath = path.join(
+      this.tempDir,
+      `proof_${daoId}_${proposalId}_${timestamp}.json`,
+    );
 
     try {
       // 1. Write vote witness batch to temp JSON file
-      fs.writeFileSync(batchPath, JSON.stringify(witnesses, null, 2), 'utf8');
+      fs.writeFileSync(batchPath, JSON.stringify(witnesses, null, 2), "utf8");
 
       // 2. Invoke nova-aggregator CLI tool
       const cargoCmd = `cargo run -p nova-aggregator --bin nova-aggregator -- --batch "${batchPath}" --out "${outputPath}" --root "${root}" --benchmark`;
-      
+
       const { stdout, stderr } = await execAsync(cargoCmd, {
-        cwd: path.resolve(__dirname, '../../../'),
+        cwd: path.resolve(__dirname, "../../../"),
       });
 
-      console.info('[NovaService] Aggregation CLI output:', stdout);
+      console.info("[NovaService] Aggregation CLI output:", stdout);
 
       if (!fs.existsSync(outputPath)) {
-        throw new Error(`Nova aggregator failed to create output proof file: ${stderr}`);
+        throw new Error(
+          `Nova aggregator failed to create output proof file: ${stderr}`,
+        );
       }
 
       // 3. Read and parse output recursive proof payload
-      const proofRaw = fs.readFileSync(outputPath, 'utf8');
+      const proofRaw = fs.readFileSync(outputPath, "utf8");
       const payload: RecursiveProofPayload = JSON.parse(proofRaw);
 
       return payload;

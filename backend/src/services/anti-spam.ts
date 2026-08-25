@@ -35,9 +35,7 @@ export function checkCommitmentRateLimit(
     .where("window_start", "=", windowStart)
     .compile();
 
-  const row = database
-    .prepare(query.sql)
-    .get(...query.parameters) as
+  const row = database.prepare(query.sql).get(...query.parameters) as
     | { count: number }
     | undefined;
 
@@ -248,9 +246,9 @@ export function getHiddenCommentIds(
     .where("proposal_id", "=", proposalId)
     .compile();
 
-  const rows = database
-    .prepare(query.sql)
-    .all(...query.parameters) as Array<{ comment_id: number }>;
+  const rows = database.prepare(query.sql).all(...query.parameters) as Array<{
+    comment_id: number;
+  }>;
 
   return rows.map((r) => r.comment_id);
 }

@@ -197,8 +197,7 @@ export function masterKeyGuard(
   res: Response,
   next: NextFunction,
 ): void | Response {
-  const header =
-    req.headers["x-master-key"] || req.headers["authorization"];
+  const header = req.headers["x-master-key"] || req.headers["authorization"];
   let masterKey: string | undefined;
 
   if (typeof header === "string") {

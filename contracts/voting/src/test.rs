@@ -3259,8 +3259,6 @@ fn test_recursive_tally_submission() {
     let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
     tree_client.set_root(&1u64, &U256::from_u32(&env, 12345));
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
-    let admin = Address::generate(&env);
-    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
     let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
     let admin = Address::generate(&env);
 

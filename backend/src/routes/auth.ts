@@ -9,7 +9,12 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
 import { log } from "../services/logger.js";
-import { masterKeyGuard, validateBody, validateParams, bodyLimit } from "../middleware/index.js";
+import {
+  masterKeyGuard,
+  validateBody,
+  validateParams,
+  bodyLimit,
+} from "../middleware/index.js";
 import {
   createNewToken,
   revokeToken,
@@ -121,43 +126,42 @@ router.post(
  * Requires: AUTH_MASTER_KEY
  * Query params: clientId (optional filter), activeOnly (optional boolean)
  */
-router.get(
-  "/auth/tokens",
-  masterKeyGuard,
-  (async (req: Request, res: Response) => {
-    const parsed = clientIdQuerySchema.safeParse(req.query);
-    const { clientId, activeOnly } = parsed.success ? parsed.data : {};
+router.get("/auth/tokens", masterKeyGuard, (async (
+  req: Request,
+  res: Response,
+) => {
+  const parsed = clientIdQuerySchema.safeParse(req.query);
+  const { clientId, activeOnly } = parsed.success ? parsed.data : {};
 
-    let tokens;
-    if (clientId) {
-      tokens = listTokensForClient(clientId);
-    } else if (activeOnly) {
-      tokens = listActiveTokens();
-    } else {
-      tokens = listTokens();
-    }
+  let tokens;
+  if (clientId) {
+    tokens = listTokensForClient(clientId);
+  } else if (activeOnly) {
+    tokens = listActiveTokens();
+  } else {
+    tokens = listTokens();
+  }
 
-    const safeTokens = tokens.map((t) => ({
-      id: t.id,
-      clientId: t.clientId,
-      description: t.description,
-      status: t.status,
-      createdAt: t.createdAt,
-      expiresAt: t.expiresAt,
-      revokedAt: t.revokedAt,
-      lastUsedAt: t.lastUsedAt,
-      useCount: t.useCount,
-      rotationGroupId: t.rotationGroupId,
-      isLegacy: t.isLegacy,
-    }));
+  const safeTokens = tokens.map((t) => ({
+    id: t.id,
+    clientId: t.clientId,
+    description: t.description,
+    status: t.status,
+    createdAt: t.createdAt,
+    expiresAt: t.expiresAt,
+    revokedAt: t.revokedAt,
+    lastUsedAt: t.lastUsedAt,
+    useCount: t.useCount,
+    rotationGroupId: t.rotationGroupId,
+    isLegacy: t.isLegacy,
+  }));
 
-    return res.json({
-      success: true,
-      count: safeTokens.length,
-      tokens: safeTokens,
-    });
-  }) as AsyncHandler,
-);
+  return res.json({
+    success: true,
+    count: safeTokens.length,
+    tokens: safeTokens,
+  });
+}) as AsyncHandler);
 
 /**
  * GET /auth/tokens/:tokenId - Get a specific token by ID
@@ -287,53 +291,49 @@ router.post(
  * POST /auth/tokens/rotate - Run scheduled token rotation
  * Requires: AUTH_MASTER_KEY
  */
-router.post(
-  "/auth/tokens/rotate",
-  bodyLimit("100kb"),
-  masterKeyGuard,
-  (async (_req: Request, res: Response) => {
-    if (!config.tokenRotationEnabled) {
-      return res.status(400).json({
-        success: false,
-        error: "Token rotation is disabled via TOKEN_ROTATION_ENABLED=false",
-      });
-    }
-
-    const results = runTokenRotation();
-
-    return res.json({
-      success: true,
-      rotatedCount: results.length,
-      rotatedTokens: results.map((r) => ({
-        oldTokenId: r.oldTokenId,
-        newTokenId: r.newTokenId,
-        clientId: r.clientId,
-        rawToken: r.rawToken,
-      })),
-      transitionPeriodMs: config.tokenRotationTransitionMs,
+router.post("/auth/tokens/rotate", bodyLimit("100kb"), masterKeyGuard, (async (
+  _req: Request,
+  res: Response,
+) => {
+  if (!config.tokenRotationEnabled) {
+    return res.status(400).json({
+      success: false,
+      error: "Token rotation is disabled via TOKEN_ROTATION_ENABLED=false",
     });
-  }) as AsyncHandler,
-);
+  }
+
+  const results = runTokenRotation();
+
+  return res.json({
+    success: true,
+    rotatedCount: results.length,
+    rotatedTokens: results.map((r) => ({
+      oldTokenId: r.oldTokenId,
+      newTokenId: r.newTokenId,
+      clientId: r.clientId,
+      rawToken: r.rawToken,
+    })),
+    transitionPeriodMs: config.tokenRotationTransitionMs,
+  });
+}) as AsyncHandler);
 
 /**
  * POST /auth/maintenance - Run auth maintenance tasks
  * Requires: AUTH_MASTER_KEY
  */
-router.post(
-  "/auth/maintenance",
-  bodyLimit("100kb"),
-  masterKeyGuard,
-  (async (_req: Request, res: Response) => {
-    const results = runMaintenanceTasks();
+router.post("/auth/maintenance", bodyLimit("100kb"), masterKeyGuard, (async (
+  _req: Request,
+  res: Response,
+) => {
+  const results = runMaintenanceTasks();
 
-    log("info", "auth_maintenance_run", results);
+  log("info", "auth_maintenance_run", results);
 
-    return res.json({
-      success: true,
-      ...results,
-    });
-  }) as AsyncHandler,
-);
+  return res.json({
+    success: true,
+    ...results,
+  });
+}) as AsyncHandler);
 
 // ============================================
 // AUDIT LOG ENDPOINTS
@@ -344,39 +344,38 @@ router.post(
  * Requires: AUTH_MASTER_KEY
  * Query params: tokenId, clientId, action, limit, offset
  */
-router.get(
-  "/auth/audit",
-  masterKeyGuard,
-  (async (req: Request, res: Response) => {
-    const parsed = auditQuerySchema.safeParse(req.query);
-    const options = (parsed.success ? parsed.data : {}) as any;
+router.get("/auth/audit", masterKeyGuard, (async (
+  req: Request,
+  res: Response,
+) => {
+  const parsed = auditQuerySchema.safeParse(req.query);
+  const options = (parsed.success ? parsed.data : {}) as any;
 
-    const entries = getAuditEntries({
-      tokenId: options.tokenId,
-      clientId: options.clientId,
-      action: options.action,
-      limit: options.limit,
-      offset: options.offset,
-    });
+  const entries = getAuditEntries({
+    tokenId: options.tokenId,
+    clientId: options.clientId,
+    action: options.action,
+    limit: options.limit,
+    offset: options.offset,
+  });
 
-    return res.json({
-      success: true,
-      count: entries.length,
-      entries: entries.map((e) => ({
-        id: e.id,
-        tokenId: e.tokenId,
-        clientId: e.clientId,
-        action: e.action,
-        path: e.path,
-        method: e.method,
-        ipHash: e.ipHash,
-        success: e.success,
-        errorMessage: e.errorMessage,
-        createdAt: e.createdAt,
-      })),
-    });
-  }) as AsyncHandler,
-);
+  return res.json({
+    success: true,
+    count: entries.length,
+    entries: entries.map((e) => ({
+      id: e.id,
+      tokenId: e.tokenId,
+      clientId: e.clientId,
+      action: e.action,
+      path: e.path,
+      method: e.method,
+      ipHash: e.ipHash,
+      success: e.success,
+      errorMessage: e.errorMessage,
+      createdAt: e.createdAt,
+    })),
+  });
+}) as AsyncHandler);
 
 // ============================================
 // CONFIG ENDPOINT
@@ -386,21 +385,17 @@ router.get(
  * GET /auth/config - Get auth configuration
  * Requires: AUTH_MASTER_KEY
  */
-router.get(
-  "/auth/config",
-  masterKeyGuard,
-  (_req: Request, res: Response) => {
-    return res.json({
-      success: true,
-      config: {
-        tokenRotationEnabled: config.tokenRotationEnabled,
-        tokenRotationIntervalMs: config.tokenRotationIntervalMs,
-        tokenRotationTransitionMs: config.tokenRotationTransitionMs,
-        defaultTokenLifetimeMs: config.defaultTokenLifetimeMs,
-        auditLogEnabled: config.tokenAuditLogEnabled,
-      },
-    });
-  },
-);
+router.get("/auth/config", masterKeyGuard, (_req: Request, res: Response) => {
+  return res.json({
+    success: true,
+    config: {
+      tokenRotationEnabled: config.tokenRotationEnabled,
+      tokenRotationIntervalMs: config.tokenRotationIntervalMs,
+      tokenRotationTransitionMs: config.tokenRotationTransitionMs,
+      defaultTokenLifetimeMs: config.defaultTokenLifetimeMs,
+      auditLogEnabled: config.tokenAuditLogEnabled,
+    },
+  });
+});
 
 export default router;

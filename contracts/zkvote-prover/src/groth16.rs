@@ -4,10 +4,9 @@ use crate::fft::{batch_apply_key, fft, ifft, join_abc, roots, zero_vec};
 use crate::field::{fr_to_bigint, Fr, G1Affine, G2Affine};
 use crate::zkey::ProvingKey;
 use ark_bn254::{Bn254, G1Projective, G2Projective};
-use ark_ec::{pairing::Pairing, CurveGroup, VariableBaseMSM};
-use ark_ff::{Field, PrimeField};
+use ark_ec::{CurveGroup, VariableBaseMSM};
+use ark_ff::Field;
 use num_bigint::BigInt;
-use num_traits::Zero;
 
 #[derive(Clone)]
 pub struct Proof {
@@ -100,8 +99,8 @@ pub fn prove(pk: &ProvingKey, witness: &[Fr], r: Fr, s: Fr) -> Proof {
     };
 
     let mut public_signals = Vec::with_capacity(pk.n_public as usize);
-    for i in 1..=(pk.n_public as usize) {
-        let v: BigInt = fr_to_bigint(&witness[i]);
+    for sig in witness.iter().take(pk.n_public as usize + 1).skip(1) {
+        let v: BigInt = fr_to_bigint(sig);
         public_signals.push(v.to_str_radix(10));
     }
 

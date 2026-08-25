@@ -30,8 +30,8 @@ fn enc_coef(v: &BigInt, q: &BigInt) -> [u8; 32] {
     let enc = (&mag * &r504) % q;
     let mut b = [0u8; 32];
     let mut e = enc;
-    for i in 0..32 {
-        b[i] = u8_of(&e);
+    for slot in &mut b {
+        *slot = u8_of(&e);
         e >>= 8;
     }
     if neg {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 export interface VoterReceipt {
   id: string; // Unique identifier, can be txHash

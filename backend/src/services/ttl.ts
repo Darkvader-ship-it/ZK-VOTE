@@ -136,13 +136,9 @@ let ttlSubmitter: TTLSubmitter = submitCall;
 /**
  * Replace only the transaction-submission boundary in test mode.
  */
-export function setTTLSubmitterForTests(
-  submitter: TTLSubmitter | null,
-): void {
+export function setTTLSubmitterForTests(submitter: TTLSubmitter | null): void {
   if (!config.testMode) {
-    throw new Error(
-      "TTL submitter overrides are only available in test mode",
-    );
+    throw new Error("TTL submitter overrides are only available in test mode");
   }
 
   ttlSubmitter = submitter ?? submitCall;

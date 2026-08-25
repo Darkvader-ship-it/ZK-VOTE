@@ -42,10 +42,6 @@ export default function WalletConnect({
     onDisconnect();
   };
 
-  const truncateAddress = (addr: string) => {
-    return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
-  };
-
   if (!mounted) {
     // Return placeholder during SSR to prevent hydration mismatch
     return (
@@ -95,7 +91,6 @@ export default function WalletConnect({
   return (
     <Card
       variant="primary"
-      className="w-full max-w-full overflow-hidden p-4 sm:p-6"
     >
       <h3 className="text-lg font-semibold mb-2">Connect Wallet</h3>
       <p className="text-sm text-muted-foreground mb-4">

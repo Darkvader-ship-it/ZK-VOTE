@@ -6,7 +6,7 @@
 //! (extracted verbatim from circomlib 2.0.5).
 
 use crate::field::Fr;
-use ark_ff::{Field, PrimeField, Zero};
+use ark_ff::{Field, Zero};
 use poseidon_constants::*;
 
 mod poseidon_constants;
@@ -14,17 +14,17 @@ mod poseidon_constants;
 fn parse_const(s: &str) -> Fr {
     // Constants are decimal or 0x hex strings.
     let v = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        BigIntHex(hex)
+        big_int_hex(hex)
     } else {
-        BigIntDec(s)
+        big_int_dec(s)
     };
     crate::field::bigint_to_fr(&v)
 }
 
-fn BigIntDec(s: &str) -> num_bigint::BigInt {
+fn big_int_dec(s: &str) -> num_bigint::BigInt {
     num_bigint::BigInt::parse_bytes(s.as_bytes(), 10).unwrap()
 }
-fn BigIntHex(s: &str) -> num_bigint::BigInt {
+fn big_int_hex(s: &str) -> num_bigint::BigInt {
     num_bigint::BigInt::parse_bytes(s.as_bytes(), 16).unwrap()
 }
 

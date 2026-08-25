@@ -109,8 +109,8 @@ fn int_to_mont(v: &BigInt, q: &BigInt) -> [u8; 32] {
         m += q;
     }
     let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[i] = u8_of(&m);
+    for slot in &mut out {
+        *slot = u8_of(&m);
         m >>= 8;
     }
     out

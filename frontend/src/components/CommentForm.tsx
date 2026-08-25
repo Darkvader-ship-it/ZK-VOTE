@@ -29,7 +29,6 @@ import { initializeContractClients } from "../lib/contracts";
 import { relayerFetch } from "../lib/api";
 import { useOptimisticComment } from "../queries/commentQueries";
 import type { CommentWithContent } from "../lib/comments";
-import { relayerFetch, parseApiError } from "../lib/api";
 
 interface CommentFormProps {
   daoId: number;
@@ -269,7 +268,7 @@ export default function CommentForm({
 
             clearPendingComment(daoId, proposalId);
           })
-          .catch((err) => {
+          .catch((_err) => {
             revertOptimistic();
             alert("Network error submitting comment");
           });

@@ -45,7 +45,7 @@ export function generateSTARKExecutionTrace(
   salt: string,
   daoId: number,
   proposalId: number,
-  voteChoice: number,
+  _voteChoice: number,
   merklePath: string[]
 ): STARKExecutionTrace {
   const steps = 16;
