@@ -4,10 +4,7 @@ use crate::fft::{batch_apply_key, fft, ifft, join_abc, roots, zero_vec};
 use crate::field::{fr_to_bigint, Fr, G1Affine, G2Affine};
 use crate::zkey::ProvingKey;
 use ark_bn254::{Bn254, G1Projective, G2Projective};
-use ark_ec::{
-    pairing::Pairing,
-    CurveGroup, VariableBaseMSM,
-};
+use ark_ec::{pairing::Pairing, CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, PrimeField};
 use num_bigint::BigInt;
 use num_traits::Zero;

@@ -11,10 +11,10 @@
 
 use std::path::PathBuf;
 
-use num_bigint::BigInt;
 use ark_ff::PrimeField;
+use num_bigint::BigInt;
 use serde_json::{json, Value};
-use zkvote_prover::field::{bigint_to_fr, fq_to_bigint, Fr, Fq, Fq2, G1Affine, G2Affine};
+use zkvote_prover::field::{bigint_to_fr, fq_to_bigint, Fq, Fq2, Fr, G1Affine, G2Affine};
 use zkvote_prover::groth16::{prove, Proof};
 use zkvote_prover::wtns::parse_wtns;
 use zkvote_prover::zkey::parse_zkey;
@@ -26,12 +26,21 @@ fn repo_root() -> PathBuf {
 }
 
 fn g1_json(p: &G1Affine) -> Value {
-    json!([fq_to_bigint(&p.x).to_string(), fq_to_bigint(&p.y).to_string()])
+    json!([
+        fq_to_bigint(&p.x).to_string(),
+        fq_to_bigint(&p.y).to_string()
+    ])
 }
 fn g2_json(p: &G2Affine) -> Value {
     json!([
-        [fq_to_bigint(&p.x.c0).to_string(), fq_to_bigint(&p.x.c1).to_string()],
-        [fq_to_bigint(&p.y.c0).to_string(), fq_to_bigint(&p.y.c1).to_string()]
+        [
+            fq_to_bigint(&p.x.c0).to_string(),
+            fq_to_bigint(&p.x.c1).to_string()
+        ],
+        [
+            fq_to_bigint(&p.y.c0).to_string(),
+            fq_to_bigint(&p.y.c1).to_string()
+        ]
     ])
 }
 
@@ -43,8 +52,11 @@ fn write_outputs(proof: &Proof, out_proof: &str, out_pub: &str) {
         "protocol": "groth16",
         "curve": "bn128",
     });
-    std::fs::write(out_proof, serde_json::to_string_pretty(&proof_json).unwrap())
-        .expect("write proof");
+    std::fs::write(
+        out_proof,
+        serde_json::to_string_pretty(&proof_json).unwrap(),
+    )
+    .expect("write proof");
     std::fs::write(
         out_pub,
         serde_json::to_string_pretty(&proof.public_signals).unwrap(),

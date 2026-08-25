@@ -2,8 +2,8 @@
 //! signals) in snarkjs-compatible JSON so it can be checked with
 //! `snarkjs groth16 verify`.
 
-use std::path::PathBuf;
 use num_traits::Zero;
+use std::path::PathBuf;
 use zkvote_prover::field::{fq_to_bigint, fr_to_bigint, Fr, G1Affine, G2Affine};
 use zkvote_prover::groth16::prove;
 use zkvote_prover::r1cs::{load_witness_decimal, parse_r1cs};

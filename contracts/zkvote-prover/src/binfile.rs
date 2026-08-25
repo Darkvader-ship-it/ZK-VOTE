@@ -63,11 +63,7 @@ impl<'a> BinFile<'a> {
             if offset + size > buf.len() {
                 return Err("section data out of bounds".into());
             }
-            sections.push(Section {
-                id,
-                offset,
-                size,
-            });
+            sections.push(Section { id, offset, size });
             offset += size;
         }
         Ok(BinFile {

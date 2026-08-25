@@ -1,7 +1,9 @@
 //! Parser for snarkjs Groth16 `.zkey` files (binfile v1, protocol id 1).
 
 use crate::binfile::BinFile;
-use crate::field::{decode_fr_canonical, decode_fr_zk_coef, read_fq_int, read_g1, read_g2, Fr, G1Affine, G2Affine};
+use crate::field::{
+    decode_fr_canonical, decode_fr_zk_coef, read_fq_int, read_g1, read_g2, Fr, G1Affine, G2Affine,
+};
 use ark_ff::Zero;
 use num_bigint::BigInt;
 
@@ -74,9 +76,7 @@ pub fn parse_zkey(buf: &[u8]) -> Result<ProvingKey, String> {
     let bf = BinFile::parse(buf, b"zkey")?;
 
     // Section 1: protocol id
-    let s1 = bf
-        .section(1)
-        .ok_or("missing protocol section")?;
+    let s1 = bf.section(1).ok_or("missing protocol section")?;
     let protocol_id = read_u32(s1, 0);
     if protocol_id != 1 {
         return Err(format!("unsupported protocol id {}", protocol_id));
@@ -202,4 +202,5 @@ fn read_g1_vec_canonical(b: &[u8], n: usize) -> Vec<G1Affine> {
     for i in 0..n {
         v.push(read_g1_canonical_slice(&b[i * 64..]));
     }
-    v}
+    v
+}

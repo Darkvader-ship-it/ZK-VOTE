@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use wasmtime::{Caller, Config, Engine, Extern, Instance, Linker, Memory, MemoryType, Module, Store, Val};
+use wasmtime::{
+    Caller, Config, Engine, Extern, Instance, Linker, Memory, MemoryType, Module, Store, Val,
+};
 
 use crate::field::{bigint_to_fr, Fr, SCALAR_MODULUS};
 
@@ -127,16 +129,32 @@ pub fn calculate_witness(wasm_bytes: &[u8], input: &str) -> Result<Vec<Fr>, Stri
         .func_wrap("runtime", "log", |_c: Caller<'_, Host>, _a: i32| {})
         .map_err(|e| e.to_string())?;
     linker
-        .func_wrap("runtime", "logGetSignal", |_c: Caller<'_, Host>, _s: i32, _p: i32| {})
+        .func_wrap(
+            "runtime",
+            "logGetSignal",
+            |_c: Caller<'_, Host>, _s: i32, _p: i32| {},
+        )
         .map_err(|e| e.to_string())?;
     linker
-        .func_wrap("runtime", "logSetSignal", |_c: Caller<'_, Host>, _s: i32, _p: i32| {})
+        .func_wrap(
+            "runtime",
+            "logSetSignal",
+            |_c: Caller<'_, Host>, _s: i32, _p: i32| {},
+        )
         .map_err(|e| e.to_string())?;
     linker
-        .func_wrap("runtime", "logStartComponent", |_c: Caller<'_, Host>, _i: i32| {})
+        .func_wrap(
+            "runtime",
+            "logStartComponent",
+            |_c: Caller<'_, Host>, _i: i32| {},
+        )
         .map_err(|e| e.to_string())?;
     linker
-        .func_wrap("runtime", "logFinishComponent", |_c: Caller<'_, Host>, _i: i32| {})
+        .func_wrap(
+            "runtime",
+            "logFinishComponent",
+            |_c: Caller<'_, Host>, _i: i32| {},
+        )
         .map_err(|e| e.to_string())?;
 
     let instance = linker
@@ -181,7 +199,8 @@ pub fn calculate_witness(wasm_bytes: &[u8], input: &str) -> Result<Vec<Fr>, Stri
                 let shift = 32 * j;
                 let word = ((&x >> shift) & BigInt::from(0xFFFF_FFFFu64))
                     .to_u32()
-                    .ok_or_else(|| "witness word overflow".to_string())? as i32;
+                    .ok_or_else(|| "witness word overflow".to_string())?
+                    as i32;
                 call_export(
                     &mut store,
                     &instance,
@@ -212,8 +231,8 @@ pub fn calculate_witness(wasm_bytes: &[u8], input: &str) -> Result<Vec<Fr>, Stri
         // Little-endian limb order (position 0 = least-significant word).
         let mut v = BigInt::from(0u64);
         for j in 0..n32 {
-            let w = call_export(&mut store, &instance, "readSharedRWMemory", &[j as i32])?
-                as u32 as u64;
+            let w = call_export(&mut store, &instance, "readSharedRWMemory", &[j as i32])? as u32
+                as u64;
             v += BigInt::from(w) << (32 * j);
         }
         witness.push(bigint_to_fr(&v));

@@ -109,8 +109,7 @@ fn read_lc(c: &mut Cursor) -> Vec<(usize, Fr)> {
 /// Load a circom witness JSON (array of decimal strings) into `Fr` values.
 pub fn load_witness_decimal(path: &Path) -> Vec<Fr> {
     let s = std::fs::read_to_string(path).expect("read witness");
-    let arr: serde_json::Value =
-        serde_json::from_str(&s).expect("parse witness json");
+    let arr: serde_json::Value = serde_json::from_str(&s).expect("parse witness json");
     let arr = arr.as_array().expect("witness must be array");
     arr.iter()
         .map(|v| fr_from_decimal(v.as_str().expect("witness entry must be string")))

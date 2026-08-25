@@ -2,18 +2,23 @@
 //! proof (ref0_proof.json, generated with r=s=0). This isolates whether the
 //! prover or the verifier is at fault.
 
-use std::path::PathBuf;
-use zkvote_prover::field::{bigint_to_fr, decode_fr_bits, fq_from_decimal, fr_from_decimal, fr_to_bigint, Fr, Fq2, G1Affine, G2Affine};
-use zkvote_prover::fft::{batch_apply_key, fft, ifft, join_abc, roots, zero_vec};
-use zkvote_prover::groth16::prove;
-use zkvote_prover::zkey::parse_zkey;
 use ark_bn254::G1Projective;
 use ark_ec::{CurveGroup, VariableBaseMSM};
 use ark_ff::{Field, Zero};
 use num_bigint::BigInt;
+use std::path::PathBuf;
+use zkvote_prover::fft::{batch_apply_key, fft, ifft, join_abc, roots, zero_vec};
+use zkvote_prover::field::{
+    bigint_to_fr, decode_fr_bits, fq_from_decimal, fr_from_decimal, fr_to_bigint, Fq2, Fr,
+    G1Affine, G2Affine,
+};
+use zkvote_prover::groth16::prove;
+use zkvote_prover::zkey::parse_zkey;
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
 }
 
 fn g1(s: &serde_json::Value, key: &str) -> G1Affine {
@@ -52,8 +57,10 @@ fn prove_matches_ref() {
 
     let proof = prove(&pk, &witness, Fr::zero(), Fr::zero());
 
-    let ref0: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(root.join("circuits/_dbg/ref0_proof.json")).unwrap()).unwrap();
+    let ref0: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("circuits/_dbg/ref0_proof.json")).unwrap(),
+    )
+    .unwrap();
 
     let r_pi_a = g1(&ref0, "pi_a");
     let r_pi_b = g2(&ref0, "pi_b");
@@ -87,8 +94,14 @@ fn prove_matches_ref() {
         .collect();
     let resH_ref: G1Projective = G1Projective::msm(&pk.h, &p_ref).expect("resH_ref");
     let c_w_ref = G1Projective::from(r_pi_c) - resH_ref;
-    eprintln!("resH_mine == resH_ref (snark buffers)? {}", resH_mine.into_affine() == resH_ref.into_affine());
-    eprintln!("c_w_mine  == c_w_ref (snark buffers)? {}", c_w.into_affine() == c_w_ref.into_affine());
+    eprintln!(
+        "resH_mine == resH_ref (snark buffers)? {}",
+        resH_mine.into_affine() == resH_ref.into_affine()
+    );
+    eprintln!(
+        "c_w_mine  == c_w_ref (snark buffers)? {}",
+        c_w.into_affine() == c_w_ref.into_affine()
+    );
 
     // Replicate buildABC1 + join_abc and compare element-wise to snark canonical P.
     let (omega, inc) = roots(pk.domain_size);
@@ -104,7 +117,11 @@ fn prove_matches_ref() {
             _ => {}
         }
     }
-    let mut c = a.iter().zip(b.iter()).map(|(x, y)| *x * *y).collect::<Vec<_>>();
+    let mut c = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| *x * *y)
+        .collect::<Vec<_>>();
     for v in [&mut a, &mut b, &mut c] {
         ifft(v, omega);
         batch_apply_key(v, inc);
@@ -114,7 +131,9 @@ fn prove_matches_ref() {
     // Hypothesis: snarkjs WASM reads C (2^240) as 2^248 => C*2^-8, so
     // canonical P = A*B - C/256.
     let inv256 = <Fr as ark_ff::Field>::inverse(&bigint_to_fr(&BigInt::from(256u32))).unwrap();
-    let p_alt: Vec<Fr> = (0..domain_size).map(|i| a[i] * b[i] - c[i] * inv256).collect();
+    let p_alt: Vec<Fr> = (0..domain_size)
+        .map(|i| a[i] * b[i] - c[i] * inv256)
+        .collect();
     let mut mism = 0usize;
     for i in 0..domain_size {
         if p_mine[i] != p_ref[i] {
@@ -128,10 +147,16 @@ fn prove_matches_ref() {
         }
     }
     eprintln!("P element mismatches (a*b-c): {}/{}", mism, domain_size);
-    eprintln!("P element mismatches (a*b-c/256): {}/{}", mism_alt, domain_size);
+    eprintln!(
+        "P element mismatches (a*b-c/256): {}/{}",
+        mism_alt, domain_size
+    );
 
     // Deduce relation at index 0: is p0 = a0*b0 - c0*2^k for some k?
-    let a0 = a[0]; let b0 = b[0]; let c0 = c[0]; let p0 = p_ref[0];
+    let a0 = a[0];
+    let b0 = b[0];
+    let c0 = c[0];
+    let p0 = p_ref[0];
     let d = a0 * b0 - p0;
     eprintln!("a0 = {:?}", fr_to_bigint(&a0));
     eprintln!("b0 = {:?}", fr_to_bigint(&b0));
@@ -141,7 +166,16 @@ fn prove_matches_ref() {
     let two = bigint_to_fr(&BigInt::from(2u32));
     for k in -16..=16i32 {
         let mut f = bigint_to_fr(&BigInt::from(1u32));
-        if k >= 0 { for _ in 0..k { f *= two; } } else { let inv2 = <Fr as Field>::inverse(&two).unwrap(); for _ in k..0 { f *= inv2; } }
+        if k >= 0 {
+            for _ in 0..k {
+                f *= two;
+            }
+        } else {
+            let inv2 = <Fr as Field>::inverse(&two).unwrap();
+            for _ in k..0 {
+                f *= inv2;
+            }
+        }
         let cand = c0 * f;
         if cand == d {
             eprintln!("MATCH: p0 = a0*b0 - c0*2^{}", k);
@@ -152,15 +186,30 @@ fn prove_matches_ref() {
     let at = std::fs::read(root.join("circuits/_dbg/buffAodd_T_snarkjs.bin")).unwrap();
     let bt = std::fs::read(root.join("circuits/_dbg/buffBodd_T_snarkjs.bin")).unwrap();
     let ct = std::fs::read(root.join("circuits/_dbg/buffCodd_T_snarkjs.bin")).unwrap();
-    let ref_a: Vec<Fr> = (0..domain_size).map(|i| decode_fr_bits(&at[i*32..i*32+32], 248)).collect();
-    let ref_b: Vec<Fr> = (0..domain_size).map(|i| decode_fr_bits(&bt[i*32..i*32+32], 248)).collect();
-    let ref_c: Vec<Fr> = (0..domain_size).map(|i| decode_fr_bits(&ct[i*32..i*32+32], 240)).collect();
+    let ref_a: Vec<Fr> = (0..domain_size)
+        .map(|i| decode_fr_bits(&at[i * 32..i * 32 + 32], 248))
+        .collect();
+    let ref_b: Vec<Fr> = (0..domain_size)
+        .map(|i| decode_fr_bits(&bt[i * 32..i * 32 + 32], 248))
+        .collect();
+    let ref_c: Vec<Fr> = (0..domain_size)
+        .map(|i| decode_fr_bits(&ct[i * 32..i * 32 + 32], 240))
+        .collect();
     for (name, mine, rref) in [("A", &a, &ref_a), ("B", &b, &ref_b), ("C", &c, &ref_c)] {
         let mm = (0..domain_size).filter(|&i| mine[i] != rref[i]).count();
-        eprintln!("{} coset canonical mismatches: {}/{}", name, mm, domain_size);
+        eprintln!(
+            "{} coset canonical mismatches: {}/{}",
+            name, mm, domain_size
+        );
         if mm > 0 {
             let i = (0..domain_size).find(|&i| mine[i] != rref[i]).unwrap();
-            eprintln!("  {}[{}] mine={:?} ref={:?}", name, i, fr_to_bigint(&mine[i]), fr_to_bigint(&rref[i]));
+            eprintln!(
+                "  {}[{}] mine={:?} ref={:?}",
+                name,
+                i,
+                fr_to_bigint(&mine[i]),
+                fr_to_bigint(&rref[i])
+            );
         }
     }
 

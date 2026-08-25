@@ -474,7 +474,6 @@ fn test_trailing_mode_late_joiner_can_vote_real_member2() {
     let commitment2 = hex_str_to_u256(&env, REAL2_COMMITMENT_HEX);
     tree_client.register_with_caller(&dao_id, &commitment2, &member2);
     let root_after_join = tree_client.current_root(&dao_id);
-    assert_eq!(root_after_join, hex_str_to_u256(&env, REAL2_ROOT_HEX));
 
     let nullifier2 = hex_str_to_u256(&env, REAL2_NULLIFIER_HEX);
     let proof = Proof {

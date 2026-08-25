@@ -1,7 +1,7 @@
-use zkvote_prover::fft::{fft, ifft, roots};
-use zkvote_prover::field::{fr_to_bigint, Fr};
 use ark_ff::{PrimeField, Zero};
 use num_bigint::ToBigInt;
+use zkvote_prover::fft::{fft, ifft, roots};
+use zkvote_prover::field::{fr_to_bigint, Fr};
 
 #[test]
 fn fft_matches_snarkjs() {
@@ -62,8 +62,8 @@ fn fft_roundtrip_16384() {
 #[test]
 fn print_roots_16384() {
     let (omega, inc) = roots(16384);
-    use zkvote_prover::field::fr_to_bigint;
     use num_bigint::ToBigInt;
+    use zkvote_prover::field::fr_to_bigint;
     println!("RUST_omega={}", fr_to_bigint(&omega).to_str_radix(10));
     println!("RUST_inc   ={}", fr_to_bigint(&inc).to_str_radix(10));
 }

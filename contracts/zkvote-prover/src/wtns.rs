@@ -13,8 +13,7 @@ pub fn parse_wtns(buf: &[u8]) -> Result<Witness, String> {
     let s1 = bf.section(1).ok_or("missing wtns header")?;
     let n8 = u32::from_le_bytes([s1[0], s1[1], s1[2], s1[3]]) as usize;
     // q occupies n8 bytes, then nWitness u32
-    let n_vars =
-        u32::from_le_bytes([s1[4 + n8], s1[5 + n8], s1[6 + n8], s1[7 + n8]]);
+    let n_vars = u32::from_le_bytes([s1[4 + n8], s1[5 + n8], s1[6 + n8], s1[7 + n8]]);
 
     let s2 = bf.section(2).ok_or("missing wtns data")?;
     let mut values = Vec::with_capacity(n_vars as usize);

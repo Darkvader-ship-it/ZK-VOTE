@@ -6,8 +6,8 @@
 
 use std::path::PathBuf;
 
-use num_bigint::BigInt;
 use ark_ff::Zero;
+use num_bigint::BigInt;
 use zkvote_prover::field::{bigint_to_fr, fr_to_bigint, Fr};
 use zkvote_prover::groth16::{prove, verify};
 use zkvote_prover::zkey::parse_zkey;

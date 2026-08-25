@@ -86,7 +86,7 @@ pub fn poseidon(inputs: &[Fr], n_outputs: usize) -> Vec<Fr> {
     for r in 0..n_rounds_p {
         // sbox only on first element
         state[0] = state[0].square().square() * state[0]; // x^5
-        // Ark on element 0 with the partial-round constant
+                                                          // Ark on element 0 with the partial-round constant
         state[0] += c[c_off];
         c_off += 1;
         let new_state = mix_s(&state, &s_mat, t, r);

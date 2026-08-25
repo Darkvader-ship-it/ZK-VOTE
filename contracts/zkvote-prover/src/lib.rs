@@ -6,14 +6,14 @@
 //! byte-for-byte parity with the on-chain verifier (which uses the same BN254
 //! host functions / verification key).
 
-pub mod field;
-pub mod poseidon;
 pub mod binfile;
-pub mod zkey;
-pub mod wtns;
 pub mod fft;
+pub mod field;
 pub mod groth16;
+pub mod poseidon;
 pub mod r1cs;
+pub mod wtns;
+pub mod zkey;
 
 #[cfg(feature = "witness")]
 pub mod witness_wasm;

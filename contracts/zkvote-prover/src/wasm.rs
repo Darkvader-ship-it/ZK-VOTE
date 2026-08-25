@@ -9,12 +9,12 @@
 
 use wasm_bindgen::prelude::*;
 
-use num_bigint::BigInt;
-use crate::field::{bigint_to_fr, fr_to_bigint, fq_to_bigint, Fr, Fq, Fq2, G1Affine, G2Affine};
+use crate::field::{bigint_to_fr, fq_to_bigint, fr_to_bigint, Fq, Fq2, Fr, G1Affine, G2Affine};
 use crate::groth16::{prove as groth16_prove, Proof};
 use crate::wtns::parse_wtns;
 use crate::zkey::parse_zkey;
 use ark_ff::PrimeField;
+use num_bigint::BigInt;
 
 fn random_scalars() -> (Fr, Fr) {
     let mut buf = [0u8; 64];

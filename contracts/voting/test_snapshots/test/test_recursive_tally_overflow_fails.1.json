@@ -13,7 +13,6 @@
     [],
     [],
     [],
-    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM",
@@ -118,7 +117,7 @@
                   "string": "Title"
                 },
                 {
-                  "string": ""
+                  "string": "Desc"
                 },
                 {
                   "u64": "3600"
@@ -140,6 +139,8 @@
         }
       ]
     ],
+    [],
+    [],
     []
   ],
   "ledger": {
@@ -274,33 +275,6 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "CurrentRoot"
-                  },
-                  {
-                    "u64": "1"
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "u256": "12345"
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 4095
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-              "key": {
-                "vec": [
-                  {
                     "symbol": "SbtContract"
                   }
                 ]
@@ -366,7 +340,7 @@
                       "symbol": "content_cid"
                     },
                     "val": {
-                      "string": ""
+                      "string": "Desc"
                     }
                   },
                   {
@@ -406,7 +380,7 @@
                       "symbol": "eligible_root"
                     },
                     "val": {
-                      "u256": "12345"
+                      "u256": "0"
                     }
                   },
                   {
@@ -448,7 +422,7 @@
                     "val": {
                       "vec": [
                         {
-                          "symbol": "Active"
+                          "symbol": "Closed"
                         }
                       ]
                     }

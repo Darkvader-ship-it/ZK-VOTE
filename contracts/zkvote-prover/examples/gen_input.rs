@@ -3,8 +3,8 @@
 //! circomlib-compatible Poseidon, and prints it as JSON. The resulting `root`
 //! satisfies the circuit constraints by construction (leaf at Merkle index 0).
 
-use num_bigint::BigInt;
 use ark_ff::Zero;
+use num_bigint::BigInt;
 use zkvote_prover::field::{bigint_to_fr, fr_to_bigint, Fr};
 use zkvote_prover::poseidon::poseidon;
 
