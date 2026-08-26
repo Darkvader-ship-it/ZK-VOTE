@@ -3413,3 +3413,63 @@ export function updateProofCommitmentStatus(
     )
     .run(status, commitmentHash);
 }
+
+/**
+ * Store a vote receipt for confirmation and verification
+ */
+export function storeVoteReceipt(
+  nullifier: string,
+  txHash: string,
+  proposalId: number,
+  daoId: number,
+  status: "confirmed" | "pending" | "failed" = "confirmed",
+): void {
+  const database = getWriteDb();
+  try {
+    database
+      .prepare(
+        `INSERT INTO vote_receipts (nullifier, tx_hash, proposal_id, dao_id, status)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(nullifier, txHash, proposalId, daoId, status);
+    incrementTransactionCounter();
+  } catch (err) {
+    // Ignore duplicate key errors (idempotent)
+    if (!(err instanceof Error && err.message.includes("UNIQUE"))) {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Retrieve a vote receipt by nullifier
+ */
+export function getVoteReceipt(
+  nullifier: string,
+): Record<string, unknown> | null {
+  const database = getReadDb();
+  const row = database
+    .prepare("SELECT * FROM vote_receipts WHERE nullifier = ?")
+    .get(nullifier);
+  return row ? (row as Record<string, unknown>) : null;
+}
+
+/**
+ * Retrieve vote receipts for a specific DAO
+ */
+export function getVoteReceiptsByDao(
+  daoId: number,
+  limit: number = 100,
+  offset: number = 0,
+): Record<string, unknown>[] {
+  const database = getReadDb();
+  const rows = database
+    .prepare(
+      `SELECT * FROM vote_receipts
+       WHERE dao_id = ?
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(daoId, limit, offset);
+  return rows ? (rows as Record<string, unknown>[]) : [];
+}

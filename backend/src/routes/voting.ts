@@ -53,6 +53,8 @@ import {
   getVoteSubmission,
   insertVoteSubmission,
   updateVoteSubmission,
+  storeVoteReceipt,
+  getVoteReceipt,
 } from "../services/db.js";
 import {
   calculateProofHash,
@@ -114,6 +116,7 @@ function respondToVoteExecution(
   if (result.status === "SUCCESS") {
     if (nullifier && sendResult.hash) {
       updateTransactionLogStatus(nullifier, "SUCCESS", sendResult.hash);
+      storeVoteReceipt(nullifier, sendResult.hash, proposalId, daoId, "confirmed");
     }
 
     votesProcessed.inc({ status: "success" });
@@ -1013,6 +1016,64 @@ router.get(
           500,
           ErrorCode.INTERNAL_ERROR,
           "Failed to fetch Merkle root history",
+          (err as Error).message,
+        ),
+      );
+    }
+  }) as AsyncHandler,
+);
+
+/**
+ * GET /receipt/:nullifier - Fetch vote confirmation receipt
+ */
+router.get(
+  "/receipt/:nullifier",
+  queryLimiter,
+  (async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { nullifier } = req.params;
+
+      if (!nullifier || typeof nullifier !== "string") {
+        return res.status(400).json({
+          error: "Invalid nullifier: must be a non-empty string",
+        });
+      }
+
+      const receipt = getVoteReceipt(nullifier);
+
+      if (!receipt) {
+        return res.status(404).json({
+          error: "Vote receipt not found",
+          nullifier,
+        });
+      }
+
+      log("info", "receipt_fetched", {
+        nullifier,
+        txHash: receipt.tx_hash,
+      });
+
+      return res.json({
+        receipt: {
+          nullifier: receipt.nullifier,
+          txHash: receipt.tx_hash,
+          proposalId: receipt.proposal_id,
+          daoId: receipt.dao_id,
+          status: receipt.status,
+          createdAt: receipt.created_at,
+        },
+      });
+    } catch (err) {
+      if (err instanceof ApiError) return next(err);
+      log("error", "receipt_fetch_error", {
+        nullifier: req.params.nullifier,
+        error: (err as Error).message,
+      });
+      return next(
+        new ApiError(
+          500,
+          ErrorCode.INTERNAL_ERROR,
+          "Failed to fetch vote receipt",
           (err as Error).message,
         ),
       );
