@@ -284,4 +284,153 @@ router.get("/debug/heap", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /relay-test
+ * Relay self-test / smoke endpoint
+ * Tests core relay functionality: RPC connectivity, account status, and contract IDs
+ * Issue #387
+ */
+router.get("/relay-test", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  const results: Record<string, unknown> = {
+    timestamp: new Date().toISOString(),
+    tests: {},
+  };
+
+  try {
+    // Test 1: RPC Health Check
+    const rpcTest = await rpcHealth();
+    results.tests = {
+      ...results.tests,
+      rpc_health: {
+        passed: rpcTest.ok,
+        message: rpcTest.ok ? "RPC is healthy" : rpcTest.error,
+        info: rpcTest.info,
+      },
+    };
+
+    // Test 2: Relayer Account Status
+    if (server && relayerPublicKey) {
+      try {
+        const account = await server.getAccount(relayerPublicKey);
+        results.tests = {
+          ...results.tests,
+          relayer_account: {
+            passed: true,
+            publicKey: relayerPublicKey,
+            sequence: account.sequenceNumber(),
+            message: "Relayer account exists and is accessible",
+          },
+        };
+      } catch (err) {
+        results.tests = {
+          ...results.tests,
+          relayer_account: {
+            passed: false,
+            publicKey: relayerPublicKey,
+            error: (err as Error).message,
+            message: "Failed to fetch relayer account",
+          },
+        };
+      }
+    } else {
+      results.tests = {
+        ...results.tests,
+        relayer_account: {
+          passed: false,
+          message: "Relayer not initialized",
+        },
+      };
+    }
+
+    // Test 3: Contract IDs Validation
+    const contractsValid =
+      config.votingContractId?.length === 56 &&
+      config.treeContractId?.length === 56;
+    results.tests = {
+      ...results.tests,
+      contract_ids: {
+        passed: contractsValid,
+        voting: config.votingContractId,
+        tree: config.treeContractId,
+        comments: config.commentsContractId,
+        message: contractsValid
+          ? "Contract IDs are valid"
+          : "Invalid contract ID format",
+      },
+    };
+
+    // Test 4: Database Connectivity
+    try {
+      const dbStatus = getDbStatus();
+      results.tests = {
+        ...results.tests,
+        database: {
+          passed: true,
+          message: "Database is accessible",
+          status: dbStatus,
+        },
+      };
+    } catch (err) {
+      results.tests = {
+        ...results.tests,
+        database: {
+          passed: false,
+          error: (err as Error).message,
+          message: "Database connectivity failed",
+        },
+      };
+    }
+
+    // Test 5: RPC Pool Status
+    const poolMetrics = rpcPoolManager.getMetrics();
+    const poolHealthy = poolMetrics.available > 0;
+    results.tests = {
+      ...results.tests,
+      rpc_pool: {
+        passed: poolHealthy,
+        message: poolHealthy ? "RPC pool has available endpoints" : "No available RPC endpoints",
+        metrics: poolMetrics,
+      },
+    };
+
+    // Overall result
+    const allTests = Object.values(results.tests as Record<string, { passed: boolean }>);
+    const passedCount = allTests.filter((t) => t.passed).length;
+    const totalCount = allTests.length;
+    const allPassed = passedCount === totalCount;
+
+    results.summary = {
+      passed: passedCount,
+      total: totalCount,
+      success: allPassed,
+      duration_ms: Date.now() - startTime,
+    };
+
+    const statusCode = allPassed ? 200 : 503;
+    log("info", "relay_smoke_test", {
+      success: allPassed,
+      passed: passedCount,
+      total: totalCount,
+      duration_ms: Date.now() - startTime,
+    });
+
+    return res.status(statusCode).json(results);
+  } catch (err) {
+    log("error", "relay_smoke_test_failed", {
+      error: (err as Error).message,
+      duration_ms: Date.now() - startTime,
+    });
+    return res.status(500).json({
+      timestamp: new Date().toISOString(),
+      summary: {
+        success: false,
+        error: (err as Error).message,
+        duration_ms: Date.now() - startTime,
+      },
+      tests: results.tests,
+    });
+  }
+});
+
 export default router;
