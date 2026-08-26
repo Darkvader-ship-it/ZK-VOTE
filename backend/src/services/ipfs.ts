@@ -870,6 +870,57 @@ export function isAllowedGatewayUrl(urlString: string): boolean {
   }
 }
 
+// Per-gateway timeout for the public-gateway fallback chain (issue #379).
+// Deliberately shorter than the primary Pinata fetch's 30s timeout since
+// there are multiple gateways to try in sequence before giving up.
+const PUBLIC_GATEWAY_TIMEOUT_MS = 10000;
+
+/**
+ * Try each public IPFS gateway in turn for a CID, returning the first
+ * successful response. Used as a fallback when the primary Pinata gateway
+ * fails or times out (issue #379), so a single degraded/down gateway
+ * doesn't make already-pinned content unreachable. Reuses the same
+ * `isAllowedGatewayUrl` SSRF/private-IP guard as the primary path.
+ */
+async function fetchFromPublicGateways(cleanCid: string): Promise<Response> {
+  let lastError: Error | undefined;
+
+  for (const gateway of PUBLIC_GATEWAYS) {
+    const url = `${gateway}/${cleanCid}`;
+    if (!isAllowedGatewayUrl(url)) continue;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      PUBLIC_GATEWAY_TIMEOUT_MS,
+    );
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        redirect: "error",
+      });
+      if (!res.ok) {
+        throw new Error(
+          `Failed to fetch from IPFS: ${res.status} ${res.statusText}`,
+        );
+      }
+      return res;
+    } catch (err) {
+      lastError = err as Error;
+      log("warn", "ipfs_public_gateway_failed", {
+        gateway,
+        cid: cleanCid,
+        error: lastError.message,
+      });
+      continue;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError || new Error("All public IPFS gateways failed");
+}
+
 /**
  * Fetch content from IPFS via Pinata gateway
  */
@@ -950,8 +1001,34 @@ export async function fetchContent(cid: string): Promise<FetchResult> {
       contentType,
     };
   } catch (err) {
-    ipfsCacheMisses.inc();
-    throw err;
+    // Issue #379: primary Pinata gateway failed — fail over to the public
+    // gateway chain before giving up.
+    try {
+      const fallbackRes = await fetchFromPublicGateways(cleanCid);
+      const contentType =
+        fallbackRes.headers.get("content-type") || "application/json";
+
+      if (
+        contentType.includes("text/html") ||
+        contentType.includes("application/javascript") ||
+        contentType.includes("text/javascript")
+      ) {
+        throw new Error(`Forbidden response content-type: ${contentType}`, {
+          cause: err,
+        });
+      }
+
+      const data = contentType.includes("application/json")
+        ? await fallbackRes.json()
+        : await fallbackRes.text();
+
+      ipfsCacheHits.inc();
+      log("info", "ipfs_fallback_gateway_succeeded", { cid: cleanCid });
+      return { data, contentType };
+    } catch {
+      ipfsCacheMisses.inc();
+      throw err;
+    }
   } finally {
     clearTimeout(timeout);
     const fetchDuration = (performance.now() - fetchStart) / 1000;
@@ -1036,8 +1113,33 @@ export async function fetchRawContent(cid: string): Promise<RawFetchResult> {
       contentType,
     };
   } catch (err) {
-    ipfsCacheMisses.inc();
-    throw err;
+    // Issue #379: primary Pinata gateway failed — fail over to the public
+    // gateway chain before giving up.
+    try {
+      const fallbackRes = await fetchFromPublicGateways(cleanCid);
+      const contentType =
+        fallbackRes.headers.get("content-type") || "application/octet-stream";
+
+      if (
+        contentType.includes("text/html") ||
+        contentType.includes("application/javascript") ||
+        contentType.includes("text/javascript")
+      ) {
+        throw new Error(`Forbidden response content-type: ${contentType}`, {
+          cause: err,
+        });
+      }
+
+      const arrayBuffer = await fallbackRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      ipfsCacheHits.inc();
+      log("info", "ipfs_fallback_gateway_succeeded", { cid: cleanCid });
+      return { buffer, contentType };
+    } catch {
+      ipfsCacheMisses.inc();
+      throw err;
+    }
   } finally {
     clearTimeout(timeout);
     const fetchDuration = (performance.now() - fetchStart) / 1000;

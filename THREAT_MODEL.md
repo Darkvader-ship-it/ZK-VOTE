@@ -169,7 +169,7 @@ To protect votes cast today against quantum decryption decades in the future, ZK
 - Information-theoretic hiding / preimage resistance of SHA3-256 is unaffected by Shor's algorithm, ensuring that recorded on-chain vote transcripts cannot be retroactively opened even if BN254 curve discrete log is solved.
 
 ### Post-Quantum Migration Strategy
-See [`docs/post-quantum-evaluation.md`](file:///home/uche/ZK-VOTE/docs/post-quantum-evaluation.md) and [`docs/post-quantum-roadmap.md`](file:///home/uche/ZK-VOTE/docs/post-quantum-roadmap.md) for the STARK circuit evaluation (Cairo/Miden vs Groth16) and multi-phase transition roadmap.
+See [`docs/post-quantum-evaluation.md`](docs/post-quantum-evaluation.md) and [`docs/post-quantum-roadmap.md`](docs/post-quantum-roadmap.md) for the STARK circuit evaluation (Cairo/Miden vs Groth16) and multi-phase transition roadmap.
 
 - Coercion resistance: implement re-voting window and registrar tally filter (see #96).
 - Tally proofs: add `verify_tally_proof` contract entrypoint and circuit for universal verifiability (see #94).
