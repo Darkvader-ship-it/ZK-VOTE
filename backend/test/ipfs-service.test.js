@@ -203,3 +203,52 @@ test("initialization requires a JWT", () => {
     /PINATA_JWT is required/,
   );
 });
+
+// Issue #379: primary Pinata gateway failure should fail over to the public
+// gateway chain instead of surfacing an error immediately. These two tests
+// initialize Pinata (with a fake JWT — init only sets local state, no
+// network call) and mock global fetch, so they run last: nothing after them
+// depends on the module's pre-initialization "not initialized" behavior.
+
+test("fetchContent falls back to a public gateway when the primary fails", async () => {
+  ipfs.initPinata("fake-jwt-for-test");
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.includes("gateway.pinata.cloud")) {
+      throw new Error("primary gateway unreachable");
+    }
+    if (href.startsWith("https://ipfs.io/ipfs/")) {
+      return {
+        ok: true,
+        headers: { get: () => "application/json" },
+        json: async () => ({ hello: "world" }),
+      };
+    }
+    throw new Error(`unexpected fetch to ${href}`);
+  };
+
+  try {
+    const result = await ipfs.fetchContent(cidV1);
+    assert.deepEqual(result.data, { hello: "world" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchRawContent throws the original error when every gateway fails", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("gateway unreachable");
+  };
+
+  try {
+    await assert.rejects(
+      ipfs.fetchRawContent(cidV1),
+      /gateway unreachable/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
