@@ -20,3 +20,18 @@ export { useCommentsQuery, useInvalidateComments } from "./commentQueries";
 
 // Re-export queryClient and keys for direct access
 export { queryClient, queryKeys } from "../lib/queryClient";
+
+// Re-export cache invalidation utilities (Issue #386)
+export {
+  invalidateAllDaoQueries,
+  invalidateProposalQueries,
+  invalidateMembershipQueries,
+  invalidateCommentQueries,
+  invalidateRelayerQueries,
+  invalidateAfterVote,
+  invalidateAfterDaoCreation,
+  clearAllQueryCaches,
+  debugQueryCache,
+  getCacheStats,
+  useInvalidationHelpers,
+} from "../lib/cacheInvalidation";
