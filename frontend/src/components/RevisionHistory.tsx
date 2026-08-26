@@ -106,7 +106,12 @@ export default function RevisionHistory({
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
           <h3 className="text-lg font-semibold">Revision History</h3>
-          <Button variant="ghost" size="sm" onClick={onClose} className="h-10 w-10 p-2 sm:h-8 sm:w-8">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="h-10 w-10 p-2 sm:h-8 sm:w-8"
+          >
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -149,6 +154,7 @@ export default function RevisionHistory({
                   <p className="text-xs text-muted-foreground mt-1">
                     {mounted
                       ? new Date(revision.content.createdAt).toLocaleString()
+                      : ""}
                   </p>
                 ) : null}
               </button>

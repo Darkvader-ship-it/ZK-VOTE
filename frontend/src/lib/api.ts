@@ -7,21 +7,23 @@ const RELAYER_AUTH_TOKEN = import.meta.env.VITE_RELAYER_AUTH_TOKEN || "";
 // ERROR TYPES
 // ============================================
 
-export enum ErrorCode {
-  VOTE_ALREADY_CAST = "VOTE_ALREADY_CAST",
-  VOTING_PERIOD_CLOSED = "VOTING_PERIOD_CLOSED",
-  INVALID_PROOF = "INVALID_PROOF",
-  NOT_ELIGIBLE = "NOT_ELIGIBLE",
-  PROPOSAL_NOT_FOUND = "PROPOSAL_NOT_FOUND",
-  DAO_NOT_FOUND = "DAO_NOT_FOUND",
-  INTERNAL_ERROR = "INTERNAL_ERROR",
-  RATE_LIMITED = "RATE_LIMITED",
-  UNAUTHORIZED = "UNAUTHORIZED",
-  VALIDATION_ERROR = "VALIDATION_ERROR",
-  SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
-  TIMEOUT = "TIMEOUT",
-  NOT_FOUND = "NOT_FOUND",
-}
+export const ErrorCode = {
+  VOTE_ALREADY_CAST: "VOTE_ALREADY_CAST",
+  VOTING_PERIOD_CLOSED: "VOTING_PERIOD_CLOSED",
+  INVALID_PROOF: "INVALID_PROOF",
+  NOT_ELIGIBLE: "NOT_ELIGIBLE",
+  PROPOSAL_NOT_FOUND: "PROPOSAL_NOT_FOUND",
+  DAO_NOT_FOUND: "DAO_NOT_FOUND",
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+  RATE_LIMITED: "RATE_LIMITED",
+  UNAUTHORIZED: "UNAUTHORIZED",
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  SERVICE_UNAVAILABLE: "SERVICE_UNAVAILABLE",
+  TIMEOUT: "TIMEOUT",
+  NOT_FOUND: "NOT_FOUND",
+} as const;
+
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
 export interface StructuredError {
   code: ErrorCode;
@@ -176,7 +178,12 @@ export class RelayerError extends Error {
   isBackoff: boolean;
   isNetworkError: boolean;
 
-  constructor(message: string, status?: number, code?: string, isNetworkError = false) {
+  constructor(
+    message: string,
+    status?: number,
+    code?: string,
+    isNetworkError = false,
+  ) {
     super(message);
     this.name = "RelayerError";
     this.status = status;
@@ -188,8 +195,10 @@ export class RelayerError extends Error {
 }
 
 function mapBackendError(status: number, data?: any): string {
-  if (status === 429) return "The network is congested. Please try again later.";
-  if (status === 503 || status === 504) return "The blockchain network is currently unreachable. Operating in degraded mode.";
+  if (status === 429)
+    return "The network is congested. Please try again later.";
+  if (status === 503 || status === 504)
+    return "The blockchain network is currently unreachable. Operating in degraded mode.";
   if (status === 500) return "An internal error occurred on the relayer.";
   if (data && data.error) return data.error;
   return "An unexpected error occurred.";
@@ -204,15 +213,23 @@ export async function relayerFetch(
   options: FetchOptions = {},
 ): Promise<Response> {
   // Default to not retrying write operations unless explicitly specified
-  const isWrite = options.method && !['GET', 'HEAD', 'OPTIONS'].includes(options.method.toUpperCase());
-  const { maxRetries = isWrite ? 1 : 3, skipBackoff = false, ...fetchOptions } = options;
+  const isWrite =
+    options.method &&
+    !["GET", "HEAD", "OPTIONS"].includes(options.method.toUpperCase());
+  const {
+    maxRetries = isWrite ? 1 : 3,
+    skipBackoff = false,
+    ...fetchOptions
+  } = options;
   const url = endpoint.startsWith("http")
     ? endpoint
     : `${RELAYER_URL}${endpoint}`;
 
   // Check if we're in backoff period
   if (!skipBackoff && isInBackoff()) {
-    const error = new RelayerError("Relayer temporarily unavailable (backing off)");
+    const error = new RelayerError(
+      "Relayer temporarily unavailable (backing off)",
+    );
     error.isBackoff = true;
     throw error;
   }
@@ -250,7 +267,7 @@ export async function relayerFetch(
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
       }
-      
+
       if (!response.ok) {
         let errorData;
         try {
@@ -258,15 +275,19 @@ export async function relayerFetch(
         } catch {
           // Ignore parse errors if no JSON
         }
-        
+
         const errorMessage = mapBackendError(response.status, errorData);
-        lastError = new RelayerError(errorMessage, response.status, errorData?.code);
-        
+        lastError = new RelayerError(
+          errorMessage,
+          response.status,
+          errorData?.code,
+        );
+
         // Don't retry client errors (except 429 which is handled above)
         if (response.status >= 400 && response.status < 500) {
           throw lastError;
         }
-        
+
         throw lastError; // Throw so catch block can handle retries for 5xx
       }
 
@@ -275,11 +296,25 @@ export async function relayerFetch(
       readDegradedHeader(response);
       return response;
     } catch (error) {
-      if (error instanceof RelayerError && error.status && error.status >= 400 && error.status < 500 && error.status !== 429) {
+      if (
+        error instanceof RelayerError &&
+        error.status &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 429
+      ) {
         throw error;
       }
 
-      lastError = error instanceof RelayerError ? error : new RelayerError("Unable to reach the relayer service. Please check your internet connection.", undefined, undefined, true);
+      lastError =
+        error instanceof RelayerError
+          ? error
+          : new RelayerError(
+              "Unable to reach the relayer service. Please check your internet connection.",
+              undefined,
+              undefined,
+              true,
+            );
 
       // Don't retry on abort
       if (error instanceof Error && error.name === "AbortError") {
@@ -302,7 +337,15 @@ export async function relayerFetch(
     }
   }
 
-  throw lastError || new RelayerError("Unable to reach the relayer service. Please check your internet connection.", undefined, undefined, true);
+  throw (
+    lastError ||
+    new RelayerError(
+      "Unable to reach the relayer service. Please check your internet connection.",
+      undefined,
+      undefined,
+      true,
+    )
+  );
 }
 
 /**
@@ -469,4 +512,3 @@ export async function fetchRelayerPublicKey(): Promise<string> {
   const data = await response.json();
   return data.publicKey;
 }
-

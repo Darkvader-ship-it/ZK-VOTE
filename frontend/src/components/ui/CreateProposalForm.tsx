@@ -155,7 +155,8 @@ export default function CreateProposalForm({
 
     try {
       let imageMeta:
-        { cid: string; filename: string; mimeType: string } | undefined;
+        | { cid: string; filename: string; mimeType: string }
+        | undefined;
 
       // Upload image if present
       if (imageFile) {

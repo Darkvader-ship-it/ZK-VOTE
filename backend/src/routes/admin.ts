@@ -42,27 +42,30 @@ export function registerShutdownHandler(handler: ShutdownHandler): void {
  *
  * Body (optional): { "reason": "<string>" }
  */
-router.post("/admin/shutdown", bodyLimit("100kb"), authGuard, queryLimiter, (async (
-  req: Request,
-  res: Response,
-) => {
-  if (!shutdownHandler) {
-    res.status(503).json({ error: "Shutdown handler not available" });
-    return;
-  }
+router.post(
+  "/admin/shutdown",
+  bodyLimit("100kb"),
+  authGuard,
+  queryLimiter,
+  (async (req: Request, res: Response) => {
+    if (!shutdownHandler) {
+      res.status(503).json({ error: "Shutdown handler not available" });
+      return;
+    }
 
-  const reason =
-    typeof req.body?.reason === "string" ? req.body.reason : "admin_request";
+    const reason =
+      typeof req.body?.reason === "string" ? req.body.reason : "admin_request";
 
-  log("warn", "admin_shutdown_requested", { reason });
+    log("warn", "admin_shutdown_requested", { reason });
 
-  res.status(202).json({ status: "shutting_down", reason });
+    res.status(202).json({ status: "shutting_down", reason });
 
-  // Defer so the 202 flushes before the server stops accepting connections.
-  setTimeout(() => {
-    void shutdownHandler!(reason);
-  }, 100);
-}) as AsyncHandler);
+    // Defer so the 202 flushes before the server stops accepting connections.
+    setTimeout(() => {
+      void shutdownHandler!(reason);
+    }, 100);
+  }) as AsyncHandler,
+);
 
 // ============================================
 // AUDIT LOG REVIEW

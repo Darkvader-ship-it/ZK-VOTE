@@ -134,7 +134,9 @@ function formatToken(token: {
   ].join("\n");
 }
 
-async function cmdCreate(flags: Record<string, string | boolean | number>): Promise<void> {
+async function cmdCreate(
+  flags: Record<string, string | boolean | number>,
+): Promise<void> {
   const clientId = flags.clientId as string;
   if (!clientId) {
     console.error("ERROR: --clientId is required for create command");
@@ -151,7 +153,9 @@ async function cmdCreate(flags: Record<string, string | boolean | number>): Prom
   });
 
   console.info("\n=== NEW AUTH TOKEN CREATED ===");
-  console.info("  IMPORTANT: Store this raw token securely. It cannot be retrieved later.");
+  console.info(
+    "  IMPORTANT: Store this raw token securely. It cannot be retrieved later.",
+  );
   console.info("");
   console.info(`  Raw Token:  ${token.rawToken}`);
   console.info(`  Token ID:   ${token.id}`);
@@ -223,7 +227,9 @@ function cmdRotate(flags: Record<string, string | boolean | number>): void {
 
     const newToken = rotateSingleToken(oldToken);
     if (!newToken) {
-      console.error(`ERROR: Could not rotate token ${tokenId} (must be active)`);
+      console.error(
+        `ERROR: Could not rotate token ${tokenId} (must be active)`,
+      );
       process.exit(1);
     }
 
@@ -234,14 +240,18 @@ function cmdRotate(flags: Record<string, string | boolean | number>): void {
     console.info(`  New Raw Token: ${newToken.rawToken}`);
     console.info(`  New Expires: ${newToken.expiresAt ?? "(never)"}`);
     console.info("");
-    console.info(`  Transition period (both tokens valid): ${config.tokenRotationTransitionMs}ms (${Math.round(config.tokenRotationTransitionMs / 86400000)} days)`);
+    console.info(
+      `  Transition period (both tokens valid): ${config.tokenRotationTransitionMs}ms (${Math.round(config.tokenRotationTransitionMs / 86400000)} days)`,
+    );
   } else {
     if (!config.tokenRotationEnabled) {
-      console.warn("WARNING: Token rotation is disabled (TOKEN_ROTATION_ENABLED=false)");
+      console.warn(
+        "WARNING: Token rotation is disabled (TOKEN_ROTATION_ENABLED=false)",
+      );
     }
 
     const results = runTokenRotation();
-    console.info(`\n=== SCHEDULED ROTATION ===");
+    console.info(`\n=== SCHEDULED ROTATION ===`);
     console.info(`Rotated ${results.length} tokens.\n`);
 
     for (const r of results) {
@@ -294,13 +304,19 @@ function cmdMaintenance(): void {
 function cmdMigrateLegacy(): void {
   console.info("\n=== MIGRATING LEGACY TOKEN ===");
   if (!config.relayerAuthToken) {
-    console.info("  No RELAYER_AUTH_TOKEN environment variable set. Nothing to migrate.");
+    console.info(
+      "  No RELAYER_AUTH_TOKEN environment variable set. Nothing to migrate.",
+    );
   } else {
     ensureLegacyTokenMigrated();
     console.info("  Legacy token migration completed.");
-    console.info("  Token stored in database with status 'active' as client 'legacy-client'.");
+    console.info(
+      "  Token stored in database with status 'active' as client 'legacy-client'.",
+    );
     console.info("  It is recommended to:");
-    console.info("    1. Create new per-client tokens via 'create' command or API");
+    console.info(
+      "    1. Create new per-client tokens via 'create' command or API",
+    );
     console.info("    2. Distribute new tokens to clients");
     console.info("    3. Revoke the legacy token after transition period");
   }
@@ -310,11 +326,19 @@ function cmdMigrateLegacy(): void {
 function cmdConfig(): void {
   console.info("\n=== AUTH CONFIGURATION ===");
   console.info(`  Token Rotation Enabled:   ${config.tokenRotationEnabled}`);
-  console.info(`  Rotation Interval:        ${config.tokenRotationIntervalMs}ms (${Math.round(config.tokenRotationIntervalMs / 86400000)} days)`);
-  console.info(`  Transition/Grace Period:  ${config.tokenRotationTransitionMs}ms (${Math.round(config.tokenRotationTransitionMs / 86400000)} days)`);
-  console.info(`  Default Token Lifetime:   ${config.defaultTokenLifetimeMs}ms (${Math.round(config.defaultTokenLifetimeMs / 86400000)} days)`);
+  console.info(
+    `  Rotation Interval:        ${config.tokenRotationIntervalMs}ms (${Math.round(config.tokenRotationIntervalMs / 86400000)} days)`,
+  );
+  console.info(
+    `  Transition/Grace Period:  ${config.tokenRotationTransitionMs}ms (${Math.round(config.tokenRotationTransitionMs / 86400000)} days)`,
+  );
+  console.info(
+    `  Default Token Lifetime:   ${config.defaultTokenLifetimeMs}ms (${Math.round(config.defaultTokenLifetimeMs / 86400000)} days)`,
+  );
   console.info(`  Audit Logging Enabled:    ${config.tokenAuditLogEnabled}`);
-  console.info(`  Legacy Token Set:         ${config.relayerAuthToken ? "yes" : "no"}`);
+  console.info(
+    `  Legacy Token Set:         ${config.relayerAuthToken ? "yes" : "no"}`,
+  );
   console.info("");
 }
 

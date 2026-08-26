@@ -162,9 +162,7 @@ export function BridgePanel({
       ) : (
         <div className="flex items-center gap-2 text-sm p-2 bg-muted/40 rounded-md">
           <span className="w-2.5 h-2.5 bg-green-500 rounded-full shrink-0" />
-          <span className="font-mono text-xs break-all">
-            {evmAddress}
-          </span>
+          <span className="font-mono text-xs break-all">{evmAddress}</span>
         </div>
       )}
 

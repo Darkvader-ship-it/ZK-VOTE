@@ -97,7 +97,12 @@ export async function fetchDAOMetadata(
     if (!response.ok) return null;
     const data = await response.json();
     // Validate it's actually DAO metadata and sanitize prototype pollution keys
-    if (data && typeof data === "object" && data.version === 1 && typeof data.description === "string") {
+    if (
+      data &&
+      typeof data === "object" &&
+      data.version === 1 &&
+      typeof data.description === "string"
+    ) {
       return safeClone(data) as DAOMetadata;
     }
     return null;

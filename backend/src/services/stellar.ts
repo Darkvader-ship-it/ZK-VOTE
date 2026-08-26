@@ -17,9 +17,17 @@ import {
   rpcPoolTotalEndpoints,
   rpcEndpointLatency,
 } from "./metrics.js";
-import { registerCircuitBreaker, CircuitBreakerOpenError } from "./circuit-breaker.js";
+import {
+  registerCircuitBreaker,
+  CircuitBreakerOpenError,
+} from "./circuit-breaker.js";
 import type { Groth16Proof } from "../types/index.js";
 import { BN254_FQ_MODULUS } from "../types/index.js";
+import nodeCluster from "node:cluster";
+import {
+  acquireClusterSequenceLock,
+  releaseClusterSequenceLock,
+} from "./cluster.js";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -150,17 +158,25 @@ export class SequenceManager {
 
   async forceResync(sorobanServer: StellarSdk.rpc.Server): Promise<void> {
     const account = await sorobanServer.getAccount(relayerKeypair.publicKey());
-    const seq = (account as unknown as { sequence: string }).sequence ?? String((account as any).sequenceNumber?.());
+    const seq =
+      (account as unknown as { sequence: string }).sequence ??
+      String((account as any).sequenceNumber?.());
     this.lastKnownSequence = seq;
     this.dirty = false;
     this.persist(seq);
     log("info", "sequence_resync", { sequence: seq });
   }
 
-  async getAccount(sorobanServer: StellarSdk.rpc.Server): Promise<StellarSdk.Account> {
+  async getAccount(
+    sorobanServer: StellarSdk.rpc.Server,
+  ): Promise<StellarSdk.Account> {
     if (this.dirty || this.lastKnownSequence === null) {
-      const account = await sorobanServer.getAccount(relayerKeypair.publicKey());
-      const seq = (account as any).sequence ?? String((account as any).sequenceNumber?.());
+      const account = await sorobanServer.getAccount(
+        relayerKeypair.publicKey(),
+      );
+      const seq =
+        (account as any).sequence ??
+        String((account as any).sequenceNumber?.());
       this.lastKnownSequence = seq;
       this.dirty = false;
       this.persist(seq);
@@ -181,7 +197,7 @@ export class SequenceManager {
 export const sequenceManager = new SequenceManager();
 
 export async function withSequenceLock<T>(fn: () => Promise<T>): Promise<T> {
-  if (config.clusterEnabled && cluster.isWorker) {
+  if (config.clusterEnabled && nodeCluster.isWorker) {
     await acquireClusterSequenceLock();
     try {
       return await fn();
@@ -229,7 +245,9 @@ export class RpcPoolManager {
   private currentIndex = 0;
 
   constructor(urls: string[]) {
-    const uniqueUrls = Array.from(new Set(urls.length > 0 ? urls : [config.rpcUrl]));
+    const uniqueUrls = Array.from(
+      new Set(urls.length > 0 ? urls : [config.rpcUrl]),
+    );
     this.endpoints = uniqueUrls.map((url) => ({
       url,
       server: new StellarSdk.rpc.Server(url, { allowHttp: true }),
@@ -251,7 +269,8 @@ export class RpcPoolManager {
         return this.endpoints[idx].server;
       }
     }
-    const fallback = this.endpoints[this.currentIndex % this.endpoints.length].server;
+    const fallback =
+      this.endpoints[this.currentIndex % this.endpoints.length].server;
     this.currentIndex = (this.currentIndex + 1) % this.endpoints.length;
     return fallback;
   }
@@ -300,7 +319,9 @@ export class RpcPoolManager {
     endpoints: RpcEndpointStatus[];
   } {
     const healthyCount = this.endpoints.filter((e) => e.healthy).length;
-    const activeEp = this.endpoints[this.currentIndex % this.endpoints.length] || this.endpoints[0];
+    const activeEp =
+      this.endpoints[this.currentIndex % this.endpoints.length] ||
+      this.endpoints[0];
     return {
       totalEndpoints: this.endpoints.length,
       healthyEndpoints: healthyCount,
@@ -316,7 +337,9 @@ export class RpcPoolManager {
   }
 }
 
-export const rpcPoolManager = new RpcPoolManager(config.rpcUrls || [config.rpcUrl]);
+export const rpcPoolManager = new RpcPoolManager(
+  config.rpcUrls || [config.rpcUrl],
+);
 
 // Circuit breaker for Soroban RPC calls — trips when the RPC pool is
 // degraded across the board, so requests fail fast instead of each one
@@ -580,7 +603,10 @@ const BN254_FQ_HALF = (BN254_FQ_MODULUS - 1n) / 2n;
  * `aBytes`/`bBytes` are the raw 64/128-byte G1/G2 encodings (X||Y for G1;
  * X_c1||X_c0||Y_c1||Y_c0 for G2, per the Groth16Proof type's format).
  */
-export function canonicalizeProof(aBytes: Buffer, bBytes: Buffer): { a: Buffer; b: Buffer } {
+export function canonicalizeProof(
+  aBytes: Buffer,
+  bBytes: Buffer,
+): { a: Buffer; b: Buffer } {
   const ay = bytesToBigInt(aBytes.subarray(32, 64));
 
   if (ay <= BN254_FQ_HALF) {

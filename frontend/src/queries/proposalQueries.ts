@@ -156,9 +156,13 @@ export function useInvalidateProposals() {
 export function useOptimisticVote() {
   const queryClient = useQueryClient();
 
-  const setOptimisticVote = (daoId: number, proposalId: number, choice: boolean) => {
+  const setOptimisticVote = (
+    daoId: number,
+    proposalId: number,
+    choice: boolean,
+  ) => {
     const queryKey = queryKeys.proposals.list(daoId);
-    
+
     // Save previous state to be able to revert
     const previousProposals = queryClient.getQueryData<Proposal[]>(queryKey);
 

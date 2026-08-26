@@ -36,7 +36,9 @@ router.get("/metrics", async (_req: Request, res: Response) => {
     const poolMetrics = rpcPoolManager.getMetrics();
 
     // Use collect functions on existing metrics rather than registerMetric
-    const healthyEp = register.getSingleMetric("zkvote_rpc_pool_healthy_endpoints");
+    const healthyEp = register.getSingleMetric(
+      "zkvote_rpc_pool_healthy_endpoints",
+    );
     const totalEp = register.getSingleMetric("zkvote_rpc_pool_total_endpoints");
 
     if (healthyEp && "set" in healthyEp) {
@@ -52,7 +54,9 @@ router.get("/metrics", async (_req: Request, res: Response) => {
       if (dbStatus && typeof dbStatus === "object") {
         const walSize = dbStatus.walSizeBytes;
         if (typeof walSize === "number") {
-          const walMetric = register.getSingleMetric("zkvote_db_wal_size_bytes");
+          const walMetric = register.getSingleMetric(
+            "zkvote_db_wal_size_bytes",
+          );
           if (walMetric && "set" in walMetric) {
             (walMetric as any).set(walSize);
           }
@@ -66,14 +70,18 @@ router.get("/metrics", async (_req: Request, res: Response) => {
         }
         const conns = dbStatus.connectionsActive;
         if (typeof conns === "number") {
-          const connMetric = register.getSingleMetric("zkvote_db_connections_active");
+          const connMetric = register.getSingleMetric(
+            "zkvote_db_connections_active",
+          );
           if (connMetric && "set" in connMetric) {
             (connMetric as any).set(conns);
           }
         }
         const healthy = dbStatus.writeHealthy;
         if (typeof healthy === "boolean") {
-          const healthyMetric = register.getSingleMetric("zkvote_db_write_healthy");
+          const healthyMetric = register.getSingleMetric(
+            "zkvote_db_write_healthy",
+          );
           if (healthyMetric && "set" in healthyMetric) {
             (healthyMetric as any).set(healthy ? 1 : 0);
           }

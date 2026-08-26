@@ -18,6 +18,4 @@ export { default as metricsRoutes } from "./metrics.js";
 export { default as remediationRoutes } from "./remediation.js";
 export { default as novaRoutes } from "./nova.js";
 export { default as adminRoutes } from "./admin.js";
-export { default as metricsRoutes } from "./metrics.js";
-export { default as remediationRoutes } from "./remediation.js";
 export { default as thresholdRoutes } from "./threshold.js";

@@ -80,7 +80,10 @@ const proofA = hexString(128).refine(
     if (/^0*$/.test(padded)) return false;
     return coordinatesInFieldRange(padded, 2); // X, Y
   },
-  { message: "proof.a cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element" },
+  {
+    message:
+      "proof.a cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element",
+  },
 );
 
 const proofB = hexString(256).refine(
@@ -92,7 +95,10 @@ const proofB = hexString(256).refine(
     if (/^0*$/.test(padded)) return false;
     return coordinatesInFieldRange(padded, 4); // X_c1, X_c0, Y_c1, Y_c0
   },
-  { message: "proof.b cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element" },
+  {
+    message:
+      "proof.b cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element",
+  },
 );
 
 const proofC = hexString(128).refine(
@@ -103,7 +109,10 @@ const proofC = hexString(128).refine(
     if (/^0*$/.test(padded)) return false;
     return coordinatesInFieldRange(padded, 2); // X, Y
   },
-  { message: "proof.c cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element" },
+  {
+    message:
+      "proof.c cannot be all zeros (point at infinity), and each coordinate must be a valid Fq element",
+  },
 );
 
 /**
@@ -122,12 +131,15 @@ export const groth16Proof = z.object({
 /**
  * Positive integer validator for DAO/Proposal/Comment IDs
  */
-const positiveInteger = z.string().pipe(
-  z.coerce.number()
-    .positive("Must be a positive integer")
-    .int("Must be an integer")
-    .max(Number.MAX_SAFE_INTEGER, "Value too large")
-);
+const positiveInteger = z
+  .string()
+  .pipe(
+    z.coerce
+      .number()
+      .positive("Must be a positive integer")
+      .int("Must be an integer")
+      .max(Number.MAX_SAFE_INTEGER, "Value too large"),
+  );
 
 /**
  * IPFS CID validator (CIDv0 or CIDv1)
@@ -145,7 +157,7 @@ const ipfsCid = z.string().refine(
     return false;
     if (!val || typeof val !== "string") return false;
     const trimmed = val.trim();
-    if (/[\/\?\\#\s\0\r\n\t]/.test(trimmed)) return false;
+    if (/[/?\\#\s\0\r\n\t]/.test(trimmed)) return false;
     return CIDV0_REGEX.test(trimmed) || CIDV1_REGEX.test(trimmed);
   },
   { message: "Invalid IPFS CID format" },
@@ -297,8 +309,12 @@ export const voteSchema = z
     voterSignature: z.string().min(1).optional(), // signed XDR from Freighter
   })
   .refine(
-    (data) => data.encryptedPayload || (data.nullifier && data.root && data.proof),
-    { message: "Either encryptedPayload or full vote payload (nullifier, root, proof) must be provided" },
+    (data) =>
+      data.encryptedPayload || (data.nullifier && data.root && data.proof),
+    {
+      message:
+        "Either encryptedPayload or full vote payload (nullifier, root, proof) must be provided",
+    },
   );
 
 export type VoteRequest = z.infer<typeof voteSchema>;
@@ -442,12 +458,22 @@ const MAX_PAGE_SIZE = 500;
 const DEFAULT_PAGE_SIZE = 100;
 
 export const limitOffsetPaginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_PAGE_SIZE)
+    .default(DEFAULT_PAGE_SIZE),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
 export const cursorPaginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_PAGE_SIZE)
+    .default(DEFAULT_PAGE_SIZE),
   cursor: z.string().optional(),
 });
 
@@ -457,14 +483,10 @@ export const eventsQuerySchema = cursorPaginationSchema.extend({
     .optional()
     .transform((val) => val?.split(",").filter(Boolean) || null),
   orderBy: z
-    .enum(['id', 'timestamp', 'ledger', 'type', 'verified', 'created_at'])
-    .default('timestamp'),
-  orderDirection: z
-    .enum(['ASC', 'DESC'])
-    .default('DESC'),
-  cursorField: z
-    .enum(['id', 'ledger', 'timestamp'])
-    .default('id'),
+    .enum(["id", "timestamp", "ledger", "type", "verified", "created_at"])
+    .default("timestamp"),
+  orderDirection: z.enum(["ASC", "DESC"]).default("DESC"),
+  cursorField: z.enum(["id", "ledger", "timestamp"]).default("id"),
 });
 
 export const daosQuerySchema = limitOffsetPaginationSchema.extend({

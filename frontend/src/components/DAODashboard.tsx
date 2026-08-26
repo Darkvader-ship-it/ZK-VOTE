@@ -120,6 +120,10 @@ export default function DAODashboard({
         title: `${daoName} - New Proposal | ZKVote`,
         description: `Create a new proposal for ${daoName} DAO. Start a vote for the community.`,
       },
+      threshold: {
+        title: `${daoName} - Threshold Encryption | ZKVote`,
+        description: `Manage threshold encryption key setup and ceremonies for ${daoName} DAO.`,
+      },
     };
 
     const { title, description } = tabMeta[activeTab];

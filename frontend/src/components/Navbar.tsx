@@ -37,7 +37,9 @@ export default function Navbar({
   const mounted = useMounted();
   const { t } = useTranslation();
 
-  const handleNavigate = (view: "home" | "browse" | "votes" | "docs" | "profile") => {
+  const handleNavigate = (
+    view: "home" | "browse" | "votes" | "docs" | "profile",
+  ) => {
     onNavigate(view);
     setMobileMenuOpen(false);
   };
@@ -108,7 +110,9 @@ export default function Navbar({
           <button
             onClick={() => handleNavigate("profile")}
             className={`transition-colors hover:text-foreground/80 ${
-              currentView === "profile" ? "text-foreground" : "text-foreground/60"
+              currentView === "profile"
+                ? "text-foreground"
+                : "text-foreground/60"
             }`}
           >
             Receipts
@@ -161,7 +165,9 @@ export default function Navbar({
                     className="min-h-[48px] sm:min-h-0 sm:h-9"
                   >
                     <LogOut className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                    <span className="text-xs sm:text-sm">{t("nav.disconnect")}</span>
+                    <span className="text-xs sm:text-sm">
+                      {t("nav.disconnect")}
+                    </span>
                   </Button>
                 </div>
               ) : (

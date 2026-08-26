@@ -54,7 +54,10 @@ export function verifyVdf(
 
     if ((i + 1) % checkpointInterval === 0) {
       const expectedHex = current.toString("hex");
-      if (checkpointIndex >= checkpoints.length || checkpoints[checkpointIndex] !== expectedHex) {
+      if (
+        checkpointIndex >= checkpoints.length ||
+        checkpoints[checkpointIndex] !== expectedHex
+      ) {
         return false;
       }
       checkpointIndex++;
@@ -83,7 +86,12 @@ export function deriveVdfInput(
   const blockHashBuf = Buffer.from(blockHashHex, "hex");
   const adminSeedBuf = Buffer.from(adminSeedHex, "hex");
 
-  const combined = Buffer.concat([daoIdBuf, proposalIdBuf, blockHashBuf, adminSeedBuf]);
+  const combined = Buffer.concat([
+    daoIdBuf,
+    proposalIdBuf,
+    blockHashBuf,
+    adminSeedBuf,
+  ]);
   const hash = crypto.createHash("sha256").update(combined).digest();
 
   return hash.toString("hex");
@@ -95,7 +103,11 @@ export function deriveVdfInput(
 export function benchmarkVdf(
   iterationsArray: number[],
 ): { iterations: number; computeTimeMs: number; outputSize: number }[] {
-  const results: { iterations: number; computeTimeMs: number; outputSize: number }[] = [];
+  const results: {
+    iterations: number;
+    computeTimeMs: number;
+    outputSize: number;
+  }[] = [];
 
   for (const iterations of iterationsArray) {
     const inputHex = crypto.randomBytes(32).toString("hex");

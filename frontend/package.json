@@ -3,8 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "scripts": {
+    "scripts": {
+    "sync:circuits": "mkdir -p public/circuits/comment && [ -f ../circuits/build/vote_js/vote.wasm ] && cp ../circuits/build/vote_js/vote.wasm public/circuits/vote.wasm; [ -f ../circuits/build/comment_js/comment.wasm ] && cp ../circuits/build/comment_js/comment.wasm public/circuits/comment/comment.wasm; echo 'circuits synced'",
+    "predev": "npm run sync:circuits",
     "dev": "vite",
+    "prebuild": "npm run sync:circuits",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",

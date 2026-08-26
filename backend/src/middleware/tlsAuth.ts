@@ -11,14 +11,21 @@ import { config } from "../config.js";
 /**
  * Middleware verifying that incoming request has a valid client TLS certificate.
  */
-export function tlsClientCertGuard(req: Request, res: Response, next: NextFunction) {
+export function tlsClientCertGuard(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   if (!config.requireClientCert) {
     return next();
   }
 
   // Check socket TLS certificate authorization status or proxy header
-  const clientAuthSocket = (req.socket as any)?.authorized || (req as any).client?.authorized;
-  const headerCert = req.headers["x-client-cert-present"] === "true" || req.headers["ssl-client-verify"] === "SUCCESS";
+  const clientAuthSocket =
+    (req.socket as any)?.authorized || (req as any).client?.authorized;
+  const headerCert =
+    req.headers["x-client-cert-present"] === "true" ||
+    req.headers["ssl-client-verify"] === "SUCCESS";
 
   if (!clientAuthSocket && !headerCert) {
     return res.status(401).json({

@@ -48,10 +48,7 @@ function applyDegradationHeaders(res: Response): void {
   if (all.length === 0) return;
 
   res.setHeader("X-Service-Degraded", all.join(","));
-  res.setHeader(
-    "X-Service-Status",
-    all.map((s) => `${s}=degraded`).join(";"),
-  );
+  res.setHeader("X-Service-Status", all.map((s) => `${s}=degraded`).join(";"));
 }
 
 /** Mark a service as degraded for this request (and optionally globally). */

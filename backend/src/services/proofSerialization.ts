@@ -121,7 +121,6 @@ export function deserializeProof(bytes: Buffer): {
   const bBytes = bytes.subarray(offset, offset + G2_LEN);
   offset += G2_LEN;
   const cBytes = bytes.subarray(offset, offset + G1_LEN);
-  offset += G1_LEN;
 
   const proof: Groth16Proof = {
     a: "0x" + aBytes.toString("hex"),

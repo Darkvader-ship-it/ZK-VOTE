@@ -74,8 +74,7 @@ export function csrfGuard(
       .json({ error: "Origin or Referer header required for write endpoints" });
   }
 
-  // Extract origin for validation
-  const requestOrigin = origin || (referer ? new URL(referer).origin : null);
+  // requestOrigin already computed above (origin || referer origin)
 
   // If we have an origin, validate it against allowed origins
   if (requestOrigin) {
@@ -121,10 +120,10 @@ export function csrfTokenMiddleware(
 ): void {
   // Generate a new CSRF token for this session
   const token = generateCsrfToken(req);
-  
+
   // Set the token in a response header so the frontend can retrieve it
   res.setHeader("X-CSRF-Token", token);
-  
+
   // Also set it as a cookie for convenience (httpOnly for security)
   res.cookie("csrf_token", token, {
     httpOnly: true,
@@ -132,6 +131,6 @@ export function csrfTokenMiddleware(
     sameSite: "strict",
     maxAge: 3600000, // 1 hour
   });
-  
+
   next();
 }

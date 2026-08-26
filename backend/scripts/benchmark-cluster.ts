@@ -55,10 +55,7 @@ export function runBenchmark(
 
       const reqStart = Date.now();
       const req = http.get(url, (res) => {
-        let body = "";
-        res.on("data", (chunk) => {
-          body += chunk;
-        });
+        res.on("data", () => {});
         res.on("end", () => {
           const reqLatency = Date.now() - reqStart;
           latencies.push(reqLatency);

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 export interface VoterReceipt {
   id: string; // Unique identifier, can be txHash
@@ -14,7 +14,7 @@ const STORAGE_KEY = "zkvote-receipts";
 export function useReceipts() {
   const [receipts, setReceipts] = useState<VoterReceipt[]>(() => {
     try {
-      if (typeof window !== 'undefined') {
+      if (typeof window !== "undefined") {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored) {
           return JSON.parse(stored);

@@ -107,7 +107,10 @@ export function useRegistration({
         throw new Error("Wallet kit not available");
       }
 
-      let secret: string, salt: string, blindingFactor: string, commitment: string;
+      let secret: string,
+        salt: string,
+        blindingFactor: string,
+        commitment: string;
 
       const cached = publicKey ? getZKCredentials(daoId, publicKey) : null;
 

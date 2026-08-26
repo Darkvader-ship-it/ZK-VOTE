@@ -1,7 +1,13 @@
 import { useState, useRef } from "react";
-import { useReceipts, VoterReceipt } from "../hooks/useReceipts";
+import { useReceipts, type VoterReceipt } from "../hooks/useReceipts";
 import { Button } from "./ui/Button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./ui/Card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "./ui/Card";
 import { initializeContractClients } from "../lib/contracts";
 import { truncateAddress } from "../lib/utils";
 import { CheckCircle, XCircle, Loader2, Download, Upload } from "lucide-react";
@@ -13,31 +19,38 @@ interface ProfileProps {
 }
 
 export default function Profile({ publicKey, isConnected }: ProfileProps) {
-  const { receipts, importReceipts, clearReceipts } = useReceipts();
+  const { receipts, importReceipts } = useReceipts();
   const [verifying, setVerifying] = useState<Record<string, boolean>>({});
-  const [verificationResult, setVerificationResult] = useState<Record<string, boolean>>({});
+  const [verificationResult, setVerificationResult] = useState<
+    Record<string, boolean>
+  >({});
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   const handleVerify = async (receipt: VoterReceipt) => {
     if (!publicKey) return;
     setVerifying((prev) => ({ ...prev, [receipt.id]: true }));
-    
+
     try {
       const clients = initializeContractClients(publicKey);
-      
+
       // We convert hex string to bigint since U256 in JS bindings is usually bigint
       // Actually Soroban U256 is expected as bigint or string in generated bindings
       // The receipt.nullifier might not have '0x' prefix depending on toHexBE implementation
-      const nullifierHex = receipt.nullifier.startsWith("0x") ? receipt.nullifier : `0x${receipt.nullifier}`;
+      const nullifierHex = receipt.nullifier.startsWith("0x")
+        ? receipt.nullifier
+        : `0x${receipt.nullifier}`;
       const nullifierBigInt = BigInt(nullifierHex);
-      
+
       const result = await clients.voting.is_nullifier_used({
         dao_id: BigInt(receipt.daoId),
         proposal_id: BigInt(receipt.proposalId),
-        nullifier: nullifierBigInt
+        nullifier: nullifierBigInt,
       });
-      
-      setVerificationResult((prev) => ({ ...prev, [receipt.id]: result.result }));
+
+      setVerificationResult((prev) => ({
+        ...prev,
+        [receipt.id]: result.result,
+      }));
     } catch (err) {
       console.error("Verification failed:", err);
       setVerificationResult((prev) => ({ ...prev, [receipt.id]: false }));
@@ -47,8 +60,10 @@ export default function Profile({ publicKey, isConnected }: ProfileProps) {
   };
 
   const handleExport = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(receipts, null, 2));
-    const downloadAnchorNode = document.createElement('a');
+    const dataStr =
+      "data:text/json;charset=utf-8," +
+      encodeURIComponent(JSON.stringify(receipts, null, 2));
+    const downloadAnchorNode = document.createElement("a");
     downloadAnchorNode.setAttribute("href", dataStr);
     downloadAnchorNode.setAttribute("download", "zk-vote-receipts.json");
     document.body.appendChild(downloadAnchorNode);
@@ -59,7 +74,7 @@ export default function Profile({ publicKey, isConnected }: ProfileProps) {
   const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -82,7 +97,8 @@ export default function Profile({ publicKey, isConnected }: ProfileProps) {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Your Profile</h1>
           <p className="text-muted-foreground mt-2">
-            Manage your voting receipts. Receipts prove that your vote was included in the tally without revealing your choice.
+            Manage your voting receipts. Receipts prove that your vote was
+            included in the tally without revealing your choice.
           </p>
         </div>
         <div className="flex gap-2">
@@ -93,20 +109,28 @@ export default function Profile({ publicKey, isConnected }: ProfileProps) {
             ref={fileInputRef}
             onChange={handleImport}
           />
-          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+          <Button
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+          >
             <Upload className="mr-2 h-4 w-4" />
             Import
           </Button>
-          <Button variant="outline" onClick={handleExport} disabled={receipts.length === 0}>
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={receipts.length === 0}
+          >
             <Download className="mr-2 h-4 w-4" />
             Export
           </Button>
         </div>
       </div>
-      
+
       {!isConnected && (
         <Alert variant="warning">
-          Please connect your wallet to verify your receipts against the blockchain.
+          Please connect your wallet to verify your receipts against the
+          blockchain.
         </Alert>
       )}
 
@@ -114,13 +138,16 @@ export default function Profile({ publicKey, isConnected }: ProfileProps) {
         <CardHeader>
           <CardTitle>Voting Receipts</CardTitle>
           <CardDescription>
-            You have {receipts.length} receipt{receipts.length !== 1 && "s"}. These receipts do not contain any information about which candidate you voted for.
+            You have {receipts.length} receipt{receipts.length !== 1 && "s"}.
+            These receipts do not contain any information about which candidate
+            you voted for.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {receipts.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No voting receipts found. When you cast a vote, a receipt will be saved here automatically.
+              No voting receipts found. When you cast a vote, a receipt will be
+              saved here automatically.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -143,9 +170,9 @@ export default function Profile({ publicKey, isConnected }: ProfileProps) {
                       <td className="px-4 py-3">{receipt.daoId}</td>
                       <td className="px-4 py-3">{receipt.proposalId}</td>
                       <td className="px-4 py-3 font-mono text-xs">
-                        <a 
-                          href={`https://stellar.expert/explorer/testnet/tx/${receipt.txHash}`} 
-                          target="_blank" 
+                        <a
+                          href={`https://stellar.expert/explorer/testnet/tx/${receipt.txHash}`}
+                          target="_blank"
                           rel="noreferrer"
                           className="text-primary hover:underline"
                         >
@@ -162,9 +189,9 @@ export default function Profile({ publicKey, isConnected }: ProfileProps) {
                             <XCircle className="mr-1 h-4 w-4" /> Failed
                           </span>
                         ) : (
-                          <Button 
-                            variant="secondary" 
-                            size="sm" 
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             disabled={!isConnected || verifying[receipt.id]}
                             onClick={() => handleVerify(receipt)}
                           >

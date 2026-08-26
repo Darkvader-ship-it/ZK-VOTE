@@ -56,7 +56,9 @@ export interface WalHealth {
   lastBackupStatus: string;
 }
 
-export function configureWalResilience(overrides: Partial<WalResilienceConfig>): void {
+export function configureWalResilience(
+  overrides: Partial<WalResilienceConfig>,
+): void {
   activeConfig = { ...activeConfig, ...overrides };
 }
 
@@ -67,7 +69,7 @@ export function getWalResilienceConfig(): WalResilienceConfig {
 export function getWalHealth(db: DatabaseType, dbPath: string): WalHealth {
   const walPath = `${dbPath}-wal`;
   let walSizeBytes: number | null = null;
-  let walFileExists: boolean | null = null;
+  let walFileExists: boolean | null;
 
   try {
     walFileExists = fs.existsSync(walPath);
@@ -80,12 +82,19 @@ export function getWalHealth(db: DatabaseType, dbPath: string): WalHealth {
 
   return {
     available: dbAvailable,
-    integrityOk: latestIntegrityStatus === "ok" ? true : latestIntegrityStatus !== null ? false : null,
+    integrityOk:
+      latestIntegrityStatus === "ok"
+        ? true
+        : latestIntegrityStatus !== null
+          ? false
+          : null,
     integrityResult: latestIntegrityStatus,
     lastIntegrityCheck: lastIntegrityCheckTime,
     walSizeBytes,
     walSizeThreshold: activeConfig.walWarningThresholdBytes,
-    walOversized: walSizeBytes !== null && walSizeBytes > activeConfig.walWarningThresholdBytes,
+    walOversized:
+      walSizeBytes !== null &&
+      walSizeBytes > activeConfig.walWarningThresholdBytes,
     walFileExists,
     lastCheckpoint: lastCheckpointTime,
     lastBackup: lastBackupTime,
@@ -102,8 +111,13 @@ export function initWalResilience(db: DatabaseType, dbPath: string): void {
   db.pragma(`busy_timeout = ${cfg.busyTimeoutMs}`);
   logger.info("busy_timeout_set", { timeoutMs: cfg.busyTimeoutMs });
 
-  const integrityRow = db.prepare("PRAGMA integrity_check").get() as Record<string, unknown>;
-  const integrityResult = integrityRow ? String(Object.values(integrityRow)[0]) : "failed";
+  const integrityRow = db.prepare("PRAGMA integrity_check").get() as Record<
+    string,
+    unknown
+  >;
+  const integrityResult = integrityRow
+    ? String(Object.values(integrityRow)[0])
+    : "failed";
   latestIntegrityStatus = integrityResult;
   lastIntegrityCheckTime = new Date().toISOString();
 
@@ -133,7 +147,10 @@ export function startWalCheckpointing(db: DatabaseType): void {
       const duration = performance.now() - start;
       lastCheckpointTime = new Date().toISOString();
       transactionCountSinceCheckpoint = 0;
-      logger.debug("wal_checkpoint_completed", { mode, durationMs: Math.round(duration) });
+      logger.debug("wal_checkpoint_completed", {
+        mode,
+        durationMs: Math.round(duration),
+      });
     } catch (err) {
       logger.error("wal_checkpoint_failed", {
         mode,
@@ -217,7 +234,11 @@ export function executeWithRetry<T>(
       return fn(db);
     } catch (err) {
       const sqliteErr = err as { code?: string; message: string };
-      if (sqliteErr.code !== "SQLITE_BUSY" && !sqliteErr.message?.includes("SQLITE_BUSY") && !sqliteErr.message?.toLowerCase().includes("database is locked")) {
+      if (
+        sqliteErr.code !== "SQLITE_BUSY" &&
+        !sqliteErr.message?.includes("SQLITE_BUSY") &&
+        !sqliteErr.message?.toLowerCase().includes("database is locked")
+      ) {
         throw err;
       }
 
@@ -236,6 +257,7 @@ export function executeWithRetry<T>(
         });
         const deadline = Date.now() + delayMs;
         while (Date.now() < deadline) {
+          /* busy-wait */
         }
       }
       attempt++;
@@ -262,7 +284,10 @@ export function startPeriodicBackups(db: DatabaseType, dbPath: string): void {
       }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const backupDbPath = path.join(backupDir, `zkvote-wal-backup-${timestamp}.db`);
+      const backupDbPath = path.join(
+        backupDir,
+        `zkvote-wal-backup-${timestamp}.db`,
+      );
       const start = performance.now();
 
       db.backup(backupDbPath);
@@ -313,12 +338,20 @@ export function stopPeriodicBackups(): void {
   }
 }
 
-export function detectAndHandleWalIssue(db: DatabaseType, dbPath: string): void {
+export function detectAndHandleWalIssue(
+  db: DatabaseType,
+  dbPath: string,
+): void {
   const walPath = `${dbPath}-wal`;
 
   try {
-    const integrityRow = db.prepare("PRAGMA integrity_check").get() as Record<string, unknown>;
-    latestIntegrityStatus = integrityRow ? String(Object.values(integrityRow)[0]) : "failed";
+    const integrityRow = db.prepare("PRAGMA integrity_check").get() as Record<
+      string,
+      unknown
+    >;
+    latestIntegrityStatus = integrityRow
+      ? String(Object.values(integrityRow)[0])
+      : "failed";
 
     if (latestIntegrityStatus !== "ok") {
       logger.error("wal_corruption_detected", {

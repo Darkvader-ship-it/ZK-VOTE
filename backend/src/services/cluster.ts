@@ -15,7 +15,11 @@ import os from "node:os";
 import type { Worker as ClusterWorker } from "node:cluster";
 import { config } from "../config.js";
 import { log } from "./logger.js";
-import type { Store, ClientRateLimitInfo, Options as RateLimitOptions } from "express-rate-limit";
+import type {
+  Store,
+  ClientRateLimitInfo,
+  Options as RateLimitOptions,
+} from "express-rate-limit";
 
 // ============================================
 // IPC MESSAGE TYPES & INTERFACES
@@ -60,12 +64,18 @@ export interface ClusterIpcMessage {
 let _isLeader = false;
 let _leaderPid: number | undefined;
 const leaderChangeCallbacks: Array<(isLeader: boolean) => void> = [];
-const cacheInvalidateCallbacks: Array<(channel: string, key: string, data?: any) => void> = [];
+const cacheInvalidateCallbacks: Array<
+  (channel: string, key: string, data?: any) => void
+> = [];
 let workerShutdownHandler: ((reason: string) => void) | null = null;
 
 const pendingIpcRequests = new Map<
   string,
-  { resolve: (msg: ClusterIpcMessage) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }
+  {
+    resolve: (msg: ClusterIpcMessage) => void;
+    reject: (err: Error) => void;
+    timer: NodeJS.Timeout;
+  }
 >();
 
 /**
@@ -86,14 +96,18 @@ export function onLeaderChange(cb: (isLeader: boolean) => void): void {
 /**
  * Register a listener for cache invalidation events
  */
-export function onCacheInvalidate(cb: (channel: string, key: string, data?: any) => void): void {
+export function onCacheInvalidate(
+  cb: (channel: string, key: string, data?: any) => void,
+): void {
   cacheInvalidateCallbacks.push(cb);
 }
 
 /**
  * Register worker graceful shutdown trigger
  */
-export function registerWorkerShutdownHandler(handler: (reason: string) => void): void {
+export function registerWorkerShutdownHandler(
+  handler: (reason: string) => void,
+): void {
   workerShutdownHandler = handler;
 }
 
@@ -101,13 +115,18 @@ export function registerWorkerShutdownHandler(handler: (reason: string) => void)
 // WORKER IPC MESSAGING HELPERS
 // ============================================
 
-function sendIpcRequest(msg: ClusterIpcMessage, timeoutMs = 10000): Promise<ClusterIpcMessage> {
+function sendIpcRequest(
+  msg: ClusterIpcMessage,
+  timeoutMs = 10000,
+): Promise<ClusterIpcMessage> {
   return new Promise((resolve, reject) => {
     if (!process.send) {
       return reject(new Error("IPC process.send unavailable"));
     }
 
-    const requestId = msg.requestId || `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const requestId =
+      msg.requestId ||
+      `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const fullMsg: ClusterIpcMessage = { ...msg, requestId };
 
     const timer = setTimeout(() => {
@@ -154,7 +173,9 @@ export function initWorkerIpc(): void {
             try {
               cb(_isLeader);
             } catch (err) {
-              log("error", "cluster_leader_callback_error", { error: (err as Error).message });
+              log("error", "cluster_leader_callback_error", {
+                error: (err as Error).message,
+              });
             }
           }
         }
@@ -167,7 +188,9 @@ export function initWorkerIpc(): void {
             try {
               cb(msg.channel, msg.key, msg.data);
             } catch (err) {
-              log("error", "cluster_cache_invalidate_error", { error: (err as Error).message });
+              log("error", "cluster_cache_invalidate_error", {
+                error: (err as Error).message,
+              });
             }
           }
         }
@@ -188,7 +211,10 @@ export function initWorkerIpc(): void {
       }
 
       case "GRACEFUL_SHUTDOWN": {
-        log("info", "cluster_worker_shutdown_received", { pid: process.pid, reason: msg.reason });
+        log("info", "cluster_worker_shutdown_received", {
+          pid: process.pid,
+          reason: msg.reason,
+        });
         if (workerShutdownHandler) {
           workerShutdownHandler(msg.reason || "cluster_master_shutdown");
         }
@@ -202,7 +228,9 @@ export function initWorkerIpc(): void {
 // SEQUENCE LOCK (IPC DISTRIBUTED MUTEX)
 // ============================================
 
-export async function acquireClusterSequenceLock(timeoutMs = 15000): Promise<void> {
+export async function acquireClusterSequenceLock(
+  timeoutMs = 15000,
+): Promise<void> {
   if (!config.clusterEnabled || !cluster.isWorker) return;
   await sendIpcRequest({ type: "SEQUENCE_LOCK_ACQUIRE" }, timeoutMs);
 }
@@ -247,10 +275,14 @@ export class ClusterRateLimitStore implements Store {
 
       return {
         totalHits: res.totalHits || 1,
-        resetTime: res.resetTimeMs ? new Date(res.resetTimeMs) : new Date(Date.now() + windowMs),
+        resetTime: res.resetTimeMs
+          ? new Date(res.resetTimeMs)
+          : new Date(Date.now() + windowMs),
       };
     } catch (err) {
-      log("warn", "cluster_rate_limit_ipc_fallback", { error: (err as Error).message });
+      log("warn", "cluster_rate_limit_ipc_fallback", {
+        error: (err as Error).message,
+      });
       const windowMs = this.options?.windowMs || 60000;
       return { totalHits: 1, resetTime: new Date(Date.now() + windowMs) };
     }
@@ -281,7 +313,11 @@ export class ClusterRateLimitStore implements Store {
 // IN-MEMORY CACHE INVALIDATION BROADCAST
 // ============================================
 
-export function broadcastCacheInvalidation(channel: string, key: string, data?: any): void {
+export function broadcastCacheInvalidation(
+  channel: string,
+  key: string,
+  data?: any,
+): void {
   if (cluster.isWorker && config.clusterEnabled && process.send) {
     process.send({
       type: "CACHE_INVALIDATE",
@@ -316,8 +352,10 @@ export function startClusterMaster(): void {
   let leaderWorkerId: number | null = null;
 
   // Sequence Lock State
-  const sequenceLockQueue: Array<{ worker: ClusterWorker; requestId: string }> = [];
-  let currentLockHolder: { worker: ClusterWorker; requestId: string } | null = null;
+  const sequenceLockQueue: Array<{ worker: ClusterWorker; requestId: string }> =
+    [];
+  let currentLockHolder: { worker: ClusterWorker; requestId: string } | null =
+    null;
 
   // Rate Limit State
   const rateLimitStores = new Map<string, Map<string, RateLimitEntry>>();
@@ -330,7 +368,8 @@ export function startClusterMaster(): void {
       return;
     }
 
-    const currentLeaderActive = leaderWorkerId !== null && activeWorkers.has(leaderWorkerId);
+    const currentLeaderActive =
+      leaderWorkerId !== null && activeWorkers.has(leaderWorkerId);
     if (!currentLeaderActive) {
       const newLeader = workerList[0];
       leaderWorkerId = newLeader.id;
@@ -369,7 +408,10 @@ export function startClusterMaster(): void {
     });
   };
 
-  const handleWorkerMessage = (worker: ClusterWorker, msg: ClusterIpcMessage) => {
+  const handleWorkerMessage = (
+    worker: ClusterWorker,
+    msg: ClusterIpcMessage,
+  ) => {
     if (!msg || typeof msg !== "object" || !msg.type) return;
 
     switch (msg.type) {
@@ -377,7 +419,10 @@ export function startClusterMaster(): void {
         if (!msg.requestId) return;
         if (!currentLockHolder) {
           currentLockHolder = { worker, requestId: msg.requestId };
-          worker.send({ type: "SEQUENCE_LOCK_GRANTED", requestId: msg.requestId });
+          worker.send({
+            type: "SEQUENCE_LOCK_GRANTED",
+            requestId: msg.requestId,
+          });
         } else {
           sequenceLockQueue.push({ worker, requestId: msg.requestId });
         }
@@ -447,7 +492,7 @@ export function startClusterMaster(): void {
           const entry = store?.get(msg.key);
           if (entry) {
             clearTimeout(entry.timer);
-            store.delete(msg.key);
+            store?.delete(msg.key);
           }
         }
         break;
@@ -475,7 +520,9 @@ export function startClusterMaster(): void {
     const worker = cluster.fork();
     activeWorkers.set(worker.id, worker);
 
-    worker.on("message", (msg: ClusterIpcMessage) => handleWorkerMessage(worker, msg));
+    worker.on("message", (msg: ClusterIpcMessage) =>
+      handleWorkerMessage(worker, msg),
+    );
   }
 
   updateLeader();
@@ -496,7 +543,9 @@ export function startClusterMaster(): void {
       currentLockHolder = null;
       processNextLockRequest();
     }
-    const filteredQueue = sequenceLockQueue.filter((item) => item.worker.id !== worker.id);
+    const filteredQueue = sequenceLockQueue.filter(
+      (item) => item.worker.id !== worker.id,
+    );
     sequenceLockQueue.length = 0;
     sequenceLockQueue.push(...filteredQueue);
 
@@ -508,7 +557,9 @@ export function startClusterMaster(): void {
       log("info", "cluster_respawning_worker", { oldWorkerId: worker.id });
       const newWorker = cluster.fork();
       activeWorkers.set(newWorker.id, newWorker);
-      newWorker.on("message", (msg: ClusterIpcMessage) => handleWorkerMessage(newWorker, msg));
+      newWorker.on("message", (msg: ClusterIpcMessage) =>
+        handleWorkerMessage(newWorker, msg),
+      );
       updateLeader();
     }
   });
@@ -531,7 +582,10 @@ export function startClusterMaster(): void {
     if (masterShuttingDown) return;
     masterShuttingDown = true;
 
-    log("info", "cluster_master_shutdown_start", { signal, workers: activeWorkers.size });
+    log("info", "cluster_master_shutdown_start", {
+      signal,
+      workers: activeWorkers.size,
+    });
 
     // Notify all worker processes to shut down gracefully
     for (const w of activeWorkers.values()) {
@@ -541,7 +595,9 @@ export function startClusterMaster(): void {
     }
 
     const forceKillTimer = setTimeout(() => {
-      log("warn", "cluster_master_force_killing_workers", { timeoutMs: DRAIN_TIMEOUT_MS });
+      log("warn", "cluster_master_force_killing_workers", {
+        timeoutMs: DRAIN_TIMEOUT_MS,
+      });
       for (const w of activeWorkers.values()) {
         w.kill("SIGKILL");
       }

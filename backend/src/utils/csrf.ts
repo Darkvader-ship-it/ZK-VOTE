@@ -36,9 +36,7 @@ setInterval(() => {
 function getSessionId(req: Request): string {
   const ip = req.ip || req.socket.remoteAddress || "unknown";
   const userAgent = req.headers["user-agent"] || "unknown";
-  return createHash("sha256")
-    .update(`${ip}:${userAgent}`)
-    .digest("hex");
+  return createHash("sha256").update(`${ip}:${userAgent}`).digest("hex");
 }
 
 /**
@@ -48,18 +46,18 @@ function getSessionId(req: Request): string {
 export function generateCsrfToken(req: Request): string {
   const sessionId = getSessionId(req);
   const randomToken = randomBytes(32).toString("hex");
-  
+
   // Create a token bound to the session
   const token = createHash("sha256")
     .update(`${sessionId}:${randomToken}`)
     .digest("hex");
-  
+
   // Store the token with expiration
   tokenStore.set(sessionId, {
     token,
     expires: Date.now() + TOKEN_TTL,
   });
-  
+
   return token;
 }
 
@@ -69,17 +67,17 @@ export function generateCsrfToken(req: Request): string {
 export function validateCsrfToken(token: string, req: Request): boolean {
   const sessionId = getSessionId(req);
   const storedData = tokenStore.get(sessionId);
-  
+
   if (!storedData) {
     return false;
   }
-  
+
   // Check if token has expired
   if (storedData.expires < Date.now()) {
     tokenStore.delete(sessionId);
     return false;
   }
-  
+
   // Use constant-time comparison to prevent timing attacks
   return timingSafeEqual(token, storedData.token);
 }
@@ -91,12 +89,12 @@ function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) {
     return false;
   }
-  
+
   let result = 0;
   for (let i = 0; i < a.length; i++) {
     result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
-  
+
   return result === 0;
 }
 

@@ -3,7 +3,10 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { getRemediationHistory, getMTTRStats } from "../services/remediation.js";
+import {
+  getRemediationHistory,
+  getMTTRStats,
+} from "../services/remediation.js";
 
 const router = Router();
 

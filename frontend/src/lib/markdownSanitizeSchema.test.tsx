@@ -12,11 +12,14 @@ const renderMarkdown = (markdown: string) => {
       remarkPlugins={[remarkGfm]}
       rehypePlugins={[
         [rehypeSanitize, markdownSanitizeSchema],
-        [rehypeExternalLinks, { target: "_blank", rel: ["noopener", "noreferrer"] }],
+        [
+          rehypeExternalLinks,
+          { target: "_blank", rel: ["noopener", "noreferrer"] },
+        ],
       ]}
     >
       {markdown}
-    </ReactMarkdown>
+    </ReactMarkdown>,
   );
   return container.innerHTML;
 };
@@ -59,7 +62,9 @@ describe("Markdown Sanitization Pipeline", () => {
   });
 
   it("handles encoded/obfuscated variants", () => {
-    const html = renderMarkdown("<a href=\"&#x6A&#x61&#x76&#x61&#x73&#x63&#x72&#x69&#x70&#x74&#x3A&#x61&#x6C&#x65&#x72&#x74&#x28&#x27&#x58&#x53&#x53&#x27&#x29\">click</a>");
+    const html = renderMarkdown(
+      '<a href="&#x6A&#x61&#x76&#x61&#x73&#x63&#x72&#x69&#x70&#x74&#x3A&#x61&#x6C&#x65&#x72&#x74&#x28&#x27&#x58&#x53&#x53&#x27&#x29">click</a>',
+    );
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("alert");
   });
@@ -82,7 +87,9 @@ describe("Markdown Sanitization Pipeline", () => {
   });
 
   it("strips form, object, and embed tags", () => {
-    const html = renderMarkdown("<form><object><embed></embed></object></form>");
+    const html = renderMarkdown(
+      "<form><object><embed></embed></object></form>",
+    );
     expect(html).not.toContain("<form");
     expect(html).not.toContain("<object");
     expect(html).not.toContain("<embed");

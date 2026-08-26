@@ -22,7 +22,9 @@ describe("Hardened Stores & Security", () => {
   it("keeps auth tokens in isolated closure", () => {
     setAuthToken("secret_token_123");
     expect(getAuthToken()).toBe("secret_token_123");
-    expect(JSON.stringify(userStore.getState())).not.toContain("secret_token_123");
+    expect(JSON.stringify(userStore.getState())).not.toContain(
+      "secret_token_123",
+    );
 
     clearAuthToken();
     expect(getAuthToken()).toBeNull();

@@ -131,8 +131,7 @@ pub enum VotingError {
     /// Tally proposal_ids / tallies vectors have mismatched or empty length
     QvTallyLengthMismatch = 54,
     /// Candidate index >= numCandidates configured for this election
-    InvalidCandidateIndex = 63,
-    InvalidCandidateIndex = 55,
+    InvalidCandidateIndex = 65,
     /// Reentrant call detected (defense-in-depth against cross-contract reentrancy)
     ReentrantCall = 56,
     /// VDF proof verification failed
@@ -2471,7 +2470,6 @@ impl Voting {
             num_candidates,
             vdf_output,
             vdf_delay,
-            max_revotes: 0,
             max_revotes,
             merkle_root_set_at,
             commitment_window,

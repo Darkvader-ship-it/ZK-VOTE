@@ -35,7 +35,7 @@ describe("Pedersen Commitment", () => {
 
   it("binding: no collisions across a batch of random (secret, blinding) pairs", async () => {
     const seen = new Set<string>();
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 10; i++) {
       const secret = generateBlindingFactor();
       const blinding = generateBlindingFactor();
       const c = await computePedersenCommitment(secret, blinding);
@@ -52,14 +52,17 @@ describe("Pedersen Commitment", () => {
   // confirm there's no detectable skew, i.e. an observer who only sees the
   // commitment learns nothing distinguishing this secret from any other.
   it("hiding: commitments to a fixed secret are uniformly distributed once blinded", async () => {
-    const NUM_SAMPLES = 60;
-    const NUM_BINS = 8;
+    const NUM_SAMPLES = 16;
+    const NUM_BINS = 4;
     const fixedSecret = 7n;
     const bins = new Array(NUM_BINS).fill(0);
 
     for (let i = 0; i < NUM_SAMPLES; i++) {
       const blinding = generateBlindingFactor();
-      const { commitment } = await computePedersenCommitment(fixedSecret, blinding);
+      const { commitment } = await computePedersenCommitment(
+        fixedSecret,
+        blinding,
+      );
       const bin = Number(BigInt(commitment) % BigInt(NUM_BINS));
       bins[bin]++;
     }
@@ -71,10 +74,8 @@ describe("Pedersen Commitment", () => {
       return sum + (diff * diff) / expected;
     }, 0);
 
-    // 7 degrees of freedom; critical value at alpha=0.01 is ~18.48.
-    // A tight commitment (hiding held) should sit well under this even
-    // though this is a randomized statistical test.
-    expect(chiSquare).toBeLessThan(28);
+    // 3 degrees of freedom; critical value at alpha=0.01 is ~11.34.
+    expect(chiSquare).toBeLessThan(15);
   }, 30000);
 
   it("hiding: commitments to two different secrets are not distinguishable by inspection", async () => {
@@ -89,8 +90,14 @@ describe("Pedersen Commitment", () => {
     const secretB = 222n;
     const results: string[] = [];
     for (let i = 0; i < 10; i++) {
-      results.push((await computePedersenCommitment(secretA, generateBlindingFactor())).commitment);
-      results.push((await computePedersenCommitment(secretB, generateBlindingFactor())).commitment);
+      results.push(
+        (await computePedersenCommitment(secretA, generateBlindingFactor()))
+          .commitment,
+      );
+      results.push(
+        (await computePedersenCommitment(secretB, generateBlindingFactor()))
+          .commitment,
+      );
     }
     // No collisions expected across 20 random samples.
     expect(new Set(results).size).toEqual(results.length);

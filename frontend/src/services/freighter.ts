@@ -13,12 +13,23 @@ export interface FreighterApi {
   getUserInfo: () => Promise<{ publicKey: string }>;
   getPublicKey: () => Promise<string>;
   getNetwork: () => Promise<string>;
-  getNetworkDetails: () => Promise<{ network: string; networkUrl: string; networkPassphrase: string }>;
+  getNetworkDetails: () => Promise<{
+    network: string;
+    networkUrl: string;
+    networkPassphrase: string;
+  }>;
   requestAccess: () => Promise<string>;
-  signTransaction?: (xdr: string, opts?: { networkPassphrase?: string }) => Promise<string>;
+  signTransaction?: (
+    xdr: string,
+    opts?: { networkPassphrase?: string },
+  ) => Promise<string>;
   isLocked?: () => Promise<boolean>;
-  onAccountChange?: (callback: (account: string) => void) => { remove: () => void } | void;
-  onNetworkChange?: (callback: (network: string) => void) => { remove: () => void } | void;
+  onAccountChange?: (
+    callback: (account: string) => void,
+  ) => { remove: () => void } | void;
+  onNetworkChange?: (
+    callback: (network: string) => void,
+  ) => { remove: () => void } | void;
 }
 
 declare global {
@@ -83,14 +94,14 @@ export async function getFreighterNetworkDetails(): Promise<{
 export async function connectFreighter(): Promise<string> {
   if (!isFreighterInstalled()) {
     throw new Error(
-      `Freighter is not installed. Please install Freighter from ${FREIGHTER_INSTALL_URL}`
+      `Freighter is not installed. Please install Freighter from ${FREIGHTER_INSTALL_URL}`,
     );
   }
 
   const locked = await isFreighterLocked();
   if (locked) {
     throw new Error(
-      "Freighter wallet is locked. Please unlock your Freighter wallet and try again."
+      "Freighter wallet is locked. Please unlock your Freighter wallet and try again.",
     );
   }
 
@@ -125,7 +136,9 @@ export async function connectFreighter(): Promise<string> {
       throw new Error("Connection request declined by user.");
     }
     if (msg.toLowerCase().includes("locked")) {
-      throw new Error("Freighter wallet is locked. Please unlock Freighter and try again.");
+      throw new Error(
+        "Freighter wallet is locked. Please unlock Freighter and try again.",
+      );
     }
     throw new Error(msg || "Failed to connect to Freighter.");
   }
@@ -155,7 +168,9 @@ export function hasConnectionIntent(): boolean {
   }
 }
 
-export function listenToAccountChange(callback: (account: string | null) => void): () => void {
+export function listenToAccountChange(
+  callback: (account: string | null) => void,
+): () => void {
   const provider = getFreighterProvider();
   let currentAccount = "";
 
@@ -191,7 +206,9 @@ export function listenToAccountChange(callback: (account: string | null) => void
   return () => clearInterval(interval);
 }
 
-export function listenToNetworkChange(callback: (network: string | null) => void): () => void {
+export function listenToNetworkChange(
+  callback: (network: string | null) => void,
+): () => void {
   const provider = getFreighterProvider();
   let currentNetwork = "";
 

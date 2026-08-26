@@ -29,7 +29,6 @@ import { initializeContractClients } from "../lib/contracts";
 import { relayerFetch } from "../lib/api";
 import { useOptimisticComment } from "../queries/commentQueries";
 import type { CommentWithContent } from "../lib/comments";
-import { relayerFetch, parseApiError } from "../lib/api";
 
 interface CommentFormProps {
   daoId: number;
@@ -88,7 +87,11 @@ export default function CommentForm({
         setProgress("Loading credentials...");
         const clients = initializeContractClients(publicKey);
 
-        let secret: string, salt: string, blindingFactor: string, commitment: string, leafIndex: number;
+        let secret: string,
+          salt: string,
+          blindingFactor: string,
+          commitment: string,
+          leafIndex: number;
         const cached = getZKCredentials(daoId, publicKey);
 
         if (!cached) {
@@ -184,11 +187,7 @@ export default function CommentForm({
           console.log("Comment proof input ready, generating proof...");
         }
 
-        const { proof } = await generateVoteProof(
-          proofInput,
-          wasm,
-          zkey,
-        );
+        const { proof } = await generateVoteProof(proofInput, wasm, zkey);
 
         // Format proof for Soroban
         const { proof_a, proof_b, proof_c } = formatProofForSoroban(proof);
@@ -230,7 +229,11 @@ export default function CommentForm({
           isPending: true,
         };
 
-        const revertOptimistic = addOptimisticComment(daoId, proposalId, optimisticComment);
+        const revertOptimistic = addOptimisticComment(
+          daoId,
+          proposalId,
+          optimisticComment,
+        );
 
         // Clear form immediately
         setBody("");
@@ -245,29 +248,30 @@ export default function CommentForm({
           },
           body: requestBody,
         })
-        .then(async (response) => {
-          const data = await response.json();
-          if (!response.ok) {
+          .then(async (response) => {
+            const data = await response.json();
+            if (!response.ok) {
+              revertOptimistic();
+              alert(
+                "Failed to submit anonymous comment: " + (data.error || ""),
+              );
+              return;
+            }
+
+            // Save anonymous comment record for edit/delete capability
+            saveAnonymousComment({
+              commentId: data.commentId,
+              proposalId,
+              daoId,
+              nullifier: nullifier.toString(),
+            });
+
+            clearPendingComment(daoId, proposalId);
+          })
+          .catch((_err) => {
             revertOptimistic();
-            alert("Failed to submit anonymous comment: " + (data.error || ""));
-            return;
-          }
-
-
-          // Save anonymous comment record for edit/delete capability
-          saveAnonymousComment({
-            commentId: data.commentId,
-            proposalId,
-            daoId,
-            nullifier: nullifier.toString(),
+            alert("Network error submitting comment");
           });
-          
-          clearPendingComment(daoId, proposalId);
-        })
-        .catch((err) => {
-          revertOptimistic();
-          alert("Network error submitting comment");
-        });
       } else {
         // Submit public comment via direct wallet signing
         // The contract requires author.require_auth() so we must sign directly

@@ -3,7 +3,6 @@
 mod allowance;
 
 use allowance::{is_allowance_expired, read_allowance, read_allowance_amount, write_allowance};
-use soroban_sdk::xdr;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
     Bytes, BytesN, Env, String, Vec,
@@ -355,8 +354,8 @@ impl Token {
 
         // Prune old checkpoints beyond retention period
         let retention = Self::get_checkpoint_retention(env);
-        if retention > 0 && checkpoints.len() > retention as u32 {
-            let prune_count = checkpoints.len() - retention as u32;
+        if retention > 0 && checkpoints.len() > retention {
+            let prune_count = checkpoints.len() - retention;
             let mut pruned = Vec::new(env);
             for i in prune_count..checkpoints.len() {
                 if let Some(cp) = checkpoints.get(i) {
@@ -1156,15 +1155,23 @@ impl Token {
         new
     }
 
-    fn address_to_32bytes(address: &Address) -> [u8; 32] {
-        let sc_addr: xdr::ScAddress = address.clone().into();
-        match sc_addr {
-            xdr::ScAddress::Account(xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(
-                xdr::Uint256(bytes),
-            ))) => bytes,
-            xdr::ScAddress::Contract(xdr::ContractId(xdr::Hash(bytes))) => bytes,
-            _ => panic!("unsupported address type"),
+    fn address_to_32bytes(env: &Env, address: &Address) -> [u8; 32] {
+        use soroban_sdk::xdr::ToXdr;
+        let xdr_bytes = address.to_xdr(env);
+        let mut buf = [0u8; 64];
+        let len = xdr_bytes.len() as usize;
+        xdr_bytes.copy_into_slice(&mut buf[..len]);
+        let mut key = [0u8; 32];
+        if len == 44 {
+            // Account address: ScVal::Address(ScAddress::Account(Uint256))
+            key.copy_from_slice(&buf[12..44]);
+        } else if len == 40 {
+            // Contract address: ScVal::Address(ScAddress::Contract(Hash))
+            key.copy_from_slice(&buf[8..40]);
+        } else {
+            panic!("unsupported address XDR length");
         }
+        key
     }
 
     fn build_permit_digest(
@@ -1175,9 +1182,9 @@ impl Token {
         nonce: u32,
         deadline: u64,
     ) -> Bytes {
-        let contract_key = Self::address_to_32bytes(&env.current_contract_address());
-        let owner_key = Self::address_to_32bytes(owner);
-        let spender_key = Self::address_to_32bytes(spender);
+        let contract_key = Self::address_to_32bytes(env, &env.current_contract_address());
+        let owner_key = Self::address_to_32bytes(env, owner);
+        let spender_key = Self::address_to_32bytes(env, spender);
 
         let mut data = Bytes::new(env);
         data.extend_from_slice(&contract_key);
@@ -1218,7 +1225,7 @@ impl Token {
         let nonce = Self::get_nonce(&env, &owner);
         let digest = Self::build_permit_digest(&env, &owner, &spender, amount, nonce, deadline);
 
-        let owner_key_bytes = Self::address_to_32bytes(&owner);
+        let owner_key_bytes = Self::address_to_32bytes(&env, &owner);
         let pk = BytesN::from_array(&env, &owner_key_bytes);
 
         env.crypto().ed25519_verify(&pk, &digest, &signature);

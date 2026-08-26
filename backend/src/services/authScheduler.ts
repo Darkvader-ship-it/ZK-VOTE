@@ -10,10 +10,7 @@
 
 import { config } from "../config.js";
 import { createLogger } from "./logger.js";
-import {
-  runMaintenanceTasks,
-  migrateLegacyToken,
-} from "./authTokens.js";
+import { runMaintenanceTasks, migrateLegacyToken } from "./authTokens.js";
 
 const logger = createLogger("auth-scheduler");
 

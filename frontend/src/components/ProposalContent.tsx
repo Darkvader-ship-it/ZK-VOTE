@@ -41,7 +41,7 @@ export default function ProposalContent({ contentCid }: ProposalContentProps) {
     if (hasRichContent && !metadata && !loadingMetadata && !metadataFailed) {
       loadMetadata();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentCid, hasRichContent, metadata, loadingMetadata, metadataFailed]);
 
   const loadMetadata = async () => {
@@ -89,11 +89,14 @@ export default function ProposalContent({ contentCid }: ProposalContentProps) {
 
         {metadata?.body && (
           <div className="prose prose-sm dark:prose-invert max-w-none">
-            <ReactMarkdown 
+            <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[
                 [rehypeSanitize, markdownSanitizeSchema],
-                [rehypeExternalLinks, { target: "_blank", rel: ["noopener", "noreferrer"] }]
+                [
+                  rehypeExternalLinks,
+                  { target: "_blank", rel: ["noopener", "noreferrer"] },
+                ],
               ]}
             >
               {metadata.body}

@@ -105,7 +105,9 @@ export async function computePedersenCommitment(
 ): Promise<PedersenCommitmentResult> {
   const secretBig = typeof secret === "string" ? BigInt(secret) : secret;
   const blindingBig =
-    typeof blindingFactor === "string" ? BigInt(blindingFactor) : blindingFactor;
+    typeof blindingFactor === "string"
+      ? BigInt(blindingFactor)
+      : blindingFactor;
 
   const pedersen = await getPedersen();
   const babyJub = await buildBabyjub();

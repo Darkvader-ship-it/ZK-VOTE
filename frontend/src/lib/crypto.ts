@@ -8,7 +8,7 @@ import {
 
 // BN254 Scalar Field Order (r)
 export const BN254_MODULUS = BigInt(
-  "21888242871839275222246405745257275088548364400416034343698204186575808495617"
+  "21888242871839275222246405745257275088548364400416034343698204186575808495617",
 );
 
 // Domain separator for ZK-VOTE key derivation KDF
@@ -71,13 +71,16 @@ export function generateMasterSecret(): bigint {
  */
 export async function deriveElectionSecret(
   masterSecretInput: string | bigint,
-  electionIdInput: string | number
+  electionIdInput: string | number,
 ): Promise<DerivedElectionKeys> {
   const poseidon = await buildPoseidon();
 
   // Normalize master secret to BigInt within scalar field
   let masterSecret: bigint;
-  if (typeof masterSecretInput === "string" && masterSecretInput.includes(" ")) {
+  if (
+    typeof masterSecretInput === "string" &&
+    masterSecretInput.includes(" ")
+  ) {
     // Input is a BIP-39 mnemonic phrase
     masterSecret = mnemonicToMasterSecret(masterSecretInput);
   } else if (typeof masterSecretInput === "string") {
@@ -114,22 +117,30 @@ export async function deriveElectionSecret(
 export function deriveElectionSecretSync(
   masterSecretInput: bigint | string,
   electionIdInput: string | number,
-  poseidonInstance: any
+  poseidonInstance: any,
 ): DerivedElectionKeys {
-  const masterSecret = typeof masterSecretInput === "string" && masterSecretInput.includes(" ")
-    ? mnemonicToMasterSecret(masterSecretInput)
-    : BigInt(masterSecretInput) % BN254_MODULUS;
+  const masterSecret =
+    typeof masterSecretInput === "string" && masterSecretInput.includes(" ")
+      ? mnemonicToMasterSecret(masterSecretInput)
+      : BigInt(masterSecretInput) % BN254_MODULUS;
 
   const domainHash = stringToFieldElement(DOMAIN_SEPARATOR);
   const electionIdField = stringToFieldElement(electionIdInput);
 
-  const poseidonResult = poseidonInstance([masterSecret, domainHash, electionIdField]);
+  const poseidonResult = poseidonInstance([
+    masterSecret,
+    domainHash,
+    electionIdField,
+  ]);
   const electionSecret = poseidonInstance.F.toString(poseidonResult);
 
   const commitmentResult = poseidonInstance([BigInt(electionSecret)]);
   const commitment = poseidonInstance.F.toString(commitmentResult);
 
-  const nullifierResult = poseidonInstance([BigInt(electionSecret), electionIdField]);
+  const nullifierResult = poseidonInstance([
+    BigInt(electionSecret),
+    electionIdField,
+  ]);
   const nullifier = poseidonInstance.F.toString(nullifierResult);
 
   return {

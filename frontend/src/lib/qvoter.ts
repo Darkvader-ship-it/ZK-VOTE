@@ -128,9 +128,10 @@ export interface GeneratedQvProof {
 
 // Pad an allocation list to exactly QV_NUM_ALLOCATIONS entries with zero-credit,
 // zero-proposal fillers (which contribute 0 to both cost and tally).
-function padAllocations(
-  allocations: QvAllocation[],
-): { voiceCredits: number[]; proposalIds: string[] } {
+function padAllocations(allocations: QvAllocation[]): {
+  voiceCredits: number[];
+  proposalIds: string[];
+} {
   if (allocations.length > QV_NUM_ALLOCATIONS) {
     throw new Error(
       `Too many allocations: ${allocations.length} > ${QV_NUM_ALLOCATIONS}`,
@@ -182,7 +183,10 @@ export async function generateQuadraticVoteProof(
     input.daoId,
     input.proposalId,
   );
-  const allocationsHash = await computeAllocationsHash(voiceCredits, proposalIds);
+  const allocationsHash = await computeAllocationsHash(
+    voiceCredits,
+    proposalIds,
+  );
 
   const circuitInput: CircuitSignals = {
     root: input.root,

@@ -128,7 +128,7 @@ export interface PaginatedResult<T> {
 }
 
 // Fetch all comments for a proposal (paginated, auto-loads all pages)
-async function fetchAllComments(
+export async function fetchAllComments(
   daoId: number,
   proposalId: number,
 ): Promise<CommentInfo[]> {
@@ -169,7 +169,10 @@ export async function fetchComments(
   const response = await relayerFetch(url);
   if (!response.ok) {
     if (response.status === 404) {
-      return { data: [], pagination: { cursor: undefined, hasMore: false, total: 0 } };
+      return {
+        data: [],
+        pagination: { cursor: undefined, hasMore: false, total: 0 },
+      };
     }
     throw new Error("Failed to fetch comments");
   }

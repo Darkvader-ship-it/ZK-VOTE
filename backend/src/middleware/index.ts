@@ -5,8 +5,6 @@
  */
 
 export { authGuard, extractAuthToken, masterKeyGuard } from "./auth.js";
-export { csrfGuard } from "./csrf.js";
-export { authGuard, extractAuthToken } from "./auth.js";
 export { tlsClientCertGuard } from "./tlsAuth.js";
 export { csrfGuard, csrfTokenMiddleware } from "./csrf.js";
 export { requestLogger } from "./logging.js";
