@@ -20,7 +20,12 @@ import {
   u256ToScVal,
   proofToScVal,
 } from "../services/stellar.js";
-import { authGuard, claimLimiter, queryLimiter, validateBody } from "../middleware/index.js";
+import {
+  authGuard,
+  claimLimiter,
+  queryLimiter,
+  validateBody,
+} from "../middleware/index.js";
 import { claimSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
 
@@ -44,7 +49,9 @@ router.post(
       log("info", "claim_request", { daoId, proposalId });
 
       if (!config.rewardsContractId) {
-        return res.status(503).json({ error: "Rewards contract not configured" });
+        return res
+          .status(503)
+          .json({ error: "Rewards contract not configured" });
       }
 
       let scVoteNullifier: StellarSdk.xdr.ScVal;
@@ -76,7 +83,9 @@ router.post(
       const operation = contract.call("claim", ...args);
 
       const { sendResult, result } = await withSequenceLock(async () => {
-        const account = await (server as StellarSdk.rpc.Server).getAccount(relayerKeypair.publicKey());
+        const account = await (server as StellarSdk.rpc.Server).getAccount(
+          relayerKeypair.publicKey(),
+        );
         const tx = new StellarSdk.TransactionBuilder(account, {
           fee: "100000",
           networkPassphrase: config.networkPassphrase,
@@ -87,22 +96,42 @@ router.post(
 
         log("info", "simulate_claim", { daoId, proposalId });
         const simResult = await callWithTimeout(
-          () => simulateWithBackoff(() => (server as StellarSdk.rpc.Server).simulateTransaction(tx)),
+          () =>
+            simulateWithBackoff(() =>
+              (server as StellarSdk.rpc.Server).simulateTransaction(tx),
+            ),
           "simulate_claim",
         );
 
         if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
-          log("warn", "claim_simulation_failed", { daoId, proposalId, error: simResult.error });
+          log("warn", "claim_simulation_failed", {
+            daoId,
+            proposalId,
+            error: simResult.error,
+          });
           let errorMessage = "Transaction simulation failed";
           if (simResult.error) {
             const errorStr = JSON.stringify(simResult.error);
-            if (errorStr.includes("AlreadyClaimed") || errorStr.includes("ClaimNullifierUsed") || errorStr.includes("5")) {
+            if (
+              errorStr.includes("AlreadyClaimed") ||
+              errorStr.includes("ClaimNullifierUsed") ||
+              errorStr.includes("5")
+            ) {
               errorMessage = "Reward already claimed for this vote";
-            } else if (errorStr.includes("NotVoted") || errorStr.includes("4")) {
+            } else if (
+              errorStr.includes("NotVoted") ||
+              errorStr.includes("4")
+            ) {
               errorMessage = "Vote not found — only voters can claim";
-            } else if (errorStr.includes("TreasuryInsufficient") || errorStr.includes("20")) {
+            } else if (
+              errorStr.includes("TreasuryInsufficient") ||
+              errorStr.includes("20")
+            ) {
               errorMessage = "Treasury insufficient";
-            } else if (errorStr.includes("invalid proof") || errorStr.includes("InvalidProof")) {
+            } else if (
+              errorStr.includes("invalid proof") ||
+              errorStr.includes("InvalidProof")
+            ) {
               errorMessage = "Invalid claim proof";
             } else if (errorStr.includes("root") || errorStr.includes("Root")) {
               errorMessage = "Invalid Merkle root for this proposal";
@@ -113,7 +142,9 @@ router.post(
           throw new Error(`SIMULATION_FAILED:${errorMessage}`);
         }
 
-        const preparedTx = StellarSdk.rpc.assembleTransaction(tx, simResult).build();
+        const preparedTx = StellarSdk.rpc
+          .assembleTransaction(tx, simResult)
+          .build();
         preparedTx.sign(relayerKeypair as StellarSdk.Keypair);
 
         log("info", "submit_claim", { daoId, proposalId });
@@ -122,23 +153,48 @@ router.post(
           "send_claim",
         );
         if (sr.status === "ERROR") {
-          log("error", "claim_submit_failed", { daoId, proposalId, error: sr.errorResult });
+          log("error", "claim_submit_failed", {
+            daoId,
+            proposalId,
+            error: sr.errorResult,
+          });
           throw new Error("SUBMIT_FAILED");
         }
         log("info", "claim_submitted", { txHash: sr.hash, daoId, proposalId });
-        const r = await callWithTimeout(() => waitForTransaction(sr.hash), "wait_for_claim");
+        const r = await callWithTimeout(
+          () => waitForTransaction(sr.hash),
+          "wait_for_claim",
+        );
         return { sendResult: sr, result: r };
       });
 
       if (result.status === "SUCCESS") {
-        log("info", "claim_success", { txHash: sendResult.hash, daoId, proposalId });
-        res.json({ success: true, txHash: sendResult.hash, status: result.status });
+        log("info", "claim_success", {
+          txHash: sendResult.hash,
+          daoId,
+          proposalId,
+        });
+        res.json({
+          success: true,
+          txHash: sendResult.hash,
+          status: result.status,
+        });
       } else {
-        log("error", "claim_failed", { txHash: sendResult.hash, status: result.status });
-        res.status(500).json({ error: "Transaction failed", txHash: sendResult.hash, status: result.status });
+        log("error", "claim_failed", {
+          txHash: sendResult.hash,
+          status: result.status,
+        });
+        res.status(500).json({
+          error: "Transaction failed",
+          txHash: sendResult.hash,
+          status: result.status,
+        });
       }
     } catch (err) {
-      log("error", "claim_exception", { message: (err as Error).message, stack: (err as Error).stack });
+      log("error", "claim_exception", {
+        message: (err as Error).message,
+        stack: (err as Error).stack,
+      });
       const errMsg = (err as Error).message || "";
       let statusCode = 500;
       let userMessage = "Internal server error";
@@ -153,18 +209,28 @@ router.post(
         userMessage = "Request timeout - please try again";
       } else if (errMsg.includes("Transaction not found after timeout")) {
         statusCode = 504;
-        userMessage = "Transaction confirmation timeout - claim may have succeeded, please check status";
+        userMessage =
+          "Transaction confirmation timeout - claim may have succeeded, please check status";
       } else if (errMsg.includes("getAccount")) {
         statusCode = 503;
         userMessage = "Blockchain RPC temporarily unavailable - please retry";
-      } else if (errMsg.includes("ECONNREFUSED") || errMsg.includes("ETIMEDOUT")) {
+      } else if (
+        errMsg.includes("ECONNREFUSED") ||
+        errMsg.includes("ETIMEDOUT")
+      ) {
         statusCode = 503;
         userMessage = "Network error - please retry";
       } else if (errMsg.includes("sequence")) {
         statusCode = 503;
         userMessage = "Transaction sequence error - please retry";
       }
-      res.status(statusCode).json(config.genericErrors ? { error: userMessage } : { error: userMessage, details: errMsg });
+      res
+        .status(statusCode)
+        .json(
+          config.genericErrors
+            ? { error: userMessage }
+            : { error: userMessage, details: errMsg },
+        );
     }
   }) as AsyncHandler,
 );
@@ -184,7 +250,9 @@ router.post(
     try {
       log("info", "claim_request_alias", { daoId, proposalId });
       if (!config.rewardsContractId) {
-        return res.status(503).json({ error: "Rewards contract not configured" });
+        return res
+          .status(503)
+          .json({ error: "Rewards contract not configured" });
       }
       let scVoteNullifier: StellarSdk.xdr.ScVal;
       let scClaimNullifier: StellarSdk.xdr.ScVal;
@@ -212,7 +280,9 @@ router.post(
       ];
       const operation = contract.call("claim", ...args);
       const { sendResult, result } = await withSequenceLock(async () => {
-        const account = await (server as StellarSdk.rpc.Server).getAccount(relayerKeypair.publicKey());
+        const account = await (server as StellarSdk.rpc.Server).getAccount(
+          relayerKeypair.publicKey(),
+        );
         const tx = new StellarSdk.TransactionBuilder(account, {
           fee: "100000",
           networkPassphrase: config.networkPassphrase,
@@ -221,20 +291,36 @@ router.post(
           .setTimeout(30)
           .build();
         const simResult = await callWithTimeout(
-          () => simulateWithBackoff(() => (server as StellarSdk.rpc.Server).simulateTransaction(tx)),
+          () =>
+            simulateWithBackoff(() =>
+              (server as StellarSdk.rpc.Server).simulateTransaction(tx),
+            ),
           "simulate_claim",
         );
         if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
           let errorMessage = "Transaction simulation failed";
           if (simResult.error) {
             const errorStr = JSON.stringify(simResult.error);
-            if (errorStr.includes("AlreadyClaimed") || errorStr.includes("ClaimNullifierUsed") || errorStr.includes("5")) {
+            if (
+              errorStr.includes("AlreadyClaimed") ||
+              errorStr.includes("ClaimNullifierUsed") ||
+              errorStr.includes("5")
+            ) {
               errorMessage = "Reward already claimed for this vote";
-            } else if (errorStr.includes("NotVoted") || errorStr.includes("4")) {
+            } else if (
+              errorStr.includes("NotVoted") ||
+              errorStr.includes("4")
+            ) {
               errorMessage = "Vote not found — only voters can claim";
-            } else if (errorStr.includes("TreasuryInsufficient") || errorStr.includes("20")) {
+            } else if (
+              errorStr.includes("TreasuryInsufficient") ||
+              errorStr.includes("20")
+            ) {
               errorMessage = "Treasury insufficient";
-            } else if (errorStr.includes("invalid proof") || errorStr.includes("InvalidProof")) {
+            } else if (
+              errorStr.includes("invalid proof") ||
+              errorStr.includes("InvalidProof")
+            ) {
               errorMessage = "Invalid claim proof";
             } else if (errorStr.includes("root") || errorStr.includes("Root")) {
               errorMessage = "Invalid Merkle root for this proposal";
@@ -242,17 +328,33 @@ router.post(
           }
           throw new Error(`SIMULATION_FAILED:${errorMessage}`);
         }
-        const preparedTx = StellarSdk.rpc.assembleTransaction(tx, simResult).build();
+        const preparedTx = StellarSdk.rpc
+          .assembleTransaction(tx, simResult)
+          .build();
         preparedTx.sign(relayerKeypair as StellarSdk.Keypair);
-        const sr = await callWithTimeout(() => (server as StellarSdk.rpc.Server).sendTransaction(preparedTx), "send_claim");
+        const sr = await callWithTimeout(
+          () => (server as StellarSdk.rpc.Server).sendTransaction(preparedTx),
+          "send_claim",
+        );
         if (sr.status === "ERROR") throw new Error("SUBMIT_FAILED");
-        const r = await callWithTimeout(() => waitForTransaction(sr.hash), "wait_for_claim");
+        const r = await callWithTimeout(
+          () => waitForTransaction(sr.hash),
+          "wait_for_claim",
+        );
         return { sendResult: sr, result: r };
       });
       if (result.status === "SUCCESS") {
-        res.json({ success: true, txHash: sendResult.hash, status: result.status });
+        res.json({
+          success: true,
+          txHash: sendResult.hash,
+          status: result.status,
+        });
       } else {
-        res.status(500).json({ error: "Transaction failed", txHash: sendResult.hash, status: result.status });
+        res.status(500).json({
+          error: "Transaction failed",
+          txHash: sendResult.hash,
+          status: result.status,
+        });
       }
     } catch (err) {
       const errMsg = (err as Error).message || "";
@@ -265,7 +367,13 @@ router.post(
         statusCode = 500;
         userMessage = "Transaction submission failed";
       }
-      res.status(statusCode).json(config.genericErrors ? { error: userMessage } : { error: userMessage, details: errMsg });
+      res
+        .status(statusCode)
+        .json(
+          config.genericErrors
+            ? { error: userMessage }
+            : { error: userMessage, details: errMsg },
+        );
     }
   }) as AsyncHandler,
 );
@@ -273,45 +381,69 @@ router.post(
 /**
  * GET /api/v1/claim/status/:daoId/:proposalId/:claimNullifier — check if claimed
  */
-router.get("/api/v1/claim/status/:daoId/:proposalId/:claimNullifier", queryLimiter, (async (req: Request, res: Response) => {
-  const { daoId, proposalId, claimNullifier } = req.params;
-  try {
-    if (!config.rewardsContractId) {
-      return res.status(503).json({ error: "Rewards contract not configured" });
+router.get(
+  "/api/v1/claim/status/:daoId/:proposalId/:claimNullifier",
+  queryLimiter,
+  (async (req: Request, res: Response) => {
+    const { daoId, proposalId, claimNullifier } = req.params;
+    try {
+      if (!config.rewardsContractId) {
+        return res
+          .status(503)
+          .json({ error: "Rewards contract not configured" });
+      }
+      const contract = new StellarSdk.Contract(config.rewardsContractId!);
+      const scClaimNullifier = u256ToScVal(claimNullifier);
+      const args = [
+        StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
+        StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
+        scClaimNullifier,
+      ];
+      const operation = contract.call("is_claimed", ...args);
+      const account = await (server as StellarSdk.rpc.Server).getAccount(
+        relayerKeypair.publicKey(),
+      );
+      const tx = new StellarSdk.TransactionBuilder(account, {
+        fee: "100000",
+        networkPassphrase: config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+      const simResult = await (
+        server as StellarSdk.rpc.Server
+      ).simulateTransaction(tx);
+      if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
+        return res.status(500).json({ error: "Failed to check claim status" });
+      }
+      const resultScVal = simResult.result?.retval;
+      const isClaimed = resultScVal
+        ? StellarSdk.scValToNative(resultScVal)
+        : false;
+      res.json({
+        daoId: parseInt(daoId),
+        proposalId: parseInt(proposalId),
+        claimNullifier,
+        isClaimed: Boolean(isClaimed),
+      });
+    } catch (err) {
+      log("error", "claim_status_error", {
+        daoId,
+        proposalId,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to fetch claim status" });
     }
-    const contract = new StellarSdk.Contract(config.rewardsContractId!);
-    const scClaimNullifier = u256ToScVal(claimNullifier);
-    const args = [
-      StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" }),
-      StellarSdk.nativeToScVal(parseInt(proposalId), { type: "u64" }),
-      scClaimNullifier,
-    ];
-    const operation = contract.call("is_claimed", ...args);
-    const account = await (server as StellarSdk.rpc.Server).getAccount(relayerKeypair.publicKey());
-    const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100000",
-      networkPassphrase: config.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
-    const simResult = await (server as StellarSdk.rpc.Server).simulateTransaction(tx);
-    if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
-      return res.status(500).json({ error: "Failed to check claim status" });
-    }
-    const resultScVal = simResult.result?.retval;
-    const isClaimed = resultScVal ? StellarSdk.scValToNative(resultScVal) : false;
-    res.json({ daoId: parseInt(daoId), proposalId: parseInt(proposalId), claimNullifier, isClaimed: Boolean(isClaimed) });
-  } catch (err) {
-    log("error", "claim_status_error", { daoId, proposalId, error: (err as Error).message });
-    res.status(500).json({ error: "Failed to fetch claim status" });
-  }
-}) as AsyncHandler);
+  }) as AsyncHandler,
+);
 
 /**
  * GET /api/v1/claim/treasury/:daoId — get treasury balance
  */
-router.get("/api/v1/claim/treasury/:daoId", queryLimiter, (async (req: Request, res: Response) => {
+router.get("/api/v1/claim/treasury/:daoId", queryLimiter, (async (
+  req: Request,
+  res: Response,
+) => {
   const { daoId } = req.params;
   try {
     if (!config.rewardsContractId) {
@@ -320,7 +452,9 @@ router.get("/api/v1/claim/treasury/:daoId", queryLimiter, (async (req: Request, 
     const contract = new StellarSdk.Contract(config.rewardsContractId!);
     const args = [StellarSdk.nativeToScVal(parseInt(daoId), { type: "u64" })];
     const operation = contract.call("get_treasury", ...args);
-    const account = await (server as StellarSdk.rpc.Server).getAccount(relayerKeypair.publicKey());
+    const account = await (server as StellarSdk.rpc.Server).getAccount(
+      relayerKeypair.publicKey(),
+    );
     const tx = new StellarSdk.TransactionBuilder(account, {
       fee: "100000",
       networkPassphrase: config.networkPassphrase,
@@ -328,15 +462,23 @@ router.get("/api/v1/claim/treasury/:daoId", queryLimiter, (async (req: Request, 
       .addOperation(operation)
       .setTimeout(30)
       .build();
-    const simResult = await (server as StellarSdk.rpc.Server).simulateTransaction(tx);
+    const simResult = await (
+      server as StellarSdk.rpc.Server
+    ).simulateTransaction(tx);
     if (!StellarSdk.rpc.Api.isSimulationSuccess(simResult)) {
       return res.status(500).json({ error: "Failed to fetch treasury" });
     }
     const resultScVal = simResult.result?.retval;
     const bal = resultScVal ? StellarSdk.scValToNative(resultScVal) : 0;
-    res.json({ daoId: parseInt(daoId), treasury: bal?.toString?.() ?? String(bal) });
+    res.json({
+      daoId: parseInt(daoId),
+      treasury: bal?.toString?.() ?? String(bal),
+    });
   } catch (err) {
-    log("error", "treasury_fetch_error", { daoId, error: (err as Error).message });
+    log("error", "treasury_fetch_error", {
+      daoId,
+      error: (err as Error).message,
+    });
     res.status(500).json({ error: "Failed to fetch treasury" });
   }
 }) as AsyncHandler);

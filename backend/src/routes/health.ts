@@ -292,7 +292,12 @@ router.get("/debug/heap", async (req: Request, res: Response) => {
  */
 router.get("/relay-test", async (req: Request, res: Response) => {
   const startTime = Date.now();
-  const results: { timestamp: string; tests: Record<string, unknown>; summary?: unknown; [key: string]: unknown } = {
+  const results: {
+    timestamp: string;
+    tests: Record<string, unknown>;
+    summary?: unknown;
+    [key: string]: unknown;
+  } = {
     timestamp: new Date().toISOString(),
     tests: {},
   };
@@ -334,9 +339,9 @@ router.get("/relay-test", async (req: Request, res: Response) => {
         };
       }
     } else {
-        results.tests = {
-          ...(results.tests as Record<string, unknown>),
-          relayer_account: {
+      results.tests = {
+        ...(results.tests as Record<string, unknown>),
+        relayer_account: {
           passed: false,
           message: "Relayer not initialized",
         },
@@ -389,13 +394,17 @@ router.get("/relay-test", async (req: Request, res: Response) => {
       ...(results.tests as Record<string, unknown>),
       rpc_pool: {
         passed: poolHealthy,
-        message: poolHealthy ? "RPC pool has available endpoints" : "No available RPC endpoints",
+        message: poolHealthy
+          ? "RPC pool has available endpoints"
+          : "No available RPC endpoints",
         metrics: poolMetrics,
       },
     };
 
     // Overall result
-    const allTests = Object.values(results.tests as Record<string, { passed: boolean }>);
+    const allTests = Object.values(
+      results.tests as Record<string, { passed: boolean }>,
+    );
     const passedCount = allTests.filter((t) => t.passed).length;
     const totalCount = allTests.length;
     const allPassed = passedCount === totalCount;
