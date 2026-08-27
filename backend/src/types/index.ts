@@ -101,6 +101,19 @@ export interface VoteRequest {
 }
 
 // ============================================
+// CLAIM TYPES (Vote-to-Earn)
+// ============================================
+
+export interface ClaimRequest {
+  daoId: number;
+  proposalId: number;
+  voteNullifier: U256Hex;
+  claimNullifier: U256Hex;
+  root: U256Hex;
+  proof: Groth16Proof;
+}
+
+// ============================================
 // COMMENT TYPES
 // ============================================
 

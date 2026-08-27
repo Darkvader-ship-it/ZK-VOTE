@@ -133,6 +133,101 @@ The client exposes `generateFakeZKCredentials()` (`frontend/src/lib/zk.ts`). Thi
 - Re-voting window so the real vote can override a coerced submission.
 - "Panic mode" UI button in `VoteModal` to switch to fake credentials before signing.
 
+## Vote-to-Earn Claim & Sybil Bounds (GrantFox Impact: Core feature)
+
+Scope addition: `contracts/rewards`, `circuits/claim.circom`, `backend/src/routes/claim.ts` (`POST /api/v1/claim`), frontend `Claim` flow via `zkproof.ts`/`claimQueries.ts`.
+
+### Architecture choice: thin rewards crate vs token extension
+
+Requirement allowed "extend token or thin rewards crate — document choice". We chose **thin rewards crate** (`contracts/rewards`):
+
+- **Isolation**: Token (SEP-41) upgrade risk avoided; rewards is a minimal treasury ledger (`Treasury(dao_id)`, `RewardAmount(dao_id)`) with no mint/transfer override.
+- **Verifiability**: Single `claim()` entrypoint with 5 public signals `[root, voteNullifier, claimNullifier, daoId, proposalId]`; easier to audit than a token with mixed concerns.
+- **Composability**: Can back any asset (native XLM, SEP-41, off-chain settlement) via `ClaimEvent`; if a DAO wants on-token mint, deployer can wire `ClaimEvent` → token `mint` off-chain or copy this module into `contracts/token`.
+- See `contracts/rewards/src/lib.rs` header and `contracts/rewards/README.md`.
+
+### Claim circuit (vote-family) & double-claim resistance
+
+`circuits/claim.circom` (depth 18, same as vote) proves:
+
+1. `commitment = Poseidon(secret, salt)` is in Merkle tree at `root` (private path, public root).
+2. `voteNullifier = Poseidon(secret, daoId, proposalId)` — identical derivation to `vote.circom`; on-chain must be **used** (`voting.is_nullifier_used`).
+3. `claimNullifier = Poseidon(secret, daoId, proposalId, CLAIM_TAG)` — **domain-separated** from vote nullifier.
+   - `CLAIM_TAG = 427020085613` = `0x636c61696d` = ascii("claim"), Poseidon arity 4 vs vote arity 3.
+   - Publicly stored as `ClaimNullifier(dao_id, proposal_id, claimNullifier) -> bool`; second claim with same `claimNullifier` panics `ClaimNullifierUsed` (error #5).
+   - Unlinkability: observer sees both nullifiers on-chain but cannot correlate them without `secret`; Poseidon is a random oracle over BN254 Fr.
+4. No vote choice — reward is per-voter, not per-choice (prevents bribery via amount correlation).
+
+Public signals (5): `root`, `voteNullifier`, `claimNullifier`, `daoId`, `proposalId`; IC length 6. All validated `< r` and non-zero before any state read (mod-reduction attack prevention). Proof verification: `e(-A,B)*e(alpha,beta)*e(vk_x,gamma)*e(C,delta)=1` via `zkvote_groth16::verify_groth16`.
+
+**On-chain gate (`rewards::claim`)**:
+
+```
+assert_in_field(root, voteNullifier, claimNullifier);
+require !is_claimed(claimNullifier);
+require voting.is_nullifier_used(voteNullifier); // only voters
+require root_valid per VoteMode (Fixed: == eligible_root, Trailing: root_ok && idx >= earliest && idx >= min_valid);
+require treasury >= reward;
+verify Groth16([root, voteNullifier, claimNullifier, daoId, proposalId]);
+mark claimed, debit treasury, increment counts, emit ClaimEvent
+```
+
+Any failure reverts; replay of `claimNullifier` always fails even with fresh proof (storage key collision).
+
+### Sybil bounds
+
+Grants require explicit Sybil mitigation for rewards; we enforce a **layered defense** (on-chain caps + policy gates + relayer limits). No single layer is sufficient.
+
+#### 1. SBT-age gating (policy + optional on-chain window)
+
+- **Threat**: Attacker mints many SBTs immediately before proposal, votes, claims.
+- **Mitigation**: 
+  - *Policy*: DAO `membership_open = false` by default; admin vets members. For open DAOs, frontend + docs require **SBT age ≥ 7 days** before `proposal.created_at` to be eligible for rewards. Relayer can be configured to check `registry.get_dao` + `membership_sbt` mint timestamp (if available) and reject claims from fresh SBTs with `Sybil: SBT too recent`.
+  - *Future on-chain*: `membership_sbt` stores `MintedAt(dao_id, address) -> timestamp`; `rewards::claim` would require `now - minted_at >= MIN_SBT_AGE`. Not yet active to avoid breaking existing DAOs without timestamps; documented as next hardening.
+- **Residual**: If DAO keeps `membership_open = true` and `MIN_SBT_AGE = 0`, Sybil is higher — admin is advised to close membership or fund small pools (see funding caps).
+
+#### 2. Quadratic / funding caps (on-chain)
+
+Rewards are **flat per voter** (not per token weight) to avoid whale amplification, but flat rewards are Sybil-vulnerable; we bound total exposure:
+
+- `MAX_REWARD_PER_CLAIM = 10_000 * 1e7` (10k tokens, 7 decimals) — enforced in `set_reward`.
+- `MAX_FUNDING_CAP = 1_000_000_000 * 1e7` (1B tokens) — enforced in `fund_treasury`; cumulative `Treasury(dao_id)` cannot exceed cap.
+- `DEFAULT_REWARD = 100 * 1e7` — used if `RewardAmount` not set; keeps default low.
+- Per-proposal accounting: `ClaimedCount(dao_id, proposal_id)` and `TotalClaimed(dao_id)` allow off-chain monitoring of Sybil spikes; admin can pause funding (stop `fund_treasury`) if claim rate anomalous.
+- **QV variant** (documented for future): If DAO wants stake-weighted rewards, replace flat reward with `reward = sqrt(stake) * base` and fund cap `Σ sqrt(stake) * base ≤ cap`; current flat version is equivalent to QV with `stake = 1` per SBT (one-person-one-vote).
+
+Funding caps are **per DAO** — compromise of one DAO treasury does not affect others.
+
+#### 3. Relayer anonymity + rate limits
+
+- `POST /api/v1/claim` sits behind `claimLimiter` (10/min/IP, hashed IP via SHA256), same as `voteLimiter`; prevents burst Sybil via single IP.
+- Relayer never requires voter `Address` or wallet signature for claims; only `daoId, proposalId, voteNullifier, claimNullifier, root, proof`. No linkage to on-chain account in request logs (logs use `daoId/proposalId` only, proof redacted).
+- Simulation errors are coarse-grained (`Reward already claimed`, `Vote not found`) to avoid leaking which nullifier was used.
+
+#### 4. Funding caps vs Sybil profit
+
+With flat reward `R` and cap `C`, attacker needs `N = floor(C / R)` Sybil identities to drain pool. With `C = 1e6 * 1e7`, `R = 100 * 1e7`, `N = 10,000`. At `R=10` (smaller rewards), `N=100,000`. Combined with SBT-age + admin vetting, cost to create 10k vetted SBTs exceeds reward.
+
+Admin guidance per DAO (documented for frontend tooltip):
+- For high-value pools (>1M), set `membership_open=false` and vet members manually.
+- For open pools, set `R ≤ 50` and `C ≤ 100k * R`; monitor `ClaimedCount`.
+- Consider shortening proposal lifetime if membership churn >30 roots (eviction risk; see Root History).
+
+### Anonymity preservation (claim)
+
+- Commitment remains private (computed inside circuit).
+- Vote and claim nullifiers are unlinkable without `secret`; contract checks vote nullifier **used** but does not link claimer address.
+- Relayer route `/api/v1/claim` uses same anonymity set as `/vote` (relayer key pays fee); no `require_auth` on claimer.
+- No additional PII in `ClaimEvent` beyond nullifiers (already public for votes).
+
+### Code alignment — claim
+
+- `circuits/claim.circom`: Poseidon(4) with `CLAIM_TAG`, root === merkleProof.root, voteNullifier === Poseidon3, claimNullifier === Poseidon4.
+- `contracts/rewards/src/lib.rs`: field checks first, `ClaimNullifierUsed` before cross-contract call, `NotVoted` via `is_nullifier_used`, root checks mirror `voting` (Fixed/Trailing), `TreasuryInsufficient` before proof verify, `VerifyOverride` for tests.
+- `backend/src/routes/claim.ts`: `POST /api/v1/claim` + alias `/claim`, `GET /api/v1/claim/status/*`, `GET /api/v1/claim/treasury/*`; validates BN254 fields, rejects all-zero proof, generic error mode respects `RELAYER_GENERIC_ERRORS`.
+- `frontend/src/lib/zkproof.ts`: `generateClaimProof`, `calculateClaimNullifier`, `calculateVoteNullifier`.
+- `frontend/src/components/ClaimRewards.tsx` + `frontend/src/queries/claimQueries.ts` use `relayerFetch("/api/v1/claim", ...)`.
+
 ## Next Hardening Steps
 - Relay: structured logging with redaction; configurable log retention; coarser error responses; optional cover traffic/backoff to reduce correlation; explicit anti-censorship monitoring (missing votes vs submissions).
 - Contracts: coarse error codes to avoid fine-grained leakage; optional per-contract versioning + upgrade events; ensure membership/admin checks stay isolated.

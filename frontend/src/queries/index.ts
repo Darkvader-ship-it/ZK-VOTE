@@ -18,6 +18,13 @@ export type { RelayerStatus } from "./relayerQueries";
 
 export { useCommentsQuery, useInvalidateComments } from "./commentQueries";
 
+export {
+  useClaimStatusQuery,
+  useTreasuryQuery,
+  submitClaimViaRelayer,
+} from "./claimQueries";
+export type { ClaimStatus } from "./claimQueries";
+
 // Re-export queryClient and keys for direct access
 export { queryClient, queryKeys } from "../lib/queryClient";
 

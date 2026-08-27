@@ -73,6 +73,7 @@ const envSchema = z.object({
   MEMBERSHIP_SBT_CONTRACT_ID: z.string().min(1).optional(),
   BRIDGE_CONTRACT_ID: z.string().min(1).optional(),
   CIRCUIT_REGISTRY_CONTRACT_ID: z.string().min(1).optional(),
+  REWARDS_CONTRACT_ID: z.string().min(1).optional(),
   VOTING_VK_VERSION: z.coerce.number().int().optional(),
 
   CORS_ORIGIN: z.string().optional(),
@@ -275,6 +276,7 @@ export const config = {
   membershipSbtContractId: validatedEnv.MEMBERSHIP_SBT_CONTRACT_ID,
   bridgeContractId: validatedEnv.BRIDGE_CONTRACT_ID,
   circuitRegistryContractId: validatedEnv.CIRCUIT_REGISTRY_CONTRACT_ID,
+  rewardsContractId: validatedEnv.REWARDS_CONTRACT_ID,
 
   // VK Version
   staticVkVersion: validatedEnv.VOTING_VK_VERSION,
@@ -526,5 +528,20 @@ export function validateEnv(): void {
     console.warn(
       "WARNING: A valid Stellar Secret Key is being used in a non-production environment.",
     );
+  }
+
+  if (
+    config.rewardsContractId &&
+    !isValidContractId(config.rewardsContractId)
+  ) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "invalid_contract_id",
+        var: "REWARDS_CONTRACT_ID",
+        value: config.rewardsContractId,
+      }),
+    );
+    process.exit(1);
   }
 }

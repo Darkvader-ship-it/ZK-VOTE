@@ -14,6 +14,7 @@ members = [
     "contracts/vdf",
     "crates/nova-aggregator",
     "contracts/threshold-crypto",
+    "contracts/rewards",
     "tests/integration",
 ]
 default-members = [
@@ -29,6 +30,7 @@ default-members = [
     "contracts/token",
     "contracts/vdf",
     "contracts/threshold-crypto",
+    "contracts/rewards",
 ]
 resolver = "2"
 
