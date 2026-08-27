@@ -90,9 +90,9 @@ const CLAIM_CIRCUIT_IC_LEN: u32 = NUM_PUBLIC_SIGNALS + 1;
 
 // Funding / reward caps — Sybil bounds
 // Treasury cap per DAO: 1e9 * 1e7 (1B tokens with 7 decimals) typical Stellar limit
-const MAX_FUNDING_CAP: i128 = 1_000_000_000_0000000; // 1e9 * 1e7 = 1e16
-const MAX_REWARD_PER_CLAIM: i128 = 10_000_0000000; // 10k * 1e7 = 1e11
-const DEFAULT_REWARD: i128 = 100_0000000; // 100 * 1e7
+const MAX_FUNDING_CAP: i128 = 10_000_000_000_000_000; // 1e9 * 1e7 = 1e16
+const MAX_REWARD_PER_CLAIM: i128 = 100_000_000_000; // 10k * 1e7 = 1e11
+const DEFAULT_REWARD: i128 = 1_000_000_000; // 100 * 1e7
 
 #[contracttype]
 #[derive(Clone)]
@@ -258,6 +258,7 @@ impl Rewards {
             .unwrap_or_else(|| panic_with_error!(env, RewardsError::VkVersionMismatch))
     }
 
+    #[allow(dead_code)]
     fn hash_vk(env: &Env, vk: &VerificationKey) -> BytesN<32> {
         let mut data = Bytes::new(env);
         data.append(&Bytes::from_array(env, &vk.alpha.to_array()));
@@ -596,6 +597,7 @@ impl Rewards {
         .publish(&env);
     }
 
+    #[allow(unused_variables)]
     fn verify_groth16(
         env: &Env,
         vk: &VerificationKey,

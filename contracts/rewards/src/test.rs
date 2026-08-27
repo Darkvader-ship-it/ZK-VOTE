@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, BytesN, Env, Vec, U256};
+use soroban_sdk::{testutils::Address as _, BytesN, Env, Vec, U256};
 
 // Mock tree contract with minimal interface needed by rewards
 mod mock_tree {
@@ -114,7 +114,7 @@ mod mock_registry {
 
 mod mock_voting {
     use super::super::VoteMode;
-    use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Vec, U256};
+    use soroban_sdk::{contract, contractimpl, contracttype, Env, U256};
     #[contracttype]
     pub enum DataKey {
         Nullifier(u64, u64, U256),
@@ -172,9 +172,9 @@ mod mock_voting {
         }
         // stubs for other voting methods not needed
         pub fn get_proposal(
-            env: Env,
-            dao_id: u64,
-            proposal_id: u64,
+            _env: Env,
+            _dao_id: u64,
+            _proposal_id: u64,
         ) -> super::super::ProposalInfoStub {
             // Not used in rewards (we use separate getters)
             panic!("not implemented")
@@ -235,6 +235,7 @@ fn bn254_g2_generator(env: &Env) -> BytesN<128> {
 
 struct TestEnv {
     env: Env,
+    #[allow(dead_code)]
     registry: Address,
     tree: Address,
     voting: Address,
@@ -289,9 +290,9 @@ impl TestEnv {
         let vk = create_test_vk(&self.env);
         self.rewards_client().set_vk(&dao_id, &vk, &self.admin);
         self.rewards_client()
-            .fund_treasury(&dao_id, &1_000_0000000, &self.admin);
+            .fund_treasury(&dao_id, &10_000_000_000, &self.admin);
         self.rewards_client()
-            .set_reward(&dao_id, &100_0000000, &self.admin);
+            .set_reward(&dao_id, &1_000_000_000, &self.admin);
     }
 }
 
@@ -323,7 +324,7 @@ fn test_claim_succeeds_with_used_vote_nullifier() {
         1
     );
     // treasury debited
-    assert_eq!(t.rewards_client().get_treasury(&dao_id), 900_0000000);
+    assert_eq!(t.rewards_client().get_treasury(&dao_id), 9_000_000_000);
 }
 
 #[test]
@@ -436,7 +437,7 @@ fn test_treasury_insufficient() {
     t.setup_dao(dao_id, root.clone(), vote_nullifier.clone());
     // drain treasury by setting reward higher than treasury
     t.rewards_client()
-        .set_reward(&dao_id, &2_000_0000000, &t.admin); // 2M but treasury only 1M
+        .set_reward(&dao_id, &20_000_000_000, &t.admin); // 2M but treasury only 1M
     let proof = create_test_proof(&t.env);
     t.rewards_client().claim(
         &dao_id,
