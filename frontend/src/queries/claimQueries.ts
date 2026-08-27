@@ -21,17 +21,33 @@ async function fetchClaimStatus(
   if (!cached) return null;
 
   const { secret } = cached;
-  const voteNullifier = await calculateNullifier(secret, daoId.toString(), proposalId.toString());
-  const claimNullifier = await calculateClaimNullifier(secret, daoId.toString(), proposalId.toString());
+  const voteNullifier = await calculateNullifier(
+    secret,
+    daoId.toString(),
+    proposalId.toString(),
+  );
+  const claimNullifier = await calculateClaimNullifier(
+    secret,
+    daoId.toString(),
+    proposalId.toString(),
+  );
 
   // Check is_claimed via relayer (anonymous, no wallet needed)
   try {
     const toHex = (v: string) => BigInt(v).toString(16).padStart(64, "0");
-    const res = await relayerFetch(`/api/v1/claim/status/${daoId}/${proposalId}/${toHex(claimNullifier)}`, {
-      maxRetries: 1,
-    });
+    const res = await relayerFetch(
+      `/api/v1/claim/status/${daoId}/${proposalId}/${toHex(claimNullifier)}`,
+      {
+        maxRetries: 1,
+      },
+    );
     if (!res.ok) {
-      return { isClaimed: false, isVoted: false, claimNullifier, voteNullifier };
+      return {
+        isClaimed: false,
+        isVoted: false,
+        claimNullifier,
+        voteNullifier,
+      };
     }
     const data = await res.json();
     // Also check isVoted via separate query? For now derive from voteNullifier check via voting contract?
@@ -48,7 +64,11 @@ async function fetchClaimStatus(
   }
 }
 
-export function useClaimStatusQuery(daoId: number, proposalId: number, publicKey: string | null) {
+export function useClaimStatusQuery(
+  daoId: number,
+  proposalId: number,
+  publicKey: string | null,
+) {
   return useQuery({
     queryKey: queryKeys.claim.status(daoId, proposalId, publicKey ?? "anon"),
     queryFn: () => fetchClaimStatus(daoId, proposalId, publicKey),
@@ -88,7 +108,9 @@ export async function submitClaimViaRelayer(params: {
 
 // Treasury query via relayer
 async function fetchTreasury(daoId: number): Promise<string> {
-  const res = await relayerFetch(`/api/v1/claim/treasury/${daoId}`, { maxRetries: 1 });
+  const res = await relayerFetch(`/api/v1/claim/treasury/${daoId}`, {
+    maxRetries: 1,
+  });
   if (!res.ok) throw new Error("Failed to fetch treasury");
   const data = await res.json();
   return data.treasury ?? "0";

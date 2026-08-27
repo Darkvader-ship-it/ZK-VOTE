@@ -111,7 +111,9 @@ describe("ClaimRewards — Vote-to-Earn integration (real relayer path)", () => 
         body: expect.stringContaining('"daoId":1'),
       }),
     );
-    const firstCallBody = JSON.parse((relayerFetch as any).mock.calls[0][1].body);
+    const firstCallBody = JSON.parse(
+      (relayerFetch as any).mock.calls[0][1].body,
+    );
     expect(firstCallBody.voteNullifier).toBeDefined();
     expect(firstCallBody.claimNullifier).toBeDefined();
     expect(firstCallBody.voteNullifier).not.toBe(firstCallBody.claimNullifier);
@@ -123,7 +125,8 @@ describe("ClaimRewards — Vote-to-Earn integration (real relayer path)", () => 
   it("replay rejection via /api/v1/claim returns already claimed error (real path)", async () => {
     (relayerFetch as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: false,
-      json: () => Promise.resolve({ error: "Reward already claimed for this vote" }),
+      json: () =>
+        Promise.resolve({ error: "Reward already claimed for this vote" }),
     });
 
     render(<ClaimRewards {...defaultProps} />);
@@ -138,19 +141,23 @@ describe("ClaimRewards — Vote-to-Earn integration (real relayer path)", () => 
 
   it("shows error when user has not voted (gate on is_nullifier_used)", async () => {
     const { initializeContractClients } = await import("../lib/contracts");
-    (initializeContractClients as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-      membershipTree: {
-        get_leaf_index: vi.fn().mockResolvedValue({ result: 0 }),
-        current_root: vi.fn().mockResolvedValue({ result: BigInt("12345") }),
-      },
-      voting: {
-        is_nullifier_used: vi.fn().mockResolvedValue({ result: false }),
-      },
-    } as any);
+    (initializeContractClients as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      {
+        membershipTree: {
+          get_leaf_index: vi.fn().mockResolvedValue({ result: 0 }),
+          current_root: vi.fn().mockResolvedValue({ result: BigInt("12345") }),
+        },
+        voting: {
+          is_nullifier_used: vi.fn().mockResolvedValue({ result: false }),
+        },
+      } as any,
+    );
 
     render(<ClaimRewards {...defaultProps} />);
     fireEvent.click(screen.getByTestId("claim-button"));
-    expect(await screen.findByText(/must vote on this proposal/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/must vote on this proposal/),
+    ).toBeInTheDocument();
     expect(relayerFetch).not.toHaveBeenCalled();
   });
 
@@ -175,7 +182,8 @@ describe("ClaimRewards — Vote-to-Earn integration (real relayer path)", () => 
 // Additional unit test for zkproof claim helpers (ensures proof gen via zkproof.ts)
 describe("zkproof claim helpers", () => {
   it("calculateClaimNullifier uses CLAIM_TAG domain separation", async () => {
-    const { calculateNullifier, calculateClaimNullifier, CLAIM_TAG } = await import("../lib/zkproof");
+    const { calculateNullifier, calculateClaimNullifier, CLAIM_TAG } =
+      await import("../lib/zkproof");
     // They should differ for same inputs because claim includes tag
     const secret = "12345";
     const daoId = "1";
@@ -202,6 +210,8 @@ describe("zkproof claim helpers", () => {
     });
     expect(result).toHaveProperty("proof");
     expect(result).toHaveProperty("publicSignals");
-    expect(result.publicSignals).toEqual(expect.arrayContaining(["1", "2", "3", "4", "5"]));
+    expect(result.publicSignals).toEqual(
+      expect.arrayContaining(["1", "2", "3", "4", "5"]),
+    );
   });
 });

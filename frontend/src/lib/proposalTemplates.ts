@@ -62,7 +62,8 @@ export const PROPOSAL_TEMPLATES: ProposalTemplate[] = [
   {
     id: "treasury-spend",
     name: "Treasury Spend",
-    description: "Trailing 14-day window for higher-stakes financial decisions.",
+    description:
+      "Trailing 14-day window for higher-stakes financial decisions.",
     titlePlaceholder: "Treasury Spend: ...",
     bodyScaffold:
       "## Requested Amount\n\n## Purpose\n\n## Recipient\n\n## Justification\n",

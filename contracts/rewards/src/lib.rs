@@ -193,15 +193,26 @@ impl Rewards {
             .extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_EXTEND);
     }
 
-    pub fn __constructor(env: Env, tree_contract: Address, registry: Address, voting_contract: Address) {
+    pub fn __constructor(
+        env: Env,
+        tree_contract: Address,
+        registry: Address,
+        voting_contract: Address,
+    ) {
         if env.storage().instance().has(&VERSION_KEY) {
             panic_with_error!(&env, RewardsError::AlreadyInitialized);
         }
         env.storage().instance().set(&VERSION_KEY, &VERSION);
-        ContractUpgraded { from: 0, to: VERSION }.publish(&env);
+        ContractUpgraded {
+            from: 0,
+            to: VERSION,
+        }
+        .publish(&env);
         env.storage().instance().set(&TREE_CONTRACT, &tree_contract);
         env.storage().instance().set(&REGISTRY, &registry);
-        env.storage().instance().set(&VOTING_CONTRACT, &voting_contract);
+        env.storage()
+            .instance()
+            .set(&VOTING_CONTRACT, &voting_contract);
     }
 
     fn assert_in_field(env: &Env, value: &U256) {
@@ -305,7 +316,11 @@ impl Rewards {
 
     pub fn vk_version(env: Env, dao_id: u64) -> u32 {
         Self::bump_instance(&env);
-        let ver: u32 = env.storage().persistent().get(&DataKey::VkVersion(dao_id)).unwrap_or(0);
+        let ver: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::VkVersion(dao_id))
+            .unwrap_or(0);
         if ver > 0 {
             Self::bump_persistent(&env, &DataKey::VkVersion(dao_id));
         }
@@ -348,7 +363,12 @@ impl Rewards {
         }
         env.storage().persistent().set(&key, &new_bal);
         Self::bump_persistent(&env, &key);
-        TreasuryFunded { dao_id, amount, new_balance: new_bal }.publish(&env);
+        TreasuryFunded {
+            dao_id,
+            amount,
+            new_balance: new_bal,
+        }
+        .publish(&env);
     }
 
     pub fn get_treasury(env: Env, dao_id: u64) -> i128 {
@@ -364,7 +384,11 @@ impl Rewards {
     pub fn get_reward_amount(env: Env, dao_id: u64) -> i128 {
         Self::bump_instance(&env);
         let key = DataKey::RewardAmount(dao_id);
-        let amt: i128 = env.storage().persistent().get(&key).unwrap_or(DEFAULT_REWARD);
+        let amt: i128 = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(DEFAULT_REWARD);
         Self::bump_persistent(&env, &key);
         amt
     }
@@ -401,7 +425,10 @@ impl Rewards {
 
     pub fn version(env: Env) -> u32 {
         Self::bump_instance(&env);
-        env.storage().instance().get(&VERSION_KEY).unwrap_or(VERSION)
+        env.storage()
+            .instance()
+            .get(&VERSION_KEY)
+            .unwrap_or(VERSION)
     }
 
     // ---- Core: claim ----
@@ -437,7 +464,12 @@ impl Rewards {
         let voted: bool = env.invoke_contract(
             &voting,
             &Symbol::new(&env, "is_nullifier_used"),
-            soroban_sdk::vec![&env, dao_id.into_val(&env), proposal_id.into_val(&env), vote_nullifier.clone().into_val(&env)],
+            soroban_sdk::vec![
+                &env,
+                dao_id.into_val(&env),
+                proposal_id.into_val(&env),
+                vote_nullifier.clone().into_val(&env)
+            ],
         );
         if !voted {
             panic_with_error!(&env, RewardsError::NotVoted);
@@ -513,7 +545,11 @@ impl Rewards {
         let treasury_key = DataKey::Treasury(dao_id);
         let treasury: i128 = env.storage().persistent().get(&treasury_key).unwrap_or(0);
         let reward_key = DataKey::RewardAmount(dao_id);
-        let reward: i128 = env.storage().persistent().get(&reward_key).unwrap_or(DEFAULT_REWARD);
+        let reward: i128 = env
+            .storage()
+            .persistent()
+            .get(&reward_key)
+            .unwrap_or(DEFAULT_REWARD);
         if treasury < reward {
             panic_with_error!(&env, RewardsError::TreasuryInsufficient);
         }
@@ -568,7 +604,11 @@ impl Rewards {
     ) -> bool {
         #[cfg(any(test, feature = "testutils"))]
         {
-            if let Some(override_val) = env.storage().instance().get::<DataKey, bool>(&DataKey::VerifyOverride) {
+            if let Some(override_val) = env
+                .storage()
+                .instance()
+                .get::<DataKey, bool>(&DataKey::VerifyOverride)
+            {
                 return override_val;
             }
         }

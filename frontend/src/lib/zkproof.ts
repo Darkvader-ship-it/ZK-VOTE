@@ -312,7 +312,11 @@ export async function generateClaimProof(
       }
     }
     const { groth16 } = await import("snarkjs");
-    const { proof, publicSignals } = await groth16.fullProve(circuitInput, wasmPath, zkeyPath);
+    const { proof, publicSignals } = await groth16.fullProve(
+      circuitInput,
+      wasmPath,
+      zkeyPath,
+    );
     return { proof, publicSignals };
   } catch (error) {
     console.error("Failed to generate claim proof:", error);
@@ -562,7 +566,12 @@ export async function calculateClaimNullifier(
   const { buildPoseidon } = await import("circomlibjs");
   const poseidon = await buildPoseidon();
   const hash = poseidon.F.toString(
-    poseidon([BigInt(secret), BigInt(daoId), BigInt(proposalId), BigInt(CLAIM_TAG)]),
+    poseidon([
+      BigInt(secret),
+      BigInt(daoId),
+      BigInt(proposalId),
+      BigInt(CLAIM_TAG),
+    ]),
   );
   return hash;
 }

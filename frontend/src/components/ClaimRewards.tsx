@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { Button } from "./ui/Button";
 import Alert from "./ui/Alert";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./ui/Card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "./ui/Card";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import { initializeContractClients } from "../lib/contracts";
 import { relayerFetch } from "../lib/api";
@@ -12,8 +18,19 @@ import {
   calculateClaimNullifier,
 } from "../lib/zkproof";
 import { getMerklePath } from "../lib/merkletree";
-import { generateDeterministicZKCredentials, getZKCredentials, storeZKCredentials } from "../lib/zk";
-import { CheckCircle, XCircle, AlertTriangle, Loader2, X, Gift } from "lucide-react";
+import {
+  generateDeterministicZKCredentials,
+  getZKCredentials,
+  storeZKCredentials,
+} from "../lib/zk";
+import {
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  Loader2,
+  X,
+  Gift,
+} from "lucide-react";
 
 interface ClaimRewardsProps {
   daoId: number;
@@ -52,9 +69,15 @@ export default function ClaimRewards({
       let secret: string, salt: string, commitment: string, leafIndex: number;
       const cached = getZKCredentials(daoId, publicKey);
       if (!cached) {
-        if (!kit) throw new Error("You must register for voting first. Please click 'Register for Voting'.");
+        if (!kit)
+          throw new Error(
+            "You must register for voting first. Please click 'Register for Voting'.",
+          );
         setProgress("Regenerating credentials from wallet signature...");
-        const credentials = await generateDeterministicZKCredentials(kit, daoId);
+        const credentials = await generateDeterministicZKCredentials(
+          kit,
+          daoId,
+        );
         const leafIndexResult = await clients.membershipTree.get_leaf_index({
           dao_id: BigInt(daoId),
           commitment: BigInt(credentials.commitment),
@@ -73,14 +96,20 @@ export default function ClaimRewards({
 
       // Check that user has voted (gate: only voters can claim)
       setProgress("Checking vote status...");
-      const voteNullifierPre = await calculateNullifier(secret, daoId.toString(), proposalId.toString());
+      const voteNullifierPre = await calculateNullifier(
+        secret,
+        daoId.toString(),
+        proposalId.toString(),
+      );
       const isVotedResult = await clients.voting.is_nullifier_used({
         dao_id: BigInt(daoId),
         proposal_id: BigInt(proposalId),
         nullifier: BigInt(voteNullifierPre),
       });
       if (!isVotedResult.result) {
-        throw new Error("You must vote on this proposal before claiming rewards. Only voters can claim.");
+        throw new Error(
+          "You must vote on this proposal before claiming rewards. Only voters can claim.",
+        );
       }
 
       // Select root
@@ -90,16 +119,30 @@ export default function ClaimRewards({
         root = eligibleRoot;
       } else {
         setProgress("Fetching current root (Trailing mode)...");
-        const currentRootResult = await clients.membershipTree.current_root({ dao_id: BigInt(daoId) });
+        const currentRootResult = await clients.membershipTree.current_root({
+          dao_id: BigInt(daoId),
+        });
         root = currentRootResult.result;
       }
 
       setProgress("Fetching Merkle path...");
-      const { pathElements, pathIndices } = await getMerklePath(leafIndex, daoId, publicKey);
+      const { pathElements, pathIndices } = await getMerklePath(
+        leafIndex,
+        daoId,
+        publicKey,
+      );
 
       setProgress("Computing nullifiers (vote + claim)...");
-      const voteNullifier = await calculateNullifier(secret, daoId.toString(), proposalId.toString());
-      const claimNullifier = await calculateClaimNullifier(secret, daoId.toString(), proposalId.toString());
+      const voteNullifier = await calculateNullifier(
+        secret,
+        daoId.toString(),
+        proposalId.toString(),
+      );
+      const claimNullifier = await calculateClaimNullifier(
+        secret,
+        daoId.toString(),
+        proposalId.toString(),
+      );
 
       setProgress("Generating zero-knowledge claim proof...");
       const wasmPath = "/circuits/claim.wasm";
@@ -123,10 +166,16 @@ export default function ClaimRewards({
 
       setProgress("Verifying proof locally...");
       const { verifyProofLocally } = await import("../lib/zkproof");
-      const isValid = await verifyProofLocally(proof, publicSignals, "/circuits/claim_verification_key.json");
+      const isValid = await verifyProofLocally(
+        proof,
+        publicSignals,
+        "/circuits/claim_verification_key.json",
+      );
       // If local verification fails but we are in production, still submit — local VK may be missing
       if (!isValid && import.meta.env.DEV) {
-        console.warn("Local claim proof verification: false (may be missing VK)");
+        console.warn(
+          "Local claim proof verification: false (may be missing VK)",
+        );
       }
 
       setProgress("Formatting proof...");
@@ -155,25 +204,42 @@ export default function ClaimRewards({
 
       if (!response.ok) {
         const errorData = await response.json();
-        const errorMsg = errorData.error || "Failed to submit claim through relay";
-        if (errorMsg.includes("already claimed") || errorMsg.includes("ClaimNullifierUsed")) {
-          throw new Error("Reward already claimed for this vote. Each vote can only claim once.");
+        const errorMsg =
+          errorData.error || "Failed to submit claim through relay";
+        if (
+          errorMsg.includes("already claimed") ||
+          errorMsg.includes("ClaimNullifierUsed")
+        ) {
+          throw new Error(
+            "Reward already claimed for this vote. Each vote can only claim once.",
+          );
         }
-        if (errorMsg.includes("Vote not found") || errorMsg.includes("NotVoted")) {
-          throw new Error("Vote not found — only voters can claim. Please vote first.");
+        if (
+          errorMsg.includes("Vote not found") ||
+          errorMsg.includes("NotVoted")
+        ) {
+          throw new Error(
+            "Vote not found — only voters can claim. Please vote first.",
+          );
         }
         throw new Error(errorMsg);
       }
 
       const result = await response.json();
-      if (import.meta.env.DEV) console.log("Claim submitted successfully:", result);
+      if (import.meta.env.DEV)
+        console.log("Claim submitted successfully:", result);
       setStep("success");
       setTimeout(() => onComplete(), 2000);
     } catch (err) {
       setStep("error");
-      let errorMsg = err instanceof Error ? err.message : "Failed to submit claim";
-      if (errorMsg.includes("Assert Failed") || errorMsg.includes("Error in template Claim")) {
-        errorMsg = "Proof generation failed. Check your voting credentials and Merkle path. If you joined after the proposal in Fixed mode, you cannot claim.";
+      let errorMsg =
+        err instanceof Error ? err.message : "Failed to submit claim";
+      if (
+        errorMsg.includes("Assert Failed") ||
+        errorMsg.includes("Error in template Claim")
+      ) {
+        errorMsg =
+          "Proof generation failed. Check your voting credentials and Merkle path. If you joined after the proposal in Fixed mode, you cannot claim.";
       }
       setError(errorMsg);
       console.error("Claim submission failed:", err);
@@ -186,7 +252,10 @@ export default function ClaimRewards({
       onClick={onClose}
       data-testid="claim-rewards-modal"
     >
-      <div className="relative w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="relative w-full max-w-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <Button
           variant="ghost"
           size="icon"
@@ -204,24 +273,33 @@ export default function ClaimRewards({
                   <Gift className="h-5 w-5" /> Claim Vote-to-Earn Reward
                 </CardTitle>
                 <CardDescription>
-                  Anonymous claim for voters. Your vote nullifier proves eligibility, claim nullifier prevents double-claim. Relayer preserves anonymity.
+                  Anonymous claim for voters. Your vote nullifier proves
+                  eligibility, claim nullifier prevents double-claim. Relayer
+                  preserves anonymity.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <Alert variant="warning" className="text-xs">
                   <AlertTriangle className="h-4 w-4" />
-                  Only voters (is_nullifier_used) can claim. Each vote can claim once; replay of claim-nullifier will be rejected.
+                  Only voters (is_nullifier_used) can claim. Each vote can claim
+                  once; replay of claim-nullifier will be rejected.
                 </Alert>
                 <div className="text-xs text-muted-foreground space-y-1">
                   <div>Proposal: #{proposalId}</div>
                   <div>Mode: {voteMode}</div>
                   <div className="truncate">DAO: {daoId}</div>
                 </div>
-                <Button onClick={handleClaim} variant="outline" className="w-full h-12 text-lg" data-testid="claim-button">
+                <Button
+                  onClick={handleClaim}
+                  variant="outline"
+                  className="w-full h-12 text-lg"
+                  data-testid="claim-button"
+                >
                   Claim Reward
                 </Button>
                 <p className="text-xs text-muted-foreground text-center">
-                  Sybil bounds: SBT-age / QV / funding caps enforced per THREAT_MODEL.md
+                  Sybil bounds: SBT-age / QV / funding caps enforced per
+                  THREAT_MODEL.md
                 </p>
               </CardContent>
             </>
@@ -236,23 +314,37 @@ export default function ClaimRewards({
                 </div>
               </div>
               <div className="space-y-2">
-                <h3 className="font-semibold text-lg">{step === "generating" ? "Generating Proof" : "Submitting Claim"}</h3>
-                <p className="text-sm text-muted-foreground max-w-[260px] mx-auto">{progress}</p>
+                <h3 className="font-semibold text-lg">
+                  {step === "generating"
+                    ? "Generating Proof"
+                    : "Submitting Claim"}
+                </h3>
+                <p className="text-sm text-muted-foreground max-w-[260px] mx-auto">
+                  {progress}
+                </p>
               </div>
               <Alert className="mt-4 bg-muted/50 border-none">
-                <p className="text-xs text-muted-foreground">This uses heavy cryptography in your browser. Don&apos;t close this window.</p>
+                <p className="text-xs text-muted-foreground">
+                  This uses heavy cryptography in your browser. Don&apos;t close
+                  this window.
+                </p>
               </Alert>
             </CardContent>
           )}
 
           {step === "success" && (
-            <CardContent className="py-12 flex flex-col items-center text-center space-y-4" data-testid="claim-success">
+            <CardContent
+              className="py-12 flex flex-col items-center text-center space-y-4"
+              data-testid="claim-success"
+            >
               <div className="h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-2">
                 <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
               </div>
               <div className="space-y-1">
                 <h3 className="font-bold text-xl">Reward Claimed!</h3>
-                <p className="text-muted-foreground">Your anonymous claim has been recorded on-chain.</p>
+                <p className="text-muted-foreground">
+                  Your anonymous claim has been recorded on-chain.
+                </p>
               </div>
             </CardContent>
           )}
@@ -269,7 +361,13 @@ export default function ClaimRewards({
                 <div data-testid="claim-error">
                   <Alert variant="error">{error}</Alert>
                 </div>
-                <Button variant="secondary" size="lg" className="w-full" onClick={onClose} data-testid="claim-error-close">
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  className="w-full"
+                  onClick={onClose}
+                  data-testid="claim-error-close"
+                >
                   Close
                 </Button>
               </CardContent>
