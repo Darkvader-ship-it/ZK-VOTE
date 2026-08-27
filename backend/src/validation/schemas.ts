@@ -503,3 +503,21 @@ export const commentCountQuerySchema = limitOffsetPaginationSchema.extend({
 export const commentNonceQuerySchema = z.object({
   commitment: bn254Field,
 });
+
+// ============================================
+// VOTE-TO-EARN CLAIM SCHEMA
+// ============================================
+
+export const claimSchema = z.object({
+  daoId: z.number().int().nonnegative("daoId must be a non-negative integer"),
+  proposalId: z
+    .number()
+    .int()
+    .nonnegative("proposalId must be a non-negative integer"),
+  voteNullifier: bn254Field,
+  claimNullifier: bn254Field,
+  root: bn254Field,
+  proof: groth16Proof,
+});
+
+export type ClaimRequest = z.infer<typeof claimSchema>;

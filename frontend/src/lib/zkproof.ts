@@ -141,6 +141,23 @@ export interface CommentProofInput {
 // Legacy alias for backwards compatibility
 export type ProofInput = VoteProofInput;
 
+export interface ClaimProofInput {
+  secret: string;
+  salt: string;
+  blindingFactor?: string;
+  root: string;
+  voteNullifier: string;
+  claimNullifier: string;
+  daoId: string;
+  proposalId: string;
+  pathElements: string[];
+  pathIndices: number[];
+}
+
+// Domain tag for claim nullifier: ascii("claim") = 0x636c61696d = 427020085613 (BN254 Fr element)
+// Distinct arity (4 vs 3) ensures vote and claim nullifiers never collide.
+export const CLAIM_TAG = "427020085613";
+
 export interface GeneratedProof {
   proof: Groth16Proof;
   publicSignals: string[];
@@ -252,6 +269,63 @@ export async function generateVoteProofV2(
     wasmPath,
     zkeyPath,
   );
+}
+
+/**
+ * Generate a Groth16 proof for Vote-to-Earn claim
+ * Public signals: [root, voteNullifier, claimNullifier, daoId, proposalId]
+ */
+export async function generateClaimProof(
+  input: ClaimProofInput,
+  wasmPath: string | Uint8Array = "/circuits/claim.wasm",
+  zkeyPath: string | Uint8Array = "/circuits/claim_final.zkey",
+): Promise<GeneratedProof> {
+  if (activeProofGenerationCount > 0) {
+    throw new Error(
+      "A proof generation process is already in progress. Please wait for it to finish.",
+    );
+  }
+  activeProofGenerationCount++;
+  try {
+    const circuitInput: CircuitSignals = {
+      root: input.root,
+      voteNullifier: input.voteNullifier,
+      claimNullifier: input.claimNullifier,
+      daoId: input.daoId,
+      proposalId: input.proposalId,
+      secret: input.secret,
+      salt: input.salt,
+      pathElements: input.pathElements,
+      pathIndices: input.pathIndices,
+    };
+    // Reuse same prover path as vote (Rust → snarkjs fallback)
+    if (USE_RUST_PROVER) {
+      try {
+        // Directly use proveWithRust with explicit big-int conversion inside
+        // For claim we fall back to snarkjs fullProve which handles witness calc
+        // to avoid duplicating Rust witness logic for new circuit. This keeps
+        // claim compatible with snarkjs-generated zkeys until Rust prover is
+        // extended for claim.
+        throw new Error("claim Rust prover not yet wired — use snarkjs");
+      } catch (e) {
+        // fall through to snarkjs
+      }
+    }
+    const { groth16 } = await import("snarkjs");
+    const { proof, publicSignals } = await groth16.fullProve(
+      circuitInput,
+      wasmPath,
+      zkeyPath,
+    );
+    return { proof, publicSignals };
+  } catch (error) {
+    console.error("Failed to generate claim proof:", error);
+    throw new Error(
+      `Claim proof generation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
+  } finally {
+    activeProofGenerationCount = Math.max(0, activeProofGenerationCount - 1);
+  }
 }
 
 /**
@@ -478,6 +552,32 @@ export async function calculateCommentNullifier(
 
   return hash;
 }
+
+/**
+ * Calculate claim nullifier using Poseidon hash with domain tag
+ * claimNullifier = Poseidon(secret, daoId, proposalId, CLAIM_TAG)
+ * CLAIM_TAG = 427020085613 (ascii "claim") blocks double-claim, distinct from vote nullifier
+ */
+export async function calculateClaimNullifier(
+  secret: string,
+  daoId: string,
+  proposalId: string,
+): Promise<string> {
+  const { buildPoseidon } = await import("circomlibjs");
+  const poseidon = await buildPoseidon();
+  const hash = poseidon.F.toString(
+    poseidon([
+      BigInt(secret),
+      BigInt(daoId),
+      BigInt(proposalId),
+      BigInt(CLAIM_TAG),
+    ]),
+  );
+  return hash;
+}
+
+/** Alias for calculateNullifier — vote nullifier used to gate claims */
+export const calculateVoteNullifier = calculateNullifier;
 
 // Domain separation tag for commitment scheme
 // SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field

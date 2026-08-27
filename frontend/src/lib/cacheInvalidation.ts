@@ -269,22 +269,19 @@ export async function invalidateAfterVote(
   daoId: number,
   proposalId: number,
 ): Promise<InvalidationResult> {
-  const results = await Promise.all([
-    invalidateProposalQueries(daoId, proposalId),
-    // May affect DAO stats if tracked
-    queryClient.invalidateQueries({
-      queryKey: queryKeys.dao.info(daoId),
-    }),
-  ]);
-
-  const totalCount = results.reduce((sum, r) => sum + r.count, 0);
+  const proposalResult = await invalidateProposalQueries(daoId, proposalId);
+  await queryClient.invalidateQueries({
+    queryKey: queryKeys.dao.info(daoId),
+  });
+  const daoKey = queryKeys.dao.info(daoId);
+  const totalCount = proposalResult.count + 1;
 
   if (import.meta.env.DEV) {
     console.log(`[Cache] Post-vote invalidation: ${totalCount} queries`);
   }
 
   return {
-    keys: results.flatMap((r) => r.keys),
+    keys: [...proposalResult.keys, daoKey],
     count: totalCount,
     timestamp: new Date().toISOString(),
   };

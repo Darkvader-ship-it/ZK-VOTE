@@ -43,9 +43,14 @@ dotenv.config();
 // ============================================
 
 const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "production", "test"])
+    .default("development"),
   PORT: z.coerce.number().int().positive().default(3001),
-  CLUSTER_ENABLED: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
+  CLUSTER_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   CLUSTER_WORKERS: z.coerce.number().int().positive().optional(),
   WORKER_COUNT: z.coerce.number().int().positive().optional(),
   WEB_CONCURRENCY: z.coerce.number().int().positive().optional(),
@@ -60,11 +65,29 @@ const envSchema = z.object({
   RELAYER_SECRET_KEY: z.string().optional(),
   AUTH_MASTER_KEY: z.string().optional(),
 
-  TOKEN_ROTATION_ENABLED: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
-  TOKEN_ROTATION_INTERVAL_MS: z.coerce.number().int().positive().default(2592000000),
-  TOKEN_ROTATION_TRANSITION_MS: z.coerce.number().int().positive().default(172800000),
-  DEFAULT_TOKEN_LIFETIME_MS: z.coerce.number().int().positive().default(5184000000),
-  TOKEN_AUDIT_LOG_ENABLED: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
+  TOKEN_ROTATION_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
+  TOKEN_ROTATION_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(2592000000),
+  TOKEN_ROTATION_TRANSITION_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(172800000),
+  DEFAULT_TOKEN_LIFETIME_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5184000000),
+  TOKEN_AUDIT_LOG_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
 
   VOTING_CONTRACT_ID: z.string().min(1).optional(),
   TREE_CONTRACT_ID: z.string().min(1).optional(),
@@ -73,22 +96,45 @@ const envSchema = z.object({
   MEMBERSHIP_SBT_CONTRACT_ID: z.string().min(1).optional(),
   BRIDGE_CONTRACT_ID: z.string().min(1).optional(),
   CIRCUIT_REGISTRY_CONTRACT_ID: z.string().min(1).optional(),
+  REWARDS_CONTRACT_ID: z.string().min(1).optional(),
   VOTING_VK_VERSION: z.coerce.number().int().optional(),
 
   CORS_ORIGIN: z.string().optional(),
 
   LOG_CLIENT_IP: z.enum(["plain", "hash"]).optional(),
-  LOG_REQUEST_BODY: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
-  STRIP_REQUEST_BODIES: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
-  RELAYER_GENERIC_ERRORS: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
-  HEALTH_EXPOSE_DETAILS: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
-  HEALTHCHECK_PING: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
+  LOG_REQUEST_BODY: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
+  STRIP_REQUEST_BODIES: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  RELAYER_GENERIC_ERRORS: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  HEALTH_EXPOSE_DETAILS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
+  HEALTHCHECK_PING: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 
-  INDEXER_ENABLED: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
+  INDEXER_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
   INDEXER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
 
   DAO_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
-  MEMBERSHIP_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(600000),
+  MEMBERSHIP_SYNC_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(600000),
 
   PINATA_JWT: z.string().optional(),
   PINATA_GATEWAY: z.string().optional(),
@@ -97,9 +143,15 @@ const envSchema = z.object({
   WEB3_STORAGE_TOKEN: z.string().optional(),
   PIN_VERIFY_INTERVAL_MS: z.coerce.number().int().positive().default(3600000),
   PIN_ALERT_THRESHOLD: z.coerce.number().int().positive().default(3),
-  PIN_AUTO_REPIN: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
+  PIN_AUTO_REPIN: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
 
-  POW_ENABLED: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
+  POW_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
   POW_DIFFICULTY: z.coerce.number().int().positive().default(20),
   POW_CHALLENGE_TTL_MS: z.coerce.number().int().positive().default(300000),
 
@@ -109,12 +161,26 @@ const envSchema = z.object({
   FLAG_THRESHOLD: z.coerce.number().int().positive().default(3),
   FLAG_POW_DIFFICULTY: z.coerce.number().int().positive().default(10),
 
-  TTL_RENEWAL_INTERVAL_MS: z.coerce.number().int().positive().default(604800000),
-  TTL_RENEWAL_THRESHOLD_MS: z.coerce.number().int().positive().default(1209600000),
+  TTL_RENEWAL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(604800000),
+  TTL_RENEWAL_THRESHOLD_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1209600000),
   TTL_GRACE_PERIOD_MS: z.coerce.number().int().positive().default(259200000),
   TTL_BATCH_SIZE: z.coerce.number().int().positive().default(5),
-  TTL_CHECK_ENABLED: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
-  TTL_COST_TRACKING_ENABLED: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
+  TTL_CHECK_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
+  TTL_COST_TRACKING_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
   TTL_MAX_FEE: z.string().default("1000000"),
   TTL_SLIPPAGE_LEDGERS: z.coerce.number().int().positive().default(8640),
 
@@ -125,44 +191,97 @@ const envSchema = z.object({
   ARCHIVAL_INTERVAL_MS: z.coerce.number().int().positive().default(86400000),
 
   AUDIT_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
-  AUDIT_LOG_ROTATION_INTERVAL_MS: z.coerce.number().int().positive().default(86400000),
+  AUDIT_LOG_ROTATION_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(86400000),
   AUDIT_LOG_ARCHIVE_DIR: z.string().default("./data/audit-archive"),
 
   MAX_PROOF_AGE_SECONDS: z.coerce.number().int().positive().default(300),
-  REQUIRE_CLIENT_CERT: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
+  REQUIRE_CLIENT_CERT: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
   WALLET_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
-  WALLET_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+  WALLET_RATE_LIMIT_WINDOW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60000),
   RELAYER_PUBLIC_KEY: z.string().default(""),
 
-  CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
-  CIRCUIT_BREAKER_RPC_RESET_MS: z.coerce.number().int().positive().default(30000),
-  CIRCUIT_BREAKER_PINATA_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
-  CIRCUIT_BREAKER_PINATA_RESET_MS: z.coerce.number().int().positive().default(30000),
-  CIRCUIT_BREAKER_GATEWAY_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
-  CIRCUIT_BREAKER_GATEWAY_RESET_MS: z.coerce.number().int().positive().default(30000),
+  CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5),
+  CIRCUIT_BREAKER_RPC_RESET_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30000),
+  CIRCUIT_BREAKER_PINATA_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5),
+  CIRCUIT_BREAKER_PINATA_RESET_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30000),
+  CIRCUIT_BREAKER_GATEWAY_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5),
+  CIRCUIT_BREAKER_GATEWAY_RESET_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30000),
 
   MEMORY_MONITOR_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
   MEMORY_LIMIT_MB: z.coerce.number().int().positive().default(512),
   MEMORY_WARN_RATIO: z.coerce.number().min(0).max(1).default(0.8),
   MEMORY_CRITICAL_RATIO: z.coerce.number().min(0).max(1).default(0.95),
-  MEMORY_AUTO_RESTART: z.enum(["true", "false"]).default("true").transform(v => v !== "false"),
+  MEMORY_AUTO_RESTART: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v !== "false"),
 
   MAX_CACHED_DAOS: z.coerce.number().int().positive().default(5000),
   DB_QUERY_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(500),
 
   DB_BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   DB_CHECKPOINT_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
-  DB_CHECKPOINT_TRANSACTION_COUNT: z.coerce.number().int().positive().default(1000),
-  DB_WAL_WARNING_THRESHOLD_BYTES: z.coerce.number().int().positive().default(104857600),
+  DB_CHECKPOINT_TRANSACTION_COUNT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1000),
+  DB_WAL_WARNING_THRESHOLD_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(104857600),
   DB_BACKUP_INTERVAL_MS: z.coerce.number().int().positive().default(3600000),
   DB_RETRY_COUNT: z.coerce.number().int().positive().default(5),
   DB_RETRY_BASE_DELAY_MS: z.coerce.number().int().positive().default(50),
   DB_RETRY_MAX_DELAY_MS: z.coerce.number().int().positive().default(2000),
 
   MAX_SEQUENCE_RETRY_ATTEMPTS: z.coerce.number().int().positive().default(1),
-  VOTE_SUBMISSION_PENDING_TTL_MS: z.coerce.number().int().positive().default(300000),
+  VOTE_SUBMISSION_PENDING_TTL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(300000),
 
-  RELAYER_TEST_MODE: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
+  RELAYER_TEST_MODE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 });
 
 type EnvConfig = z.infer<typeof envSchema>;
@@ -171,7 +290,7 @@ function validateBootEnv(): EnvConfig {
   const parseResult = envSchema.safeParse(process.env);
 
   if (!parseResult.success) {
-    const errors = parseResult.error.issues.map(issue => {
+    const errors = parseResult.error.issues.map((issue) => {
       const field = issue.path.join(".");
       return `  ${field}: ${issue.message}`;
     });
@@ -184,7 +303,7 @@ function validateBootEnv(): EnvConfig {
       }),
     );
     console.error("\nInvalid environment configuration:");
-    errors.forEach(e => console.error(e));
+    errors.forEach((e) => console.error(e));
     console.error(
       "\nRun ./scripts/init-local.sh to generate backend/.env or configure your environment variables.",
     );
@@ -275,6 +394,7 @@ export const config = {
   membershipSbtContractId: validatedEnv.MEMBERSHIP_SBT_CONTRACT_ID,
   bridgeContractId: validatedEnv.BRIDGE_CONTRACT_ID,
   circuitRegistryContractId: validatedEnv.CIRCUIT_REGISTRY_CONTRACT_ID,
+  rewardsContractId: validatedEnv.REWARDS_CONTRACT_ID,
 
   // VK Version
   staticVkVersion: validatedEnv.VOTING_VK_VERSION,
@@ -356,11 +476,14 @@ export const config = {
   walletRateLimitWindowMs: validatedEnv.WALLET_RATE_LIMIT_WINDOW_MS,
   relayerPublicKey: validatedEnv.RELAYER_PUBLIC_KEY,
   // Circuit Breakers
-  circuitBreakerRpcFailureThreshold: validatedEnv.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD,
+  circuitBreakerRpcFailureThreshold:
+    validatedEnv.CIRCUIT_BREAKER_RPC_FAILURE_THRESHOLD,
   circuitBreakerRpcResetMs: validatedEnv.CIRCUIT_BREAKER_RPC_RESET_MS,
-  circuitBreakerPinataFailureThreshold: validatedEnv.CIRCUIT_BREAKER_PINATA_FAILURE_THRESHOLD,
+  circuitBreakerPinataFailureThreshold:
+    validatedEnv.CIRCUIT_BREAKER_PINATA_FAILURE_THRESHOLD,
   circuitBreakerPinataResetMs: validatedEnv.CIRCUIT_BREAKER_PINATA_RESET_MS,
-  circuitBreakerGatewayFailureThreshold: validatedEnv.CIRCUIT_BREAKER_GATEWAY_FAILURE_THRESHOLD,
+  circuitBreakerGatewayFailureThreshold:
+    validatedEnv.CIRCUIT_BREAKER_GATEWAY_FAILURE_THRESHOLD,
   circuitBreakerGatewayResetMs: validatedEnv.CIRCUIT_BREAKER_GATEWAY_RESET_MS,
 
   // Memory monitoring
@@ -453,7 +576,8 @@ export function validateEnv(): void {
 
   if (!config.votingContractId) errors.push("VOTING_CONTRACT_ID is required");
   if (!config.treeContractId) errors.push("TREE_CONTRACT_ID is required");
-  if (!config.commentsContractId) errors.push("COMMENTS_CONTRACT_ID is required");
+  if (!config.commentsContractId)
+    errors.push("COMMENTS_CONTRACT_ID is required");
   if (!config.relayerSecretKey) errors.push("RELAYER_SECRET_KEY is required");
   if (!config.authMasterKey) errors.push("AUTH_MASTER_KEY is required");
 
@@ -469,7 +593,10 @@ export function validateEnv(): void {
     );
   }
 
-  if (config.commentsContractId && !isValidContractId(config.commentsContractId)) {
+  if (
+    config.commentsContractId &&
+    !isValidContractId(config.commentsContractId)
+  ) {
     errors.push(
       `COMMENTS_CONTRACT_ID "${config.commentsContractId}" is not a valid Stellar contract ID`,
     );
@@ -480,7 +607,9 @@ export function validateEnv(): void {
     config.authMasterKey.length < 32 &&
     !config.testMode
   ) {
-    errors.push("AUTH_MASTER_KEY must be at least 32 characters (not in test mode)");
+    errors.push(
+      "AUTH_MASTER_KEY must be at least 32 characters (not in test mode)",
+    );
   }
 
   if (
@@ -488,7 +617,9 @@ export function validateEnv(): void {
     config.relayerAuthToken.length < 32 &&
     !config.testMode
   ) {
-    errors.push("RELAYER_AUTH_TOKEN must be at least 32 characters (not in test mode)");
+    errors.push(
+      "RELAYER_AUTH_TOKEN must be at least 32 characters (not in test mode)",
+    );
   }
 
   if (errors.length > 0) {
@@ -526,5 +657,20 @@ export function validateEnv(): void {
     console.warn(
       "WARNING: A valid Stellar Secret Key is being used in a non-production environment.",
     );
+  }
+
+  if (
+    config.rewardsContractId &&
+    !isValidContractId(config.rewardsContractId)
+  ) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "invalid_contract_id",
+        var: "REWARDS_CONTRACT_ID",
+        value: config.rewardsContractId,
+      }),
+    );
+    process.exit(1);
   }
 }

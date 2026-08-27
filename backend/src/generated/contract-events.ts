@@ -1,6 +1,6 @@
 /**
  * Auto-generated TypeScript types for Soroban contract events.
- * Generated from docs/EVENTS.md and contract source (contracts/*/src/lib.rs)
+ * Generated from docs/EVENTS.md and contract source (contracts)
  *
  * Update by reviewing event definitions in:
  * - contracts/dao-registry/src/lib.rs

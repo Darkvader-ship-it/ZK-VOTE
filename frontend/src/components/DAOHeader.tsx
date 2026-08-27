@@ -392,7 +392,11 @@ export default function DAOHeader({
 
   return (
     <Card
-      style={themeColor ? ({ "--dao-accent": themeColor } as CSSProperties) : undefined}
+      style={
+        themeColor
+          ? ({ "--dao-accent": themeColor } as CSSProperties)
+          : undefined
+      }
     >
       <CardContent className="pt-6">
         {/* Cover Image with Profile Photo and Social Links overlay */}

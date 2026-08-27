@@ -312,3 +312,18 @@ export const graduatedSlowDown = isTestMode
       keyGenerator,
       validate: { delayMs: false },
     });
+
+/**
+ * Rate limiter for vote-to-earn claim submissions
+ * 10 claims per minute per IP (same as vote, anonymity-sensitive)
+ */
+export const claimLimiter = isTestMode
+  ? noopMiddleware
+  : rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 10,
+      message: { error: "Too many claim requests, please try again later" },
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator,
+    });

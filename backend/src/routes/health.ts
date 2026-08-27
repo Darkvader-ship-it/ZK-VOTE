@@ -292,7 +292,12 @@ router.get("/debug/heap", async (req: Request, res: Response) => {
  */
 router.get("/relay-test", async (req: Request, res: Response) => {
   const startTime = Date.now();
-  const results: Record<string, unknown> = {
+  const results: {
+    timestamp: string;
+    tests: Record<string, unknown>;
+    summary?: unknown;
+    [key: string]: unknown;
+  } = {
     timestamp: new Date().toISOString(),
     tests: {},
   };
@@ -301,7 +306,7 @@ router.get("/relay-test", async (req: Request, res: Response) => {
     // Test 1: RPC Health Check
     const rpcTest = await rpcHealth();
     results.tests = {
-      ...results.tests,
+      ...(results.tests as Record<string, unknown>),
       rpc_health: {
         passed: rpcTest.ok,
         message: rpcTest.ok ? "RPC is healthy" : rpcTest.error,
@@ -314,7 +319,7 @@ router.get("/relay-test", async (req: Request, res: Response) => {
       try {
         const account = await server.getAccount(relayerPublicKey);
         results.tests = {
-          ...results.tests,
+          ...(results.tests as Record<string, unknown>),
           relayer_account: {
             passed: true,
             publicKey: relayerPublicKey,
@@ -324,7 +329,7 @@ router.get("/relay-test", async (req: Request, res: Response) => {
         };
       } catch (err) {
         results.tests = {
-          ...results.tests,
+          ...(results.tests as Record<string, unknown>),
           relayer_account: {
             passed: false,
             publicKey: relayerPublicKey,
@@ -335,7 +340,7 @@ router.get("/relay-test", async (req: Request, res: Response) => {
       }
     } else {
       results.tests = {
-        ...results.tests,
+        ...(results.tests as Record<string, unknown>),
         relayer_account: {
           passed: false,
           message: "Relayer not initialized",
@@ -348,7 +353,7 @@ router.get("/relay-test", async (req: Request, res: Response) => {
       config.votingContractId?.length === 56 &&
       config.treeContractId?.length === 56;
     results.tests = {
-      ...results.tests,
+      ...(results.tests as Record<string, unknown>),
       contract_ids: {
         passed: contractsValid,
         voting: config.votingContractId,
@@ -364,7 +369,7 @@ router.get("/relay-test", async (req: Request, res: Response) => {
     try {
       const dbStatus = getDbStatus();
       results.tests = {
-        ...results.tests,
+        ...(results.tests as Record<string, unknown>),
         database: {
           passed: true,
           message: "Database is accessible",
@@ -373,7 +378,7 @@ router.get("/relay-test", async (req: Request, res: Response) => {
       };
     } catch (err) {
       results.tests = {
-        ...results.tests,
+        ...(results.tests as Record<string, unknown>),
         database: {
           passed: false,
           error: (err as Error).message,
@@ -384,18 +389,22 @@ router.get("/relay-test", async (req: Request, res: Response) => {
 
     // Test 5: RPC Pool Status
     const poolMetrics = rpcPoolManager.getMetrics();
-    const poolHealthy = poolMetrics.available > 0;
+    const poolHealthy = poolMetrics.healthyEndpoints > 0;
     results.tests = {
-      ...results.tests,
+      ...(results.tests as Record<string, unknown>),
       rpc_pool: {
         passed: poolHealthy,
-        message: poolHealthy ? "RPC pool has available endpoints" : "No available RPC endpoints",
+        message: poolHealthy
+          ? "RPC pool has available endpoints"
+          : "No available RPC endpoints",
         metrics: poolMetrics,
       },
     };
 
     // Overall result
-    const allTests = Object.values(results.tests as Record<string, { passed: boolean }>);
+    const allTests = Object.values(
+      results.tests as Record<string, { passed: boolean }>,
+    );
     const passedCount = allTests.filter((t) => t.passed).length;
     const totalCount = allTests.length;
     const allPassed = passedCount === totalCount;

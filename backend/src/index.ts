@@ -88,6 +88,7 @@ import {
   daoRoutes,
   ipfsRoutes,
   commentsRoutes,
+  claimRoutes,
   indexerRoutes,
   initIndexerRoutes,
   bridgeRoutes,
@@ -238,6 +239,7 @@ app.use(noStore, votingRoutes);
 app.use(daoRoutes);
 app.use(ipfsRoutes);
 app.use(commentsRoutes);
+app.use(claimRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
@@ -564,6 +566,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           "/events/:daoId",
           "/events/notify",
           "/indexer/status",
+        ],
+        claim: [
+          "/api/v1/claim",
+          "/api/v1/claim/status/:dao/:prop/:nullifier",
+          "/api/v1/claim/treasury/:dao",
+          "/claim",
         ],
         comments: [
           "/comment/anonymous",
