@@ -66,7 +66,7 @@ export default function ClaimRewards({
       const clients = initializeContractClients(publicKey);
 
       setProgress("Loading voting credentials...");
-      let secret: string, salt: string, commitment: string, leafIndex: number;
+      let secret: string, salt: string, leafIndex: number;
       const cached = getZKCredentials(daoId, publicKey);
       if (!cached) {
         if (!kit)
@@ -85,12 +85,10 @@ export default function ClaimRewards({
         leafIndex = Number(leafIndexResult.result);
         secret = credentials.secret;
         salt = credentials.salt;
-        commitment = credentials.commitment;
         storeZKCredentials(daoId, publicKey, credentials, leafIndex);
       } else {
         secret = cached.secret;
         salt = cached.salt;
-        commitment = cached.commitment;
         leafIndex = cached.leafIndex;
       }
 
