@@ -314,6 +314,25 @@ export const indexerLag = new Gauge({
   registers: [register],
 });
 
+export const indexerWatermarkLedger = new Gauge({
+  name: "zkvote_indexer_watermark_ledger",
+  help: "Latest ledger durably processed by the indexer",
+  registers: [register],
+});
+
+export const indexerPollDuration = new Histogram({
+  name: "zkvote_indexer_poll_duration_seconds",
+  help: "Duration of a complete indexer polling cycle",
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+  registers: [register],
+});
+
+export const indexerOverrunSkips = new Counter({
+  name: "zkvote_indexer_overrun_skips_total",
+  help: "Polling cycles skipped because the prior indexer cycle was still active",
+  registers: [register],
+});
+
 // ============================================
 // CIRCUIT BREAKER METRICS
 // ============================================
