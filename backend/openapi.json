@@ -1316,6 +1316,7 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 500,
+              "description": "Page size (default 100)",
               "example": 100
             },
             "required": false,
@@ -1324,7 +1325,19 @@
           },
           {
             "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Rows to skip (default 0)",
+              "example": 0
+            },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "string",
+              "description": "Opaque cursor from a previous pagination.cursor; alias for offset",
               "example": "100"
             },
             "required": false,
@@ -1348,6 +1361,26 @@
                   },
                   "lastSync": null,
                   "cached": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error (HTTP 400)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error (HTTP 500)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
