@@ -27,7 +27,7 @@ import { startIndexer, stopIndexer } from "./services/indexer.js";
 import { startTTLRenewal, stopTTLRenewal } from "./services/ttl.js";
 
 // Middleware
-import { csrfGuard, requestLogger, errorHandler } from "./middleware/index.js";
+import { csrfGuard, requestLogger, errorHandler, auditMiddleware } from "./middleware/index.js";
 
 // Routes
 import {
@@ -41,7 +41,10 @@ import {
   initIndexerRoutes,
   bridgeRoutes,
   circuitRoutes,
+  auditRoutes,
+  remediationRoutes,
 } from "./routes/index.js";
+import openApiSpec from "./openapi.js";
 
 // ============================================
 // ENVIRONMENT VALIDATION
@@ -74,6 +77,10 @@ app.use(express.json({ limit: "100kb" }));
 // Logging middleware
 app.use(requestLogger);
 
+// Audit middleware - must be after body parsing and requestLogger, before routes
+// Audits every mutating route (POST/PUT/PATCH/DELETE) with PII redaction, append-only
+app.use(auditMiddleware);
+
 // CSRF protection (applied globally)
 app.use(csrfGuard);
 
@@ -94,6 +101,13 @@ app.use(commentsRoutes);
 app.use(indexerRoutes);
 app.use(bridgeRoutes);
 app.use(circuitRoutes);
+app.use(auditRoutes);
+app.use(remediationRoutes);
+
+// OpenAPI spec endpoint (public, no audit log pollution for spec itself)
+app.get("/openapi.json", (_req, res) => {
+  res.json(openApiSpec);
+});
 
 // Global error handler (must be last)
 app.use(errorHandler);

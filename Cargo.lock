@@ -1616,6 +1616,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "threshold-crypto"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "time"
 version = "0.3.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
