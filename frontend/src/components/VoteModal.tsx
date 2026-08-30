@@ -9,7 +9,7 @@ import {
   CardDescription,
 } from "./ui/Card";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { relayerFetch } from "../lib/api";
 import {
   generateVoteProof,
@@ -60,7 +60,7 @@ export default function VoteModal({
 
     try {
       // Initialize contract clients
-      const clients = initializeContractClients(publicKey);
+      const clients = getZkVoteClient(publicKey);
 
       // Step 1: Load registration data (or regenerate from wallet)
       setProgress("Loading voting credentials...");

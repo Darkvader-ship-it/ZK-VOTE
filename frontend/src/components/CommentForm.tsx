@@ -24,7 +24,7 @@ import {
   type VoteProofInput,
 } from "../lib/zkproof";
 import { getMerklePath } from "../lib/merkletree";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { relayerFetch } from "../lib/api";
 
 interface CommentFormProps {
@@ -81,7 +81,7 @@ export default function CommentForm({
       if (isAnonymous) {
         // Generate ZK proof for anonymous comment (same flow as voting)
         setProgress("Loading credentials...");
-        const clients = initializeContractClients(publicKey);
+        const clients = getZkVoteClient(publicKey);
 
         let secret: string, salt: string, commitment: string, leafIndex: number;
         const cached = getZKCredentials(daoId, publicKey);
@@ -219,7 +219,7 @@ export default function CommentForm({
         }
 
         setProgress("Preparing transaction...");
-        const clients = initializeContractClients(publicKey);
+        const clients = getZkVoteClient(publicKey);
 
         // Build the transaction using the comments contract
         const tx = await clients.comments.add_comment({

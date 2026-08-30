@@ -39,6 +39,8 @@ import {
   commentsRoutes,
   indexerRoutes,
   initIndexerRoutes,
+  bridgeRoutes,
+  circuitRoutes,
 } from "./routes/index.js";
 
 // ============================================
@@ -90,6 +92,8 @@ app.use(daoRoutes);
 app.use(ipfsRoutes);
 app.use(commentsRoutes);
 app.use(indexerRoutes);
+app.use(bridgeRoutes);
+app.use(circuitRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
@@ -131,6 +135,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         "/comment/:dao/:prop/:id",
         "/comment/edit",
         "/comment/delete",
+      ],
+      bridge: [
+        "/bridge/vote",
+        "/bridge/nullifier/:daoId/:proposalId/:nullifier",
+        "/bridge/relay",
       ],
       ipfs: config.ipfsEnabled
         ? [
