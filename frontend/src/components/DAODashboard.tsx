@@ -19,12 +19,14 @@ import {
   CardTitle,
   CardDescription,
 } from "./ui/Card";
+import { Key } from "lucide-react";
 import ProposalList from "./ProposalList";
 import ManageMembers from "./ManageMembers";
 import DAOInfoPanel from "./DAOInfoPanel";
 import DAOSettings from "./DAOSettings";
 import DAOHeader, { type DAOTab, type DAOInfo } from "./DAOHeader";
 import RegistrationFlow from "./RegistrationFlow";
+import { ThresholdPanel } from "./ThresholdPanel";
 
 interface DAODashboardProps {
   publicKey: string | null;
@@ -117,6 +119,10 @@ export default function DAODashboard({
       "create-proposal": {
         title: `${daoName} - New Proposal | ZKVote`,
         description: `Create a new proposal for ${daoName} DAO. Start a vote for the community.`,
+      },
+      threshold: {
+        title: `${daoName} - Threshold Encryption | ZKVote`,
+        description: `Manage threshold encryption key setup and ceremonies for ${daoName} DAO.`,
       },
     };
 
@@ -512,6 +518,30 @@ export default function DAODashboard({
           metadataCid={dao.metadataCid}
           onSettingsChanged={loadDAOInfo}
         />
+      )}
+
+      {activeTab === "threshold" && dao.isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Key className="w-5 h-5" />
+              Threshold Decryption
+            </CardTitle>
+            <CardDescription>
+              Configure distributed trust for tally decryption. Register tally
+              authorities and manage the DKG ceremony to enable threshold
+              decryption of election results.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ThresholdPanel
+              daoId={daoId}
+              proposalId={0}
+              isConnected={!!publicKey}
+              publicKey={publicKey}
+            />
+          </CardContent>
+        </Card>
       )}
     </div>
   );

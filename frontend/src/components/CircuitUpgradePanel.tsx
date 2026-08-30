@@ -115,19 +115,18 @@ export default function CircuitUpgradePanel({
   if (!data) return null;
 
   return (
-    <div className="border rounded-lg p-4 bg-white shadow-sm">
+    <div className="border border-border rounded-lg p-4 bg-card text-card-foreground shadow-sm">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-semibold text-gray-900">
-          Circuit Registry
-        </h3>
+        <h3 className="text-lg font-semibold">Circuit Registry</h3>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="p-1.5 rounded hover:bg-gray-100 disabled:opacity-50"
+          className="p-3 min-h-[48px] min-w-[48px] flex items-center justify-center rounded-md hover:bg-muted disabled:opacity-50"
           title="Refresh"
+          aria-label="Refresh circuit status"
         >
           <RefreshCw
-            className={`w-4 h-4 text-gray-500 ${refreshing ? "animate-spin" : ""}`}
+            className={`w-4 h-4 text-muted-foreground ${refreshing ? "animate-spin" : ""}`}
           />
         </button>
       </div>
