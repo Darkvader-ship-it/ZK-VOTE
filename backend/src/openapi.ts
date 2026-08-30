@@ -364,8 +364,18 @@ export const ENDPOINTS: EndpointDef[] = [
         .min(1)
         .max(500)
         .optional()
-        .openapi({ example: 100 }),
-      cursor: z.string().optional().openapi({ example: "100" }),
+        .openapi({ example: 100, description: "Page size (default 100)" }),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .openapi({ example: 0, description: "Rows to skip (default 0)" }),
+      cursor: z.string().optional().openapi({
+        example: "100",
+        description:
+          "Opaque cursor from a previous pagination.cursor; alias for offset",
+      }),
     },
     responseExample: {
       data: [],
@@ -374,6 +384,7 @@ export const ENDPOINTS: EndpointDef[] = [
       cached: true,
     },
     responseSchema: daosListResponseSchema,
+    errorStatuses: [400, 500],
   },
   {
     method: "get",
