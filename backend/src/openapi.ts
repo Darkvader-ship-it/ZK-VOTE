@@ -643,6 +643,22 @@ export const ENDPOINTS: EndpointDef[] = [
     responseExample: { logs: [], total: 0, limit: 50, offset: 0 },
     errorStatuses: [401, 500],
   },
+  {
+    method: "get",
+    path: "/admin/sbt-transfer-attempts",
+    tag: "Admin",
+    summary:
+      "Review flagged membership-SBT transfer/approval attempts for a DAO (admin only)",
+    auth: true,
+    rateLimit: "queryLimiter",
+    query: {
+      daoId: z.string().openapi({ example: "1" }),
+      limit: z.string().optional().openapi({ example: "50" }),
+      offset: z.string().optional().openapi({ example: "0" }),
+    },
+    responseExample: { daoId: 1, attempts: [], total: 0, limit: 50, offset: 0 },
+    errorStatuses: [400, 401, 500],
+  },
 ];
 
 // ============================================
