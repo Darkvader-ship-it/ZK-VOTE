@@ -1,0 +1,21 @@
+{
+  "nav.browse": "تصفح المنظمات",
+  "nav.publicVotes": "الأصوات العامة",
+  "nav.docs": "الوثائق",
+  "nav.connectWallet": "ربط المحفظة",
+  "nav.connecting": "جاري الاتصال...",
+  "nav.disconnect": "قطع الاتصال",
+  "vote.button": "صوت الآن",
+  "vote.cast": "تصويت مجهول الهوية",
+  "vote.yes": "تصويت بنعم",
+  "vote.no": "تصويت بلا",
+  "vote.submitting": "جاري تقديم الصوت...",
+  "vote.generating": "جاري إنشاء الإثبات...",
+  "vote.success": "تم تقديم الصوت بنجاح!",
+  "common.loading": "جاري التحميل...",
+  "common.error": "خطأ",
+  "common.close": "إغلاق",
+  "common.save": "حفظ",
+  "common.cancel": "إلغاء",
+  "language.select": "اختر اللغة"
+}

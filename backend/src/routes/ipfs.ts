@@ -12,13 +12,50 @@ import { log } from "../services/logger.js";
 import * as ipfsService from "../services/ipfs.js";
 import {
   authGuard,
+  auditLog,
   queryLimiter,
   ipfsUploadLimiter,
   ipfsReadLimiter,
+  validateParams,
+  noteDegraded,
+  sendPartial,
+  bodyLimit,
 } from "../middleware/index.js";
+import { cidParamsSchema } from "../validation/schemas.js";
 import type { AsyncHandler } from "../types/index.js";
+import {
+  markDegraded,
+  markHealthy,
+  setLkg,
+  getLkg,
+  ipfsLkgKey,
+  enqueueDegradedWrite,
+  drainIpfsPinQueue,
+} from "../services/service-health.js";
+import { detectMimeType } from "../utils/magic-bytes.js";
 
 const router = Router();
+
+// ============================================
+// IPFS SECURITY MIDDLEWARE
+// ============================================
+
+router.use(["/ipfs/:cid", "/ipfs/image/:cid"], (req, res, next) => {
+  // Origin isolation
+  if (
+    config.ipfsSubdomain &&
+    req.hostname !== config.ipfsSubdomain &&
+    !config.testMode
+  ) {
+    return res.status(403).json({
+      error: "IPFS content must be served from the dedicated IPFS subdomain",
+    });
+  }
+
+  // Security headers for all IPFS responses
+  res.set("X-Content-Type-Options", "nosniff");
+  next();
+});
 
 // ============================================
 // MULTER CONFIGURATION (FILE UPLOADS)
@@ -93,7 +130,7 @@ function setCachedContent(cid: string, data: unknown): void {
 // ============================================
 
 /**
- * GET /ipfs/health - IPFS health check
+ * GET /ipfs/health - IPFS health check with pin verification status
  */
 router.get("/ipfs/health", queryLimiter, (async (
   req: Request,
@@ -105,11 +142,52 @@ router.get("/ipfs/health", queryLimiter, (async (
 
   try {
     const healthy = await ipfsService.isHealthy();
+
+    // Get enhanced pin verification data
+    let pinStatus;
+    try {
+      pinStatus = ipfsService.getEnhancedHealth();
+    } catch {
+      pinStatus = null;
+    }
+
+    if (healthy) {
+      markHealthy("ipfs");
+      // Best-effort drain of queued pinJSON ops
+      void drainIpfsPinQueue(async (payload) =>
+        ipfsService.pinJSON(
+          payload.data as Record<string, unknown>,
+          payload.name ?? "zkvote-queued",
+        ),
+      );
+    } else {
+      markDegraded("ipfs", "Pinata health check failed");
+      noteDegraded("ipfs");
+    }
+
     res.json({
       enabled: true,
       status: healthy ? "healthy" : "degraded",
+      pinVerification: pinStatus
+        ? {
+            monitorRunning: pinStatus.running,
+            totalPins: pinStatus.stats.totalPins,
+            healthyPins: pinStatus.stats.healthyPins,
+            degradedPins: pinStatus.stats.degradedPins,
+            failedPins: pinStatus.stats.failedPins,
+            totalSizeBytes: pinStatus.stats.totalSizeBytes,
+            estimatedMonthlyCostUsd: pinStatus.stats.estimatedMonthlyCostUsd,
+            lastScanAt: pinStatus.lastScanAt,
+            lastScanDurationMs: pinStatus.lastScanDurationMs,
+            nextScanAt: pinStatus.nextScanAt,
+            activeAlerts: pinStatus.alerts.length,
+            alerts: pinStatus.alerts.slice(0, 10), // Cap at 10 for response size
+          }
+        : null,
     });
   } catch (err) {
+    markDegraded("ipfs", (err as Error).message);
+    noteDegraded("ipfs");
     res.json({
       enabled: true,
       status: "error",
@@ -127,6 +205,7 @@ router.post(
   // the token is shipped in the public frontend bundle — keeps random
   // internet attackers off the multer parser + Pinata bill.
   authGuard,
+  auditLog("ipfs_upload_image"),
   ipfsUploadLimiter,
   (req, res, next) => {
     upload.single("image")(req, res, (err: any) => {
@@ -194,146 +273,220 @@ router.post(
  * POST /ipfs/metadata - Upload JSON metadata to IPFS
  */
 // N1 hardening: was unauthenticated — see /ipfs/image rationale.
-router.post("/ipfs/metadata", authGuard, ipfsUploadLimiter, (async (
-  req: Request,
-  res: Response,
-) => {
-  const metadata = req.body;
+router.post(
+  "/ipfs/metadata",
+  bodyLimit("50kb"),
+  authGuard,
+  auditLog("ipfs_upload_metadata"),
+  ipfsUploadLimiter,
+  (async (req: Request, res: Response) => {
+    const metadata = req.body;
 
-  const metadataSize = JSON.stringify(metadata).length;
-  if (metadataSize > LIMITS.MAX_METADATA_SIZE) {
-    return res.status(400).json({
-      error: `Metadata too large: ${metadataSize} bytes (max ${LIMITS.MAX_METADATA_SIZE})`,
-    });
-  }
-
-  if (!metadata.version || typeof metadata.version !== "number") {
-    return res
-      .status(400)
-      .json({ error: "metadata.version is required and must be a number" });
-  }
-
-  if (metadata.videoUrl) {
-    const videoPattern =
-      /^https?:\/\/(www\.)?(youtube\.com|youtu\.be|vimeo\.com)\/.+$/i;
-    if (!videoPattern.test(metadata.videoUrl)) {
+    const metadataSize = JSON.stringify(metadata).length;
+    if (metadataSize > LIMITS.MAX_METADATA_SIZE) {
       return res.status(400).json({
-        error: "Invalid video URL. Only YouTube and Vimeo URLs are allowed.",
+        error: `Metadata too large: ${metadataSize} bytes (max ${LIMITS.MAX_METADATA_SIZE})`,
       });
     }
-  }
 
-  if (!config.ipfsEnabled) {
-    return res.status(503).json({ error: "IPFS service not configured" });
-  }
+    if (!metadata.version || typeof metadata.version !== "number") {
+      return res
+        .status(400)
+        .json({ error: "metadata.version is required and must be a number" });
+    }
 
-  try {
-    // Sanitize metadata to prevent XSS attacks
-    const sanitizedMetadata = ipfsService.sanitizeMetadata(metadata);
+    if (metadata.videoUrl) {
+      const videoPattern =
+        /^https?:\/\/(www\.)?(youtube\.com|youtu\.be|vimeo\.com)\/.+$/i;
+      if (!videoPattern.test(metadata.videoUrl)) {
+        return res.status(400).json({
+          error: "Invalid video URL. Only YouTube and Vimeo URLs are allowed.",
+        });
+      }
+    }
 
-    log("info", "ipfs_upload_metadata", { size: metadataSize });
+    if (!config.ipfsEnabled) {
+      return res.status(503).json({ error: "IPFS service not configured" });
+    }
 
-    const result = await ipfsService.pinJSON(
-      sanitizedMetadata,
-      "zkvote-proposal-metadata",
-    );
+    try {
+      // Sanitize metadata to prevent XSS attacks
+      const sanitizedMetadata = ipfsService.sanitizeMetadata(metadata);
 
-    log("info", "ipfs_upload_success", { cid: result.cid, type: "metadata" });
+      log("info", "ipfs_upload_metadata", { size: metadataSize });
 
-    res.json({
-      cid: result.cid,
-      size: result.size,
-    });
-  } catch (err) {
-    log("error", "ipfs_upload_failed", {
-      error: (err as Error).message,
-      type: "metadata",
-    });
-    res.status(500).json({ error: "Failed to upload metadata to IPFS" });
-  }
-}) as AsyncHandler);
+      const result = await ipfsService.pinJSON(
+        sanitizedMetadata,
+        "zkvote-proposal-metadata",
+      );
+
+      markHealthy("ipfs");
+      log("info", "ipfs_upload_success", { cid: result.cid, type: "metadata" });
+
+      res.json({
+        cid: result.cid,
+        size: result.size,
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      log("error", "ipfs_upload_failed", {
+        error: message,
+        type: "metadata",
+      });
+      markDegraded("ipfs", message);
+      noteDegraded("ipfs");
+      const queued = enqueueDegradedWrite("ipfs", "pinJSON", {
+        data: metadata,
+        name: "zkvote-proposal-metadata",
+      });
+      sendPartial(
+        res,
+        {
+          queued: true,
+          queueId: queued.id,
+          error: "IPFS unavailable — metadata queued for retry",
+        },
+        ["ipfs"],
+        202,
+      );
+    }
+  }) as AsyncHandler,
+);
 
 /**
  * GET /ipfs/:cid - Fetch content from IPFS (JSON)
  */
-router.get("/ipfs/:cid", ipfsReadLimiter, (async (
-  req: Request,
-  res: Response,
-) => {
-  if (!config.ipfsEnabled) {
-    return res.status(503).json({ error: "IPFS service not configured" });
-  }
-
-  const { cid } = req.params;
-
-  if (!ipfsService.isValidCid(cid)) {
-    return res.status(400).json({ error: "Invalid CID format" });
-  }
-
-  const cached = getCachedContent(cid);
-  if (cached) {
-    log("info", "ipfs_cache_hit", { cid });
-    return res.json(cached);
-  }
-
-  try {
-    log("info", "ipfs_fetch", { cid });
-
-    const result = await ipfsService.fetchContent(cid);
-
-    setCachedContent(cid, result.data);
-
-    log("info", "ipfs_fetch_success", { cid });
-
-    if (typeof result.data === "object") {
-      res.json(result.data);
-    } else {
-      res.json({ content: result.data, contentType: result.contentType });
+router.get(
+  "/ipfs/:cid",
+  ipfsReadLimiter,
+  validateParams(cidParamsSchema),
+  (async (req: Request, res: Response) => {
+    if (!config.ipfsEnabled) {
+      return res.status(503).json({ error: "IPFS service not configured" });
     }
-  } catch (err) {
-    log("error", "ipfs_fetch_failed", { cid, error: (err as Error).message });
-    res.status(500).json({ error: "Failed to fetch content from IPFS" });
-  }
-}) as AsyncHandler);
+
+    const { cid } = (req as any).validatedParams;
+
+    const cached = getCachedContent(cid);
+    if (cached) {
+      log("info", "ipfs_cache_hit", { cid });
+      return res.json(cached);
+    }
+
+    const lkg = getLkg(ipfsLkgKey(cid));
+    try {
+      log("info", "ipfs_fetch", { cid });
+
+      const result = await ipfsService.fetchContent(cid);
+
+      setCachedContent(cid, result.data);
+      setLkg(ipfsLkgKey(cid), result.data);
+      markHealthy("ipfs");
+
+      log("info", "ipfs_fetch_success", { cid });
+
+      res.set("Content-Security-Policy", "default-src 'none'");
+      res.set("Content-Disposition", "attachment");
+
+      if (typeof result.data === "object") {
+        res.json(result.data);
+      } else {
+        res.json({ content: result.data, contentType: result.contentType });
+      }
+    } catch (err) {
+      const message = (err as Error).message;
+      log("error", "ipfs_fetch_failed", { cid, error: message });
+      markDegraded("ipfs", message);
+      noteDegraded("ipfs");
+
+      if (lkg != null) {
+        return sendPartial(
+          res,
+          {
+            ...(typeof lkg === "object" && lkg !== null
+              ? (lkg as Record<string, unknown>)
+              : { content: lkg }),
+            stale: true,
+            source: "last_known_good",
+          },
+          ["ipfs"],
+        );
+      }
+
+      // Placeholder so UI can keep rendering
+      return sendPartial(
+        res,
+        {
+          placeholder: true,
+          cid,
+          error: "IPFS unavailable",
+          message: "Content temporarily unavailable — showing placeholder",
+        },
+        ["ipfs"],
+      );
+    }
+  }) as AsyncHandler,
+);
 
 /**
  * GET /ipfs/image/:cid - Fetch raw image from IPFS
  */
-router.get("/ipfs/image/:cid", ipfsReadLimiter, (async (
-  req: Request,
-  res: Response,
-) => {
-  if (!config.ipfsEnabled) {
-    return res.status(503).json({ error: "IPFS service not configured" });
-  }
+router.get(
+  "/ipfs/image/:cid",
+  ipfsReadLimiter,
+  validateParams(cidParamsSchema),
+  (async (req: Request, res: Response) => {
+    if (!config.ipfsEnabled) {
+      return res.status(503).json({ error: "IPFS service not configured" });
+    }
 
-  const { cid } = req.params;
+    const { cid } = (req as any).validatedParams;
 
-  if (!ipfsService.isValidCid(cid)) {
-    return res.status(400).json({ error: "Invalid CID format" });
-  }
+    try {
+      log("info", "ipfs_fetch_image", { cid });
 
-  try {
-    log("info", "ipfs_fetch_image", { cid });
+      const result = await ipfsService.fetchRawContent(cid);
 
-    const result = await ipfsService.fetchRawContent(cid);
+      const detectedMime = detectMimeType(result.buffer);
+      const finalMimeType = detectedMime || result.contentType;
 
-    log("info", "ipfs_fetch_image_success", {
-      cid,
-      contentType: result.contentType,
-    });
+      if (
+        finalMimeType.includes("html") ||
+        finalMimeType.includes("svg") ||
+        finalMimeType.includes("javascript") ||
+        finalMimeType.includes("xml")
+      ) {
+        return res.status(403).json({ error: "Forbidden content type" });
+      }
 
-    res.set("Content-Type", result.contentType);
-    res.set("Cache-Control", "public, max-age=31536000, immutable");
-    res.set("Cross-Origin-Resource-Policy", "cross-origin");
-    res.send(result.buffer);
-  } catch (err) {
-    log("error", "ipfs_fetch_image_failed", {
-      cid,
-      error: (err as Error).message,
-    });
-    res.status(500).json({ error: "Failed to fetch image from IPFS" });
-  }
-}) as AsyncHandler);
+      log("info", "ipfs_fetch_image_success", {
+        cid,
+        contentType: finalMimeType,
+      });
+
+      res.set("Content-Type", finalMimeType);
+      res.set("Cache-Control", "public, max-age=31536000, immutable");
+      res.set("Cross-Origin-Resource-Policy", "cross-origin");
+
+      if (finalMimeType.startsWith("image/")) {
+        res.set(
+          "Content-Security-Policy",
+          "default-src 'none'; img-src 'self'",
+        );
+      } else {
+        res.set("Content-Security-Policy", "default-src 'none'");
+        res.set("Content-Disposition", "attachment");
+      }
+
+      res.send(result.buffer);
+    } catch (err) {
+      log("error", "ipfs_fetch_image_failed", {
+        cid,
+        error: (err as Error).message,
+      });
+      res.status(500).json({ error: "Failed to fetch image from IPFS" });
+    }
+  }) as AsyncHandler,
+);
 
 export default router;

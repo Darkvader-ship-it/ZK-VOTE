@@ -1,0 +1,21 @@
+{
+  "nav.browse": "Parcourir les DAO",
+  "nav.publicVotes": "Votes Publics",
+  "nav.docs": "Documentation",
+  "nav.connectWallet": "Connecter le Portefeuille",
+  "nav.connecting": "Connexion...",
+  "nav.disconnect": "Déconnecter",
+  "vote.button": "Voter Maintenant",
+  "vote.cast": "Voter Anonymement",
+  "vote.yes": "Voter Oui",
+  "vote.no": "Voter Non",
+  "vote.submitting": "Soumission du vote...",
+  "vote.generating": "Génération de la preuve...",
+  "vote.success": "Vote Soumis !",
+  "common.loading": "Chargement...",
+  "common.error": "Erreur",
+  "common.close": "Fermer",
+  "common.save": "Enregistrer",
+  "common.cancel": "Annuler",
+  "language.select": "Choisir la langue"
+}

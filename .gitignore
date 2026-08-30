@@ -16,9 +16,6 @@ yarn-error.log*
 .env.production
 .env.staging
 
-# Secrets
-secrets/
-
 # Circom / ZK
 circuits/*.r1cs
 circuits/*.sym
@@ -84,3 +81,4 @@ frontend/coverage/
 
 # Proxy list
 Webshare 250 proxies.txt
+target

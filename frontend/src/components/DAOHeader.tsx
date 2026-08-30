@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   type DAOMetadata,
   getImageUrl,
   getTwitterUrl,
+  isValidHexColor,
 } from "../lib/daoMetadata";
 import { Badge, LoadingSpinner } from "./ui";
 import { Button } from "./ui/Button";
@@ -48,7 +49,8 @@ export type DAOTab =
   | "proposals"
   | "members"
   | "create-proposal"
-  | "settings";
+  | "settings"
+  | "threshold";
 
 export interface DAOInfo {
   id: number;
@@ -326,6 +328,17 @@ function NavButtons({
             Add Proposal
           </Button>
         )}
+      {dao.isAdmin && (
+        <Button
+          variant={activeTab === "threshold" ? "secondary" : "outline"}
+          size="sm"
+          onClick={() => navigateToTab("threshold")}
+          className="gap-2"
+        >
+          <Lock className="w-4 h-4" />
+          Tally Auth
+        </Button>
+      )}
     </>
   );
 }
@@ -367,8 +380,24 @@ export default function DAOHeader({
   const [showDescription, setShowDescription] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // Issue #389: per-DAO accent color, exposed as a CSS custom property so
+  // any descendant can opt into branded styling. Re-validated here (not just
+  // trusted from upload-time validation in daoMetadata.ts) since this value
+  // is injected into a `style` attribute — only a strict 6-digit hex string
+  // is ever allowed through.
+  const themeColor =
+    metadata?.themeColor && isValidHexColor(metadata.themeColor)
+      ? metadata.themeColor
+      : undefined;
+
   return (
-    <Card>
+    <Card
+      style={
+        themeColor
+          ? ({ "--dao-accent": themeColor } as CSSProperties)
+          : undefined
+      }
+    >
       <CardContent className="pt-6">
         {/* Cover Image with Profile Photo and Social Links overlay */}
         {metadata?.coverImageCid && (
@@ -418,7 +447,10 @@ export default function DAOHeader({
           {/* Left: DAO name, badges, and ID */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-3 flex-wrap mb-2">
-              <h2 className="text-2xl font-bold tracking-tight text-foreground">
+              <h2
+                className={`text-2xl font-bold tracking-tight ${themeColor ? "" : "text-foreground"}`}
+                style={themeColor ? { color: "var(--dao-accent)" } : undefined}
+              >
                 {dao.name}
               </h2>
               {dao.isAdmin ? (
@@ -499,7 +531,7 @@ export default function DAOHeader({
             variant="outline"
             size="sm"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="w-full justify-between"
+            className="w-full justify-between min-h-[48px] px-4 text-base sm:text-sm font-medium"
           >
             <span className="flex items-center gap-2">
               {activeTab === "proposals" && (
@@ -527,40 +559,45 @@ export default function DAOHeader({
                   <PlusCircle className="w-4 h-4" /> Add Proposal
                 </>
               )}
+              {activeTab === "threshold" && (
+                <>
+                  <Lock className="w-4 h-4" /> Tally Auth
+                </>
+              )}
             </span>
             <ChevronDown
               className={`w-4 h-4 transition-transform ${mobileMenuOpen ? "rotate-180" : ""}`}
             />
           </Button>
           {mobileMenuOpen && (
-            <div className="mt-2 w-full rounded-lg border bg-background shadow-lg">
+            <div className="mt-2 w-full rounded-lg border bg-background shadow-lg overflow-hidden animate-slide-in-from-top">
               <div className="p-2 space-y-1">
                 <button
                   onClick={() => {
                     navigateToTab("proposals");
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${activeTab === "proposals" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
+                  className={`w-full flex items-center gap-3 px-4 min-h-[48px] text-base font-medium rounded-md transition-colors ${activeTab === "proposals" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
                 >
-                  <Home className="w-4 h-4" /> Overview
+                  <Home className="w-5 h-5" /> Overview
                 </button>
                 <button
                   onClick={() => {
                     navigateToTab("info");
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${activeTab === "info" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
+                  className={`w-full flex items-center gap-3 px-4 min-h-[48px] text-base font-medium rounded-md transition-colors ${activeTab === "info" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
                 >
-                  <FileText className="w-4 h-4" /> Info
+                  <FileText className="w-5 h-5" /> Info
                 </button>
                 <button
                   onClick={() => {
                     navigateToTab("members");
                     setMobileMenuOpen(false);
                   }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${activeTab === "members" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
+                  className={`w-full flex items-center gap-3 px-4 min-h-[48px] text-base font-medium rounded-md transition-colors ${activeTab === "members" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
                 >
-                  <Users className="w-4 h-4" /> Members
+                  <Users className="w-5 h-5" /> Members
                 </button>
                 {dao.isAdmin && publicKey && hasKit && (
                   <button
@@ -568,9 +605,9 @@ export default function DAOHeader({
                       navigateToTab("settings");
                       setMobileMenuOpen(false);
                     }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${activeTab === "settings" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
+                    className={`w-full flex items-center gap-3 px-4 min-h-[48px] text-base font-medium rounded-md transition-colors ${activeTab === "settings" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
                   >
-                    <Settings className="w-4 h-4" /> Settings
+                    <Settings className="w-5 h-5" /> Settings
                   </button>
                 )}
                 {(dao.isAdmin ||
@@ -581,11 +618,22 @@ export default function DAOHeader({
                         navigateToTab("create-proposal");
                         setMobileMenuOpen(false);
                       }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${activeTab === "create-proposal" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
+                      className={`w-full flex items-center gap-3 px-4 min-h-[48px] text-base font-medium rounded-md transition-colors ${activeTab === "create-proposal" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
                     >
-                      <PlusCircle className="w-4 h-4" /> Add Proposal
+                      <PlusCircle className="w-5 h-5" /> Add Proposal
                     </button>
                   )}
+                {dao.isAdmin && (
+                  <button
+                    onClick={() => {
+                      navigateToTab("threshold");
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${activeTab === "threshold" ? "bg-secondary text-secondary-foreground" : "hover:bg-muted"}`}
+                  >
+                    <Lock className="w-4 h-4" /> Tally Auth
+                  </button>
+                )}
                 <JoinButton
                   hasMembership={dao.hasMembership}
                   membershipOpen={dao.membershipOpen}

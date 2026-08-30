@@ -2,7 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
-    BytesN, Env, String, Symbol, Vec,
+    Bytes, BytesN, Env, IntoVal, String, Symbol,
 };
 
 const DAO_COUNT: Symbol = symbol_short!("dao_cnt");
@@ -22,11 +22,19 @@ pub enum RegistryError {
     DaoNotFound = 2,
     NotAdmin = 3,
     MetadataCidTooLong = 4,
+    UpgradeNotFound = 5,
+    UpgradeTimelockNotReady = 6,
+    UpgradeExpired = 7,
+    UpgradeAlreadyExecuted = 8,
+    UpgradeInvalidWindow = 9,
+    UpgradePayloadTooLarge = 10,
 }
 
 // Size limit to prevent DoS attacks
 const MAX_DAO_NAME_LEN: u32 = 24; // Max DAO name length (24 chars)
 const MAX_METADATA_CID_LEN: u32 = 64; // Max IPFS CID length
+const MIN_UPGRADE_DELAY: u64 = 24 * 60 * 60;
+const MAX_UPGRADE_PAYLOAD_LEN: u32 = 4096;
 
 #[contracttype]
 #[derive(Clone)]
@@ -42,15 +50,36 @@ pub struct DaoInfo {
     pub metadata_cid: Option<String>,
 }
 
-/// Groth16 Verification Key for BN254
+pub use zkvote_groth16::VerificationKey;
+
 #[contracttype]
 #[derive(Clone)]
-pub struct VerificationKey {
-    pub alpha: BytesN<64>,   // G1 point
-    pub beta: BytesN<128>,   // G2 point
-    pub gamma: BytesN<128>,  // G2 point
-    pub delta: BytesN<128>,  // G2 point
-    pub ic: Vec<BytesN<64>>, // IC points (G1)
+pub struct CircuitUpgradeProposal {
+    pub dao_id: u64,
+    pub from_circuit_id: String,
+    pub to_circuit_id: String,
+    pub circuit_type: String, // "Vote" or "Comment"
+    pub proposed_at: u64,
+    pub deadline: u64,
+    pub approved: bool,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct ContractUpgradeProposal {
+    pub dao_id: u64,
+    pub target_contract: Address,
+    pub wasm_hash: BytesN<32>,
+    pub rollback_wasm_hash: BytesN<32>,
+    pub from_version: u32,
+    pub to_version: u32,
+    pub storage_version: u32,
+    pub migration_payload: Bytes,
+    pub proposed_at: u64,
+    pub eta: u64,
+    pub expires_at: u64,
+    pub executed: bool,
+    pub rolled_back: bool,
 }
 
 // Typed Events
@@ -61,6 +90,60 @@ pub struct DaoCreateEvent {
     pub dao_id: u64,
     pub admin: Address,
     pub name: String,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CircuitUpgradeProposedEvent {
+    #[topic]
+    pub dao_id: u64,
+    pub from_circuit_id: String,
+    pub to_circuit_id: String,
+    pub deadline: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CircuitUpgradeApprovedEvent {
+    #[topic]
+    pub dao_id: u64,
+    pub proposal_id: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractUpgradeProposedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub target_contract: Address,
+    pub from_version: u32,
+    pub to_version: u32,
+    pub eta: u64,
+    pub expires_at: u64,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractUpgradeExecutedEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub target_contract: Address,
+    pub to_version: u32,
+}
+
+#[soroban_sdk::contractevent]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractRollbackEvent {
+    #[topic]
+    pub dao_id: u64,
+    #[topic]
+    pub proposal_id: u64,
+    pub target_contract: Address,
+    pub to_version: u32,
 }
 
 #[soroban_sdk::contractevent]
@@ -338,6 +421,7 @@ impl DaoRegistry {
     /// 2. membership_sbt.mint (mints SBT to creator)
     /// 3. membership_tree.init_tree (initializes Merkle tree)
     /// 4. voting.set_vk (sets verification key)
+    /// `field` is `"BN254"` or `"BLS12_381"`
     pub fn create_and_init_dao_no_reg(
         env: Env,
         name: String,
@@ -349,6 +433,7 @@ impl DaoRegistry {
         tree_contract: Address,
         voting_contract: Address,
         tree_depth: u32,
+        field: Symbol,
         vk: VerificationKey,
     ) -> u64 {
         Self::bump_instance(&env);
@@ -400,8 +485,12 @@ impl DaoRegistry {
         );
 
         // Step 3: Initialize Merkle tree
-        let init_tree_args =
-            soroban_sdk::vec![&env, dao_id.into_val(&env), tree_depth.into_val(&env)];
+        let init_tree_args = soroban_sdk::vec![
+            &env,
+            dao_id.into_val(&env),
+            tree_depth.into_val(&env),
+            field.into_val(&env),
+        ];
         env.invoke_contract::<()>(
             &tree_contract,
             &Symbol::new(&env, "init_tree_from_registry"),
@@ -426,6 +515,7 @@ impl DaoRegistry {
     /// 3. membership_tree.init_tree (initializes Merkle tree)
     /// 4. membership_tree.register_from_registry (registers creator's commitment)
     /// 5. voting.set_vk (sets verification key)
+    /// `field` is `"BN254"` or `"BLS12_381"`
     /// Note: metadata_cid must be set separately via set_metadata_cid (10-param limit)
     pub fn create_and_init_dao(
         env: Env,
@@ -438,6 +528,7 @@ impl DaoRegistry {
         voting_contract: Address,
         tree_depth: u32,
         creator_commitment: soroban_sdk::U256,
+        field: Symbol,
         vk: VerificationKey,
     ) -> u64 {
         Self::bump_instance(&env);
@@ -482,8 +573,12 @@ impl DaoRegistry {
         );
 
         // Step 3: Initialize Merkle tree (using init_tree_from_registry to avoid re-entrancy)
-        let init_tree_args =
-            soroban_sdk::vec![&env, dao_id.into_val(&env), tree_depth.into_val(&env)];
+        let init_tree_args = soroban_sdk::vec![
+            &env,
+            dao_id.into_val(&env),
+            tree_depth.into_val(&env),
+            field.into_val(&env),
+        ];
         env.invoke_contract::<()>(
             &tree_contract,
             &Symbol::new(&env, "init_tree_from_registry"),
@@ -544,6 +639,322 @@ impl DaoRegistry {
 
     fn dao_key(dao_id: u64) -> (Symbol, u64) {
         (symbol_short!("dao"), dao_id)
+    }
+
+    fn circuit_upgrade_key(dao_id: u64, proposal_id: u64) -> (Symbol, u64, u64) {
+        (symbol_short!("c_upgrade"), dao_id, proposal_id)
+    }
+
+    fn contract_upgrade_key(dao_id: u64, proposal_id: u64) -> (Symbol, u64, u64) {
+        (symbol_short!("upgrade"), dao_id, proposal_id)
+    }
+
+    fn next_upgrade_proposal_id(env: &Env) -> u64 {
+        let key = symbol_short!("c_upg_cnt");
+        let count: u64 = env.storage().instance().get(&key).unwrap_or(0);
+        let new_id = count + 1;
+        env.storage().instance().set(&key, &new_id);
+        new_id
+    }
+
+    fn require_dao_admin(env: &Env, dao_id: u64, admin: &Address) {
+        let key = Self::dao_key(dao_id);
+        let dao: DaoInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, RegistryError::DaoNotFound));
+
+        if admin != &dao.admin {
+            panic_with_error!(env, RegistryError::NotAdmin);
+        }
+    }
+
+    /// Propose a protocol contract upgrade behind DAO-admin approval and a timelock.
+    ///
+    /// The registry is the governance gate. Target contracts must expose
+    /// `apply_upgrade_from_registry` and require this registry contract's auth
+    /// before migrating storage or replacing Wasm.
+    pub fn propose_contract_upgrade(
+        env: Env,
+        dao_id: u64,
+        target_contract: Address,
+        wasm_hash: BytesN<32>,
+        rollback_wasm_hash: BytesN<32>,
+        from_version: u32,
+        to_version: u32,
+        storage_version: u32,
+        migration_payload: Bytes,
+        eta: u64,
+        expires_at: u64,
+        proposer: Address,
+    ) -> u64 {
+        Self::bump_instance(&env);
+        proposer.require_auth();
+        Self::require_dao_admin(&env, dao_id, &proposer);
+
+        let now = env.ledger().timestamp();
+        if eta < now.saturating_add(MIN_UPGRADE_DELAY) || expires_at <= eta {
+            panic_with_error!(&env, RegistryError::UpgradeInvalidWindow);
+        }
+        if migration_payload.len() > MAX_UPGRADE_PAYLOAD_LEN {
+            panic_with_error!(&env, RegistryError::UpgradePayloadTooLarge);
+        }
+
+        let proposal_id = Self::next_upgrade_proposal_id(&env);
+        let proposal = ContractUpgradeProposal {
+            dao_id,
+            target_contract: target_contract.clone(),
+            wasm_hash,
+            rollback_wasm_hash,
+            from_version,
+            to_version,
+            storage_version,
+            migration_payload,
+            proposed_at: now,
+            eta,
+            expires_at,
+            executed: false,
+            rolled_back: false,
+        };
+
+        let key = Self::contract_upgrade_key(dao_id, proposal_id);
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_persistent(&env, &key);
+
+        ContractUpgradeProposedEvent {
+            dao_id,
+            proposal_id,
+            target_contract,
+            from_version,
+            to_version,
+            eta,
+            expires_at,
+        }
+        .publish(&env);
+
+        proposal_id
+    }
+
+    /// Execute a matured contract upgrade proposal.
+    ///
+    /// The target contract performs its own version/migration checks before
+    /// replacing Wasm, so the registry remains a governance router.
+    pub fn execute_contract_upgrade(env: Env, dao_id: u64, proposal_id: u64, executor: Address) {
+        Self::bump_instance(&env);
+        executor.require_auth();
+        Self::require_dao_admin(&env, dao_id, &executor);
+
+        let key = Self::contract_upgrade_key(dao_id, proposal_id);
+        let mut proposal: ContractUpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::UpgradeNotFound));
+
+        let now = env.ledger().timestamp();
+        if proposal.executed {
+            panic_with_error!(&env, RegistryError::UpgradeAlreadyExecuted);
+        }
+        if now < proposal.eta {
+            panic_with_error!(&env, RegistryError::UpgradeTimelockNotReady);
+        }
+        if now > proposal.expires_at {
+            panic_with_error!(&env, RegistryError::UpgradeExpired);
+        }
+
+        let args = soroban_sdk::vec![
+            &env,
+            proposal.wasm_hash.clone().into_val(&env),
+            proposal.from_version.into_val(&env),
+            proposal.to_version.into_val(&env),
+            proposal.storage_version.into_val(&env),
+            proposal.migration_payload.clone().into_val(&env),
+        ];
+        env.invoke_contract::<()>(
+            &proposal.target_contract,
+            &Symbol::new(&env, "apply_upgrade_from_registry"),
+            args,
+        );
+
+        proposal.executed = true;
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_persistent(&env, &key);
+
+        ContractUpgradeExecutedEvent {
+            dao_id,
+            proposal_id,
+            target_contract: proposal.target_contract,
+            to_version: proposal.to_version,
+        }
+        .publish(&env);
+    }
+
+    /// Roll back an executed upgrade to the pre-approved rollback Wasm hash.
+    pub fn rollback_contract_upgrade(env: Env, dao_id: u64, proposal_id: u64, executor: Address) {
+        Self::bump_instance(&env);
+        executor.require_auth();
+        Self::require_dao_admin(&env, dao_id, &executor);
+
+        let key = Self::contract_upgrade_key(dao_id, proposal_id);
+        let mut proposal: ContractUpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::UpgradeNotFound));
+
+        if !proposal.executed || proposal.rolled_back {
+            panic_with_error!(&env, RegistryError::UpgradeInvalidWindow);
+        }
+
+        let args = soroban_sdk::vec![
+            &env,
+            proposal.rollback_wasm_hash.clone().into_val(&env),
+            proposal.to_version.into_val(&env),
+            proposal.from_version.into_val(&env),
+        ];
+        env.invoke_contract::<()>(
+            &proposal.target_contract,
+            &Symbol::new(&env, "rollback_upgrade_from_registry"),
+            args,
+        );
+
+        proposal.rolled_back = true;
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_persistent(&env, &key);
+
+        ContractRollbackEvent {
+            dao_id,
+            proposal_id,
+            target_contract: proposal.target_contract,
+            to_version: proposal.from_version,
+        }
+        .publish(&env);
+    }
+
+    pub fn get_contract_upgrade_proposal(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> ContractUpgradeProposal {
+        Self::bump_instance(&env);
+        let key = Self::contract_upgrade_key(dao_id, proposal_id);
+        let proposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::UpgradeNotFound));
+        Self::bump_persistent(&env, &key);
+        proposal
+    }
+
+    pub fn propose_circuit_upgrade(
+        env: Env,
+        dao_id: u64,
+        from_circuit_id: String,
+        to_circuit_id: String,
+        circuit_type: String,
+        deadline: u64,
+        proposer: Address,
+    ) -> u64 {
+        Self::bump_instance(&env);
+        proposer.require_auth();
+
+        let key = Self::dao_key(dao_id);
+        let dao: DaoInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+
+        if proposer != dao.admin {
+            panic_with_error!(&env, RegistryError::NotAdmin);
+        }
+
+        let now = env.ledger().timestamp();
+        if deadline <= now {
+            panic_with_error!(&env, RegistryError::DaoNotFound);
+        }
+
+        let proposal_id = Self::next_upgrade_proposal_id(&env);
+
+        let proposal = CircuitUpgradeProposal {
+            dao_id,
+            from_circuit_id: from_circuit_id.clone(),
+            to_circuit_id: to_circuit_id.clone(),
+            circuit_type: circuit_type.clone(),
+            proposed_at: now,
+            deadline,
+            approved: false,
+        };
+
+        let proposal_key = Self::circuit_upgrade_key(dao_id, proposal_id);
+        env.storage().persistent().set(&proposal_key, &proposal);
+        Self::bump_persistent(&env, &proposal_key);
+
+        CircuitUpgradeProposedEvent {
+            dao_id,
+            from_circuit_id,
+            to_circuit_id,
+            deadline,
+        }
+        .publish(&env);
+
+        proposal_id
+    }
+
+    pub fn approve_circuit_upgrade(env: Env, dao_id: u64, proposal_id: u64, approver: Address) {
+        Self::bump_instance(&env);
+        approver.require_auth();
+
+        let proposal_key = Self::circuit_upgrade_key(dao_id, proposal_id);
+        let mut proposal: CircuitUpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&proposal_key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+
+        let dao_key = Self::dao_key(dao_id);
+        let dao: DaoInfo = env
+            .storage()
+            .persistent()
+            .get(&dao_key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+
+        if approver != dao.admin {
+            panic_with_error!(&env, RegistryError::NotAdmin);
+        }
+
+        let now = env.ledger().timestamp();
+        if now > proposal.deadline {
+            panic_with_error!(&env, RegistryError::DaoNotFound);
+        }
+
+        proposal.approved = true;
+        env.storage().persistent().set(&proposal_key, &proposal);
+        Self::bump_persistent(&env, &proposal_key);
+
+        CircuitUpgradeApprovedEvent {
+            dao_id,
+            proposal_id,
+        }
+        .publish(&env);
+    }
+
+    pub fn get_circuit_upgrade_proposal(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+    ) -> CircuitUpgradeProposal {
+        Self::bump_instance(&env);
+        let proposal_key = Self::circuit_upgrade_key(dao_id, proposal_id);
+        let proposal: CircuitUpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&proposal_key)
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::DaoNotFound));
+        Self::bump_persistent(&env, &proposal_key);
+        proposal
     }
 }
 

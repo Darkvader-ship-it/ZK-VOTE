@@ -14,6 +14,7 @@ echo ""
 KEY_NAME="${KEY_NAME:-mykey}"
 RPC_URL="${RPC_URL:-https://rpc-futurenet.stellar.org}"
 NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Test SDF Future Network ; October 2022}"
+GUARDIAN_ADDRESS="${GUARDIAN_ADDRESS:-$(stellar keys address "$KEY_NAME")}"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -53,8 +54,14 @@ DEPLOY_VERSION=$(date +%s)
 success "Deployment version: $DEPLOY_VERSION"
 
 # Step 1: Build contracts
+# NOTE: build each contract crate separately (not `cargo build` for all at once).
+# Building everything together triggers Cargo feature unification that turns on
+# num-traits' float impls, which fail to compile on newer rustc (>=1.80) for
+# wasm32v1-none. Per-crate builds keep num-traits feature-minimal and succeed.
 step "Building all contracts..."
-cargo build --target wasm32v1-none --release
+for c in dao-registry membership-sbt membership-tree voting comments; do
+  cargo build -p "$c" --target wasm32v1-none --release
+done
 success "Contracts built successfully"
 
 # Step 2: Deploy contracts
@@ -153,7 +160,7 @@ success "Membership Tree deployed: $TREE_ID"
 sleep 5  # Wait for sequence number to sync
 
 # Deploy Voting
-VOTING_ID=$(deploy_contract "Voting" "target/wasm32v1-none/release/voting.wasm" --tree_contract "$TREE_ID" --registry "$REGISTRY_ID")
+VOTING_ID=$(deploy_contract "Voting" "target/wasm32v1-none/release/voting.wasm" --tree_contract "$TREE_ID" --registry "$REGISTRY_ID" --guardian "$GUARDIAN_ADDRESS")
 if [ -z "$VOTING_ID" ]; then
   echo "ERROR: Failed to deploy Voting contract after multiple attempts"
   exit 1

@@ -6,7 +6,7 @@
 // - Anyone can create proposals
 // - All registered members can vote
 
-use soroban_sdk::{testutils::Address as _, Address, Env, String, U256};
+use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol, U256};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -22,7 +22,11 @@ fn setup_contracts(env: &Env) -> (Address, Address, Address, Address, Address) {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
 
     let admin = Address::generate(env);
 
@@ -76,7 +80,8 @@ fn create_test_vk(env: &Env) -> voting::VerificationKey {
             g1_gen.clone(),
             g1_gen.clone(),
             g1_gen.clone(),
-            g1_gen, // 6 elements for 5 public signals + 1
+            g1_gen.clone(),
+            g1_gen, // 7 elements for 6 public signals + 1
         ],
     }
 }
@@ -128,7 +133,7 @@ fn test_self_join_public_dao() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Random user self-joins
     let user = Address::generate(&env);
@@ -184,7 +189,7 @@ fn test_self_register_public_dao() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // User self-joins
     let user = Address::generate(&env);
@@ -221,7 +226,7 @@ fn test_self_register_private_dao_fails() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Admin mints SBT to user
     let user = Address::generate(&env);
@@ -255,7 +260,7 @@ fn test_member_creates_proposal_in_public_dao() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK
     let vk = create_test_vk(&env);
@@ -306,7 +311,7 @@ fn test_non_member_cannot_create_proposal_in_private_dao() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK
     let vk = create_test_vk(&env);
@@ -352,7 +357,7 @@ fn test_member_cannot_propose_when_admin_only_mode() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK
     let vk = create_test_vk(&env);
@@ -403,7 +408,7 @@ fn test_admin_can_propose_in_admin_only_mode() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Admin needs SBT to create proposals (still required)
     sbt_client.mint(&dao_id, &admin, &admin, &None);
@@ -450,7 +455,7 @@ fn test_full_public_dao_flow() {
     );
 
     // Initialize tree
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Set VK
     let vk = create_test_vk(&env);
