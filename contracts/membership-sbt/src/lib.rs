@@ -463,18 +463,62 @@ impl MembershipSbt {
 
     // ── Anti-Flash Loan: Transfer Cooldown ──────────────────────────────────
 
+    /// Internal: require that `caller` is the admin of `dao_id`, via the registry.
+    fn assert_dao_admin(env: &Env, dao_id: u64, caller: &Address) {
+        let registry: Address = Self::registry_addr(env);
+        let dao_admin: Address = env.invoke_contract(
+            &registry,
+            &symbol_short!("get_admin"),
+            soroban_sdk::vec![env, dao_id.into_val(env)],
+        );
+        if &dao_admin != caller {
+            panic_with_error!(env, SbtError::NotDaoAdmin);
+        }
+    }
+
     /// Set a member's transfer cooldown during an active election.
     /// Prevents the member from leaving or having their SBT revoked while voting.
-    pub fn set_election_cooldown(env: Env, dao_id: u64, member: Address, cooldown_end: u64) {
+    ///
+    /// SECURITY (admin or self): this gates `leave`, so leaving it unauthenticated
+    /// let anyone permanently lock a member out of the DAO with `cooldown_end = u64::MAX`.
+    pub fn set_election_cooldown(
+        env: Env,
+        dao_id: u64,
+        member: Address,
+        cooldown_end: u64,
+        caller: Address,
+    ) {
         Self::bump_instance(&env);
+
+        // A member may set their own cooldown (e.g. to prove they are not
+        // flash-loaning out of the election); the DAO admin may set anyone's.
+        if caller != member {
+            caller.require_auth();
+            Self::assert_dao_admin(&env, dao_id, &caller);
+        } else {
+            member.require_auth();
+        }
+
         let key = DataKey::TransferCooldown(dao_id, member);
         env.storage().persistent().set(&key, &cooldown_end);
         Self::bump_persistent(&env, &key);
     }
 
     /// Clear a member's transfer cooldown after an election ends.
-    pub fn clear_election_cooldown(env: Env, dao_id: u64, member: Address) {
+    ///
+    /// SECURITY (admin or self): the cooldown is the anti-flash-loan barrier
+    /// blocking vote -> leave -> re-join within one election. Permissionless
+    /// clearing let a member drop it and rejoin in the same election.
+    pub fn clear_election_cooldown(env: Env, dao_id: u64, member: Address, caller: Address) {
         Self::bump_instance(&env);
+
+        if caller != member {
+            caller.require_auth();
+            Self::assert_dao_admin(&env, dao_id, &caller);
+        } else {
+            member.require_auth();
+        }
+
         let key = DataKey::TransferCooldown(dao_id, member);
         env.storage().persistent().remove(&key);
     }
@@ -492,8 +536,26 @@ impl MembershipSbt {
     }
 
     /// Mark a member as participating in an active election.
-    pub fn set_in_active_election(env: Env, dao_id: u64, member: Address, active: bool) {
+    ///
+    /// SECURITY (admin or self): this is the state that pins a member's weight
+    /// for the duration of an election. Permissionless, anyone could mark an
+    /// arbitrary address as a flash-loan voter.
+    pub fn set_in_active_election(
+        env: Env,
+        dao_id: u64,
+        member: Address,
+        active: bool,
+        caller: Address,
+    ) {
         Self::bump_instance(&env);
+
+        if caller != member {
+            caller.require_auth();
+            Self::assert_dao_admin(&env, dao_id, &caller);
+        } else {
+            member.require_auth();
+        }
+
         let key = DataKey::InActiveElection(dao_id, member);
         env.storage().persistent().set(&key, &active);
         Self::bump_persistent(&env, &key);

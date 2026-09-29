@@ -40,6 +40,8 @@ All contract errors are numeric codes. This reference provides human-readable ex
 | 13 | `RootNotFound` | Merkle root not in history | Root was evicted or invalid |
 | 14 | `AlreadyInitialized` | Tree already initialized | Constructor already called |
 | 15 | `MemberNotRevoked` | Member has not been revoked | Can only reinstate revoked members |
+| 16 | `CommitmentAlreadyUsed` | Commitment already bound to a different address | Commitment collision |
+| 17 | `InvalidField` | Poseidon field symbol is not `BN254` or `BLS12_381` | Typo in the field passed to `init_tree` |
 
 ## Voting Contract Errors
 

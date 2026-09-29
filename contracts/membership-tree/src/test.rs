@@ -437,3 +437,136 @@ fn test_duplicate_commitment_different_address_fails() {
     tree_client.register_with_caller(&1u64, &commitment, &member_a);
     tree_client.register_with_caller(&1u64, &commitment, &member_b);
 }
+
+// ========================================================================
+// Poseidon field pinning
+//
+// Every Poseidon dispatch in this contract is `if field == "BLS12_381" { .. }
+// else { BN254 }`, so any unrecognised symbol silently took the BN254 table.
+// A typo at init time pinned the DAO to a field its circuits never used.
+// ========================================================================
+
+#[test]
+fn test_init_tree_accepts_both_supported_fields() {
+    let (env, tree_id, _, registry_id, admin) = setup_env();
+    let client = MembershipTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    registry_client.set_admin(&1u64, &admin);
+    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
+
+    registry_client.set_admin(&2u64, &admin);
+    client.init_tree(&2u64, &5u32, &Symbol::new(&env, "BLS12_381"), &admin);
+
+    assert_eq!(client.get_field(&1u64), Symbol::new(&env, "BN254"));
+    assert_eq!(client.get_field(&2u64), Symbol::new(&env, "BLS12_381"));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn test_init_tree_rejects_unknown_field() {
+    let (env, tree_id, _, registry_id, admin) = setup_env();
+    let client = MembershipTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    registry_client.set_admin(&1u64, &admin);
+    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BLS12381"), &admin);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn test_init_tree_rejects_empty_field() {
+    let (env, tree_id, _, registry_id, admin) = setup_env();
+    let client = MembershipTreeClient::new(&env, &tree_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    registry_client.set_admin(&1u64, &admin);
+    client.init_tree(&1u64, &5u32, &Symbol::new(&env, ""), &admin);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn test_init_tree_from_registry_rejects_unknown_field() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let registry_id = env.register(mock_registry::MockRegistry, ());
+    let sbt_id = env.register(mock_sbt::MockSbt, ());
+    let tree_id = env.register(MembershipTree, (sbt_id.clone(), registry_id.clone()));
+    let client = MembershipTreeClient::new(&env, &tree_id);
+
+    client.init_tree_from_registry(&1u64, &5u32, &Symbol::new(&env, "bls12_381"));
+}
+
+// ========================================================================
+// Poseidon parameter table arity (BLS12-381)
+//
+// The host rejects a permutation whose round-constant count is not exactly
+// rounds_f + rounds_p. The BLS t=3 table carries 64 rows, so ROUNDS_P must be
+// 56 — with 57 every hash_pair/hash_leaf for a BLS12-381 DAO was rejected.
+// ========================================================================
+
+#[test]
+fn test_poseidon_param_tables_match_round_counts() {
+    let env = Env::default();
+
+    assert_eq!(
+        poseidon_params_bls12_381::get_rc3(&env).len() as usize,
+        poseidon_params_bls12_381::ROUNDS_F as usize + poseidon_params_bls12_381::ROUNDS_P as usize,
+        "BLS12-381 round constants must be exactly ROUNDS_F + ROUNDS_P"
+    );
+    assert_eq!(
+        poseidon_params::get_rc3(&env).len() as usize,
+        poseidon_params::ROUNDS_F as usize + poseidon_params::ROUNDS_P as usize,
+        "BN254 round constants must be exactly ROUNDS_F + ROUNDS_P"
+    );
+    assert_eq!(poseidon_params_bls12_381::get_mds3(&env).len(), 3);
+}
+
+#[test]
+fn test_bls12_381_dao_hashes() {
+    // End-to-end: the permutation itself is accepted by the host, which it was
+    // not while ROUNDS_P was 57.
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    registry_client.set_admin(&1u64, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BLS12_381"), &admin);
+
+    let commitment = U256::from_u32(&env, 42);
+    let member = Address::generate(&env);
+    sbt_client.set_member(&1u64, &member, &true);
+    tree_client.register_with_caller(&1u64, &commitment, &member);
+
+    let (_depth, next_index, root) = tree_client.get_tree_info(&1u64);
+    assert_eq!(next_index, 1);
+    assert_ne!(root, U256::from_u32(&env, 0));
+}
+
+#[test]
+fn test_bls12_381_and_bn254_roots_differ() {
+    // Guards against the two field tables collapsing to the same hashing.
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    registry_client.set_admin(&1u64, &admin);
+    registry_client.set_admin(&2u64, &admin);
+    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
+    tree_client.init_tree(&2u64, &5u32, &Symbol::new(&env, "BLS12_381"), &admin);
+
+    let commitment = U256::from_u32(&env, 7);
+    let m1 = Address::generate(&env);
+    let m2 = Address::generate(&env);
+    sbt_client.set_member(&1u64, &m1, &true);
+    sbt_client.set_member(&2u64, &m2, &true);
+    tree_client.register_with_caller(&1u64, &commitment, &m1);
+    tree_client.register_with_caller(&2u64, &commitment, &m2);
+
+    let (_, _, bn254_root) = tree_client.get_tree_info(&1u64);
+    let (_, _, bls_root) = tree_client.get_tree_info(&2u64);
+    assert_ne!(bn254_root, bls_root);
+}

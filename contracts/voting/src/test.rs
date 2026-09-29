@@ -3339,3 +3339,126 @@ fn test_voting_after_end_time_outside_tolerance_fails() {
         &proof,
     );
 }
+
+// ========================================================================
+// Anti-flash-loan bookkeeping access control
+//
+// record_balance_checkpoint feeds get_twab, which feeds
+// check_voter_eligibility; create_balance_snapshot fixes the snapshot ledger;
+// set/clear_voter_cooldown is the transfer barrier. All four were callable by
+// anyone, so an arbitrary caller could forge a voter's TWAB history, move a
+// proposal's snapshot forward, or freeze/unfreeze any address.
+// ========================================================================
+
+#[test]
+fn test_record_balance_checkpoint_by_admin() {
+    let (env, voting_id, _, _, registry_id, _) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let admin = Address::generate(&env);
+    let voter = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+
+    voting.record_balance_checkpoint(&1u64, &voter, &1_000i128, &admin);
+
+    let end_ledger = env.ledger().sequence() + 1;
+    let twab = voting.get_twab(&1u64, &voter, &0u32, &end_ledger);
+    assert_eq!(twab, Some(1_000i128));
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_record_balance_checkpoint_rejects_stranger() {
+    let (env, voting_id, _, _, registry_id, _) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let admin = Address::generate(&env);
+    let victim = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+
+    let attacker = Address::generate(&env);
+    voting.record_balance_checkpoint(&1u64, &victim, &1_000i128, &attacker);
+}
+
+#[test]
+fn test_create_balance_snapshot_by_admin() {
+    let (env, voting_id, _, _, registry_id, _) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+
+    voting.create_balance_snapshot(&1u64, &7u64, &admin);
+    assert!(voting.get_balance_snapshot(&1u64, &7u64).is_some());
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_create_balance_snapshot_rejects_stranger() {
+    // Moving the snapshot forward would let a voter qualify with a balance
+    // acquired after voting opened.
+    let (env, voting_id, _, _, registry_id, _) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+
+    let attacker = Address::generate(&env);
+    voting.create_balance_snapshot(&1u64, &7u64, &attacker);
+}
+
+#[test]
+fn test_set_and_clear_voter_cooldown_by_self() {
+    let (env, voting_id, _, _, _, voter) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+
+    voting.set_voter_cooldown(&1u64, &voter, &voter);
+    assert!(voting.is_in_transfer_cooldown(&1u64, &voter));
+
+    voting.clear_voter_cooldown(&1u64, &voter, &voter);
+    assert!(!voting.is_in_transfer_cooldown(&1u64, &voter));
+}
+
+#[test]
+fn test_set_and_clear_voter_cooldown_by_admin() {
+    let (env, voting_id, _, _, registry_id, voter) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+
+    voting.set_voter_cooldown(&1u64, &voter, &admin);
+    assert!(voting.is_in_transfer_cooldown(&1u64, &voter));
+
+    voting.clear_voter_cooldown(&1u64, &voter, &admin);
+    assert!(!voting.is_in_transfer_cooldown(&1u64, &voter));
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_voter_cooldown_rejects_stranger() {
+    // Anyone could freeze an arbitrary address for 7 days.
+    let (env, voting_id, _, _, _, voter) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+
+    let attacker = Address::generate(&env);
+    voting.set_voter_cooldown(&1u64, &voter, &attacker);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_clear_voter_cooldown_rejects_stranger() {
+    // The vote -> leave -> rejoin bypass: dropping the barrier mid-election.
+    let (env, voting_id, _, _, _, voter) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+
+    voting.set_voter_cooldown(&1u64, &voter, &voter);
+
+    let attacker = Address::generate(&env);
+    voting.clear_voter_cooldown(&1u64, &voter, &attacker);
+}
