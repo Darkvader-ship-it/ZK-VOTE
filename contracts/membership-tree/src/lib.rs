@@ -15,6 +15,12 @@ const MIN_MAX_ROOTS: u32 = 10;
 const MAX_MAX_ROOTS: u32 = 100;
 // Circuit depth must match vote.circom. Supports ~262K members (2^18 = 262,144)
 const MAX_TREE_DEPTH: u32 = 18;
+// #541 rent economics: Persistent ~10x Temporary. Roots + config are the only
+// Persistent/Instance keys (long-lived, TTL-extended via extend_ttl); leaves
+// (LeafValue/FilledSubtrees bulk) belong in Temporary. See backend stellar.ts
+// rentTierFor()/shouldExtendTtl() and formal-model rent budget.
+const RENT_ROOT_PERSISTENT: bool = true;
+const RENT_LEAF_TEMPORARY: bool = true;
 // Per-member registration cooldown: minimum seconds a member must wait before
 // registering another commitment in the tree. Prevents tree spam from members
 // churning commitments (e.g. re-registering after reinstate) (#371).
@@ -83,6 +89,8 @@ pub enum TreeError {
     Sha3TreeNotInitialized = 20,
     /// C_PQ commitment already stored
     PqCommitmentExists = 21,
+    /// Poseidon field symbol is not a supported field
+    InvalidField = 22,
 }
 
 #[contracttype]
@@ -395,6 +403,12 @@ impl MembershipTree {
             panic_with_error!(&env, TreeError::InvalidDepth);
         }
 
+        // SECURITY: reject anything that is not an exact supported field symbol.
+        // An unrecognised symbol would silently fall through to the BN254
+        // parameter table in hash_pair/zero_at_level_for_field, producing a DAO
+        // that hashes differently from its circuits — permanently and invisibly.
+        Self::assert_valid_field(&env, &field);
+
         let depth_key = DataKey::TreeDepth(dao_id);
         if env.storage().persistent().has(&depth_key) {
             panic_with_error!(&env, TreeError::TreeInitialized);
@@ -465,6 +479,10 @@ impl MembershipTree {
         if depth == 0 || depth > MAX_TREE_DEPTH {
             panic_with_error!(&env, TreeError::InvalidDepth);
         }
+
+        // SECURITY: same field validation as init_tree — a typo here would
+        // permanently pin the DAO to the wrong parameter table.
+        Self::assert_valid_field(&env, &field);
 
         let depth_key = DataKey::TreeDepth(dao_id);
         if env.storage().persistent().has(&depth_key) {
@@ -1519,10 +1537,42 @@ impl MembershipTree {
                 let zero_at_level = Self::zero_at_level_for_field(env, level, &field);
                 current_hash = Self::hash_pair(env, &current_hash, &zero_at_level, &field);
             } else {
-                // Right child - use filled subtree from left
-                let left = filled
-                    .get(level)
-                    .unwrap_or_else(|| Self::zero_at_level_for_field(env, level, &field));
+                // Right child - the left sibling's authoritative hash.
+                //
+                // Do NOT read this straight out of the `filled` cache: the cache
+                // is only a mirror, and any write path that forgets to refresh it
+                // (e.g. an update/reinstatement) would silently splice a stale
+                // subtree into a brand-new root — a root that `root_ok` accepts
+                // but that no `get_merkle_path` can reproduce, bricking ZK voting.
+                // NodeHash/LeafValue is the source of truth and is rewritten
+                // bottom-up by every path that mutates a leaf, so it is always
+                // current. `filled` remains a fallback for the not-yet-written
+                // (all-zero) case.
+                let left_index = current_index - 1;
+                let cached = || {
+                    filled
+                        .get(level)
+                        .unwrap_or_else(|| Self::zero_at_level_for_field(env, level, &field))
+                };
+                let left: U256 = if level == 0 {
+                    // Level 0: sibling is a leaf; hash it the same way its own
+                    // insertion did (LeafValue holds the raw commitment).
+                    match env
+                        .storage()
+                        .persistent()
+                        .get::<_, U256>(&DataKey::LeafValue(dao_id, left_index))
+                    {
+                        Some(raw_sibling) => Self::hash_leaf(env, &raw_sibling, &field),
+                        None => cached(),
+                    }
+                } else {
+                    env.storage()
+                        .persistent()
+                        .get(&DataKey::NodeHash(dao_id, level, left_index))
+                        .unwrap_or_else(cached)
+                };
+                // Keep the cache a faithful mirror of the value we just used.
+                filled.set(level, left.clone());
                 current_hash = Self::hash_pair(env, &left, &current_hash, &field);
             }
             // Store intermediate node hash at level+1 (since level 0 is leaves)
@@ -1591,6 +1641,17 @@ impl MembershipTree {
         env.storage().persistent().set(&leaf_val_key, &new_value);
         Self::bump_persistent(env, &leaf_val_key);
 
+        // Load the cached left-sibling subtrees so they can be kept in sync
+        // with the recomputed path. `insert_leaf` reads `filled[level]` when the
+        // incoming node is a *right* child, so leaving this cache stale after a
+        // removal/reinstatement silently mixes a pre-update subtree hash into a
+        // fresh root (C-class: irreversible ZK-voting brick).
+        let mut filled: Vec<U256> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FilledSubtrees(dao_id))
+            .unwrap_or_else(|| panic_with_error!(env, TreeError::TreeNotInitialized));
+
         // Recompute path from leaf to root
         // Domain-separate the leaf before it becomes a tree node value (#167).
         let mut current_index = leaf_index;
@@ -1603,6 +1664,14 @@ impl MembershipTree {
             } else {
                 current_index - 1
             };
+
+            // Mirror `insert_leaf`: when the recomputed node is a left child it
+            // *is* the completed left subtree for this level, so it must replace
+            // the cached value. Writing it here is what keeps a later insert that
+            // forms a right child at this level consistent with this root.
+            if is_left {
+                filled.set(level, current_hash.clone());
+            }
 
             // Get sibling hash from stored NodeHash or use zero if doesn't exist
             let sibling: U256 = if level == 0 {
@@ -1642,6 +1711,11 @@ impl MembershipTree {
             current_index = parent_index;
         }
 
+        // Persist the refreshed left-sibling cache before publishing the new root.
+        let filled_key = DataKey::FilledSubtrees(dao_id);
+        env.storage().persistent().set(&filled_key, &filled);
+        Self::bump_persistent(env, &filled_key);
+
         // Update root history with FIFO cap
         let roots_key = DataKey::Roots(dao_id);
         let mut roots: Vec<U256> = env
@@ -1679,13 +1753,38 @@ impl MembershipTree {
         (current_hash, root_index)
     }
 
+    // Internal: Reject any field symbol that is not exactly "BN254" or "BLS12_381".
+    //
+    // Every dispatch below (`ensure_poseidon_params_cached`, `hash_pair`,
+    // `zero_at_level_for_field`) uses `if field == "BLS12_381" { .. } else { .. }`,
+    // so an unrecognised symbol silently takes the BN254 branch. Pinning the
+    // value at init time turns that silent mismatch into a startup error instead
+    // of a DAO whose on-chain roots never match its circuits.
+    fn assert_valid_field(env: &Env, field: &Symbol) {
+        if field != &Symbol::new(env, "BN254") && field != &Symbol::new(env, "BLS12_381") {
+            panic_with_error!(env, TreeError::InvalidField);
+        }
+    }
+
+    /// Public getter for the DAO's Poseidon field.
+    /// Fails if the tree was never initialised, matching `dao_field`.
+    pub fn get_field(env: Env, dao_id: u64) -> Symbol {
+        Self::bump_instance(&env);
+        Self::dao_field(&env, dao_id)
+    }
+
     // Internal: Get Poseidon field for a DAO
+    //
+    // Fail-closed: an uninitialised tree has no field on record, and defaulting
+    // to BN254 here would let a DAO hash against a field it never registered
+    // with. `init_tree`/`init_tree_from_registry` always write the field
+    // alongside the depth, so this only fires for a tree that was never created.
     fn dao_field(env: &Env, dao_id: u64) -> Symbol {
         let field_key = DataKey::PoseidonField(dao_id);
         env.storage()
             .persistent()
             .get(&field_key)
-            .unwrap_or_else(|| Symbol::new(env, "BN254"))
+            .unwrap_or_else(|| panic_with_error!(env, TreeError::TreeNotInitialized))
     }
 
     // Internal: Ensure Poseidon params are cached for the given field

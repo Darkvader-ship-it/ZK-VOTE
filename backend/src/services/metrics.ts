@@ -651,66 +651,34 @@ export const batch_partial_failure_total = new Counter({
   registers: [register],
 });
 
-// ============================================
-// COST-BASED RATE LIMITING METRICS (#525)
-// ============================================
-
-export const paymentOpsPerMinute = new Histogram({
-  name: "zkvote_payment_ops_per_minute",
-  help: "Histogram of payment operations per minute per IP",
-  buckets: [1, 5, 10, 25, 50, 100],
-  registers: [register],
-});
-
-export const costRateLimitExceeded = new Counter({
-  name: "zkvote_cost_rate_limit_exceeded_total",
-  help: "Total cost-based rate limit violations",
-  labelNames: ["limiter", "cost"] as const,
+export const priorityStarvationTotal = new Counter({
+  name: "zkvote_priority_starvation_total",
+  help: "Total priority-queued requests that waited beyond the starvation threshold",
+  labelNames: ["priority", "route"] as const,
   registers: [register],
 });
 
 // ============================================
-// BACKUP ENCRYPTION METRICS (#524)
+// BACKUP FORWARD-SECRECY METRICS (#600)
 // ============================================
 
-export const backupAge = new Gauge({
+export const backupKeyRotationsTotal = new Counter({
+  name: "zkvote_backup_key_rotations_total",
+  help: "Total backup encryption key rotations (old key archived, new key active)",
+  labelNames: ["status"] as const,
+  registers: [register],
+});
+
+export const backupAgeSeconds = new Gauge({
   name: "zkvote_backup_age_seconds",
-  help: "Age of the most recent backup in seconds",
+  help: "Age of the most recent successful backup in seconds (staleness signal for litestream/S3 DR)",
   registers: [register],
 });
 
-export const backupTamperDetected = new Counter({
-  name: "zkvote_backup_tamper_detected_total",
-  help: "Total number of tampered backup restore attempts detected",
-  labelNames: ["keyId"] as const,
-  registers: [register],
-});
-
-export const backupRestoreSuccess = new Counter({
-  name: "zkvote_backup_restore_success_total",
-  help: "Total successful backup restore operations",
-  labelNames: ["keyId"] as const,
-  registers: [register],
-});
-
-export const backupRestoreFailed = new Counter({
-  name: "zkvote_backup_restore_failed_total",
-  help: "Total failed backup restore attempts",
-  labelNames: ["reason"] as const,
-  registers: [register],
-});
-
-export const backupEncryptionDuration = new Histogram({
-  name: "zkvote_backup_encryption_duration_seconds",
-  help: "Backup encryption operation duration in seconds",
-  buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60],
-  registers: [register],
-});
-
-export const backupDecryptionDuration = new Histogram({
-  name: "zkvote_backup_decryption_duration_seconds",
-  help: "Backup decryption operation duration in seconds",
-  buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60],
+export const backupRestoreDrillTotal = new Counter({
+  name: "zkvote_backup_restore_drill_total",
+  help: "Total encrypted restore drills run (verify/decrypt round-trip)",
+  labelNames: ["status"] as const,
   registers: [register],
 });
 
@@ -731,3 +699,20 @@ export const daoReconciliationLastOk = new Gauge({
   registers: [register],
 });
 
+// ============================================
+// OFFLINE RETRY & CDC OUTBOX LAG METRICS (#542, #544)
+// ============================================
+
+export const offlineRetryTotal = new Counter({
+  name: "zkvote_offline_retry_total",
+  help: "Total offline retry attempts processed from client queue",
+  labelNames: ["type", "status"] as const,
+  registers: [register],
+});
+
+export const outboxLagGauge = new Gauge({
+  name: "zkvote_outbox_lag_seconds",
+  help: "Outbox pattern CDC WAL replication lag in seconds",
+  labelNames: ["channel"] as const,
+  registers: [register],
+});

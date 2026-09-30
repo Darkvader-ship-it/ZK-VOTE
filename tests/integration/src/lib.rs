@@ -57,6 +57,56 @@ pub mod testkit {
 
 // Integration test crate - all code is test-only
 
+/// Stand-in for the MPC ceremony transcript registry.
+///
+/// `Voting::set_vk` refuses a verification key with no ceremony attestation
+/// (#662) and reads the registry address from instance storage, so a harness
+/// that never calls `set_transcript_registry` makes *every* `set_vk` panic with
+/// "Transcript registry not configured" — taking the whole integration suite
+/// down before it asserts anything.
+///
+/// These tests are about voting, DAO wiring and boundaries, not about ceremony
+/// bookkeeping, so attest-all is the right default. `set_attest_all(false)`
+/// turns the gate back on for a test that is specifically about attestation.
+pub mod test_support {
+    use soroban_sdk::{contract, contractimpl, contracttype, BytesN, Env};
+
+    #[contracttype]
+    pub enum DataKey {
+        AttestAll,
+    }
+
+    #[contract]
+    pub struct MockTranscriptRegistry;
+
+    #[contractimpl]
+    impl MockTranscriptRegistry {
+        pub fn set_attest_all(env: Env, on: bool) {
+            env.storage().persistent().set(&DataKey::AttestAll, &on);
+        }
+
+        pub fn is_vk_attested(env: Env, _vk_hash: BytesN<32>) -> bool {
+            env.storage()
+                .persistent()
+                .get(&DataKey::AttestAll)
+                .unwrap_or(false)
+        }
+    }
+
+    /// Register a mock transcript registry and point `voting` at it.
+    ///
+    /// `voting` is the address returned by `env.register(voting::Voting, ..)`.
+    ///
+    /// Takes `Env` by value so it can be called as `attach(env, ..)` from
+    /// helpers that hold `&Env` without tripping clippy's needless-borrow lint;
+    /// `Env` is cheap to clone.
+    pub fn attach_transcript_registry(env: Env, voting: &soroban_sdk::Address) {
+        let registry = env.register(MockTranscriptRegistry, ());
+        MockTranscriptRegistryClient::new(&env, &registry).set_attest_all(&true);
+        voting::VotingClient::new(&env, voting).set_transcript_registry(&registry);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -68,42 +118,7 @@ mod tests {
     use membership_tree::MembershipTreeClient;
     use voting::{Proof, VerificationKey, VoteMode, VotingClient};
 
-    /// A transcript registry that attests every key.
-    ///
-    /// `voting::set_vk` is fail-closed without a configured transcript registry
-    /// (#662): a missing registry is a hard error, not a bypass, which is the
-    /// right default for production but means any harness that registers a
-    /// verification key has to provide one. These integration tests are not
-    /// testing attestation — they are testing the voting flow the key exists to
-    /// verify — so they install a permissive registry rather than pre-attesting
-    /// every key they construct.
-    mod permissive_transcript_registry {
-        use soroban_sdk::{contract, contractimpl, contracttype, BytesN, Env};
-
-        #[contracttype]
-        pub enum DataKey {
-            AttestAll(bool),
-        }
-
-        #[contract]
-        pub struct PermissiveTranscriptRegistry;
-
-        #[contractimpl]
-        impl PermissiveTranscriptRegistry {
-            pub fn set_attest_all(env: Env, attest_all: bool) {
-                env.storage()
-                    .persistent()
-                    .set(&DataKey::AttestAll(attest_all), &attest_all);
-            }
-
-            pub fn is_vk_attested(env: Env, _vk_hash: BytesN<32>) -> bool {
-                env.storage()
-                    .persistent()
-                    .get(&DataKey::AttestAll(true))
-                    .unwrap_or(false)
-            }
-        }
-    }
+    use crate::test_support;
 
     /// Helper to setup the full DaoVote system
     struct DaoVoteSystem {
@@ -130,17 +145,9 @@ mod tests {
             let guardian = Address::generate(&env);
             let voting = env.register(voting::Voting, (tree.clone(), registry.clone(), guardian));
 
-            // `set_vk` refuses to run without a transcript registry (#662).
-            let transcript = env.register(
-                permissive_transcript_registry::PermissiveTranscriptRegistry,
-                (),
-            );
-            permissive_transcript_registry::PermissiveTranscriptRegistryClient::new(
-                &env,
-                &transcript,
-            )
-            .set_attest_all(&true);
-            VotingClient::new(&env, &voting).set_transcript_registry(&transcript);
+            // `set_vk` requires an attestation source; without this every
+            // `set_vk` below panics. See `test_support`.
+            test_support::attach_transcript_registry(env.clone(), &voting);
 
             Self {
                 env,
