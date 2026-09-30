@@ -69,6 +69,8 @@ pub enum TreeError {
     Sha3TreeNotInitialized = 20,
     /// C_PQ commitment already stored
     PqCommitmentExists = 21,
+    /// Poseidon field symbol is not a supported field
+    InvalidField = 22,
 }
 
 #[contracttype]
@@ -381,6 +383,12 @@ impl MembershipTree {
             panic_with_error!(&env, TreeError::InvalidDepth);
         }
 
+        // SECURITY: reject anything that is not an exact supported field symbol.
+        // An unrecognised symbol would silently fall through to the BN254
+        // parameter table in hash_pair/zero_at_level_for_field, producing a DAO
+        // that hashes differently from its circuits — permanently and invisibly.
+        Self::assert_valid_field(&env, &field);
+
         let depth_key = DataKey::TreeDepth(dao_id);
         if env.storage().persistent().has(&depth_key) {
             panic_with_error!(&env, TreeError::TreeInitialized);
@@ -451,6 +459,10 @@ impl MembershipTree {
         if depth == 0 || depth > MAX_TREE_DEPTH {
             panic_with_error!(&env, TreeError::InvalidDepth);
         }
+
+        // SECURITY: same field validation as init_tree — a typo here would
+        // permanently pin the DAO to the wrong parameter table.
+        Self::assert_valid_field(&env, &field);
 
         let depth_key = DataKey::TreeDepth(dao_id);
         if env.storage().persistent().has(&depth_key) {
@@ -1536,13 +1548,38 @@ impl MembershipTree {
         (current_hash, root_index)
     }
 
+    // Internal: Reject any field symbol that is not exactly "BN254" or "BLS12_381".
+    //
+    // Every dispatch below (`ensure_poseidon_params_cached`, `hash_pair`,
+    // `zero_at_level_for_field`) uses `if field == "BLS12_381" { .. } else { .. }`,
+    // so an unrecognised symbol silently takes the BN254 branch. Pinning the
+    // value at init time turns that silent mismatch into a startup error instead
+    // of a DAO whose on-chain roots never match its circuits.
+    fn assert_valid_field(env: &Env, field: &Symbol) {
+        if field != &Symbol::new(env, "BN254") && field != &Symbol::new(env, "BLS12_381") {
+            panic_with_error!(env, TreeError::InvalidField);
+        }
+    }
+
+    /// Public getter for the DAO's Poseidon field.
+    /// Fails if the tree was never initialised, matching `dao_field`.
+    pub fn get_field(env: Env, dao_id: u64) -> Symbol {
+        Self::bump_instance(&env);
+        Self::dao_field(&env, dao_id)
+    }
+
     // Internal: Get Poseidon field for a DAO
+    //
+    // Fail-closed: an uninitialised tree has no field on record, and defaulting
+    // to BN254 here would let a DAO hash against a field it never registered
+    // with. `init_tree`/`init_tree_from_registry` always write the field
+    // alongside the depth, so this only fires for a tree that was never created.
     fn dao_field(env: &Env, dao_id: u64) -> Symbol {
         let field_key = DataKey::PoseidonField(dao_id);
         env.storage()
             .persistent()
             .get(&field_key)
-            .unwrap_or_else(|| Symbol::new(env, "BN254"))
+            .unwrap_or_else(|| panic_with_error!(env, TreeError::TreeNotInitialized))
     }
 
     // Internal: Ensure Poseidon params are cached for the given field

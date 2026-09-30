@@ -25,7 +25,7 @@ When a proposal (election) is created, the current ledger sequence is recorded a
 **Key components**:
 - `BalanceSnapshotInfo` struct stores `snapshot_ledger` (ledger sequence) and `timestamp`
 - `ProposalInfo.snapshot_ledger` field records when the proposal was created
-- `create_balance_snapshot()` captures the snapshot
+- `create_balance_snapshot()` captures the snapshot (DAO admin only)
 - `get_balance_snapshot()` retrieves the snapshot for verification
 
 ### 2. Voter Eligibility at Snapshot Time
@@ -69,7 +69,10 @@ TWAB provides Sybil resistance by measuring the average balance over time, not j
 
 **How it works**:
 - `BalanceCheckpoint` stores (dao_id, address, ledger_seq) -> balance
-- Token contracts call `record_balance_checkpoint()` when balances change
+- The DAO admin calls `record_balance_checkpoint()` when balances change. This is
+  deliberately admin-gated rather than permissionless: checkpoints are the sole
+  input to the TWAB, so an unauthenticated caller could forge any voter's
+  balance history and defeat the flash-loan check entirely.
 - `get_time_weighted_average_balance()` computes the average across a ledger range
 - TWAB = Σ(balance_i × duration_i) / total_duration
 
@@ -86,10 +89,17 @@ During an active election, registered voters enter a transfer cooldown that prev
 - Having their SBT revoked to avoid vote accountability
 
 **Cooldown enforcement**:
-- `set_voter_cooldown()` sets a 7-day cooldown when a voter registers/votes
+- `set_voter_cooldown(dao_id, voter, caller)` sets a 7-day cooldown when a voter
+  registers/votes. `caller` must be the voter themselves or the DAO admin
 - `is_in_transfer_cooldown()` is called by token contracts before allowing transfers
 - `leave()` in SBT contract checks cooldown before allowing departure
-- Cooldown is cleared when the election ends via `clear_voter_cooldown()`
+- Cooldown is cleared when the election ends via `clear_voter_cooldown(dao_id, voter, caller)`,
+  under the same self-or-admin rule
+- The SBT contract's `set_election_cooldown()` / `clear_election_cooldown()` /
+  `set_in_active_election()` follow the same self-or-admin rule. These gate
+  `leave()`, so leaving them permissionless would let anyone lock a member out
+  of the DAO permanently (`cooldown_end = u64::MAX`) or drop the barrier that
+  stops a vote -> leave -> rejoin cycle inside one election
 
 ## Election Randomness
 
@@ -139,13 +149,16 @@ fn transfer(..., from: Address, ...) {
     // Proceed with transfer
 }
 
-// Record balance checkpoints for TWAB
-fn after_balance_change(..., voter: Address, new_balance: i128) {
+// Record balance checkpoints for TWAB. Admin-gated: pass the DAO admin as the
+// trailing `admin` argument and have it `require_auth()`.
+fn after_balance_change(..., admin: Address, voter: Address, new_balance: i128) {
     let voting_contract: Address = ...;
+    admin.require_auth();
     env.invoke_contract(
         &voting_contract,
         &Symbol::new(&env, "record_balance_checkpoint"),
-        vec![&env, dao_id.into_val(&env), voter.into_val(&env), new_balance.into_val(&env)],
+        vec![&env, dao_id.into_val(&env), voter.into_val(&env),
+             new_balance.into_val(&env), admin.into_val(&env)],
     );
 }
 ```
@@ -158,7 +171,7 @@ fn create_token_gated_proposal(...) {
     let proposal_id = voting_contract.create_proposal(...);
     
     // Create balance snapshot
-    voting_contract.create_balance_snapshot(dao_id, proposal_id);
+    voting_contract.create_balance_snapshot(dao_id, proposal_id, admin);
     
     // Configure token-gating
     voting_contract.set_election_config(
@@ -187,7 +200,7 @@ fn vote_with_token_gate(..., voter, proposal_id) {
     }
     
     // Set cooldown to prevent transfer after voting
-    voting_contract.set_voter_cooldown(dao_id, voter);
+    voting_contract.set_voter_cooldown(dao_id, voter, voter);
     
     // Submit vote
     voting_contract.vote(...);

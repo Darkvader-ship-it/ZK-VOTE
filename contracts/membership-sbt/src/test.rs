@@ -338,3 +338,130 @@ fn test_transfer_panics_even_without_an_existing_membership() {
     let recipient = Address::generate(&env);
     client.transfer(&1u64, &stranger, &recipient, &1i128);
 }
+
+// ========================================================================
+// Anti-flash-loan cooldown access control
+//
+// These three setters gate `leave`, so leaving them unauthenticated let an
+// arbitrary caller (a) permanently lock a member out with u64::MAX, and
+// (b) drop the anti-flash-loan barrier so a member could vote -> leave -> rejoin
+// within a single election.
+// ========================================================================
+
+#[test]
+fn test_set_election_cooldown_by_admin() {
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    client.set_election_cooldown(&1u64, &member, &u64::MAX, &admin);
+    assert!(client.is_in_cooldown(&1u64, &member));
+}
+
+#[test]
+fn test_set_election_cooldown_by_self() {
+    let (env, sbt_id, _, _, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    client.set_election_cooldown(&1u64, &member, &u64::MAX, &member);
+    assert!(client.is_in_cooldown(&1u64, &member));
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_election_cooldown_rejects_stranger() {
+    // Regression: an attacker locking a victim out of the DAO forever.
+    let (env, sbt_id, _, _, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    let attacker = Address::generate(&env);
+    client.set_election_cooldown(&1u64, &member, &u64::MAX, &attacker);
+}
+
+#[test]
+fn test_stranger_cannot_permanently_lock_member_out() {
+    // The full exploit: attacker pins the victim's cooldown to u64::MAX, after
+    // which `leave` panics CooldownActive forever. With the caller check in
+    // place the cooldown is never written, so the victim can still leave.
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+    client.mint(&1u64, &member, &admin, &None);
+
+    let attacker = Address::generate(&env);
+    let _ = client.try_set_election_cooldown(&1u64, &member, &u64::MAX, &attacker);
+    assert!(!client.is_in_cooldown(&1u64, &member));
+
+    // Victim can still exit.
+    client.leave(&1u64, &member);
+    assert!(!client.has(&1u64, &member));
+}
+
+#[test]
+fn test_clear_election_cooldown_by_admin() {
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    client.set_election_cooldown(&1u64, &member, &u64::MAX, &admin);
+    client.clear_election_cooldown(&1u64, &member, &admin);
+    assert!(!client.is_in_cooldown(&1u64, &member));
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_clear_election_cooldown_rejects_stranger() {
+    // Regression: the vote -> leave -> rejoin bypass. Only the member
+    // themselves or the DAO admin may drop the barrier.
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    client.set_election_cooldown(&1u64, &member, &u64::MAX, &admin);
+
+    let attacker = Address::generate(&env);
+    client.clear_election_cooldown(&1u64, &member, &attacker);
+}
+
+#[test]
+fn test_set_in_active_election_by_self() {
+    let (env, sbt_id, _, _, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    client.set_in_active_election(&1u64, &member, &true, &member);
+    assert!(client.is_in_active_election(&1u64, &member));
+}
+
+#[test]
+fn test_set_in_active_election_by_admin() {
+    let (env, sbt_id, _, admin, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    client.set_in_active_election(&1u64, &member, &true, &admin);
+    assert!(client.is_in_active_election(&1u64, &member));
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_in_active_election_rejects_stranger() {
+    // Regression: anyone could make an arbitrary address look like a
+    // flash-loan voter.
+    let (env, sbt_id, _, _, member) = setup_env();
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+
+    let attacker = Address::generate(&env);
+    client.set_in_active_election(&1u64, &member, &true, &attacker);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_cooldown_setters_require_auth() {
+    // Auth is not merely implied by the address argument: with no auth
+    // registered, even a self-call must fail.
+    let env = Env::default();
+    let registry_id = env.register(mock_registry::MockRegistry, ());
+    let sbt_id = env.register(MembershipSbt, (registry_id.clone(),));
+    let client = MembershipSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let member = Address::generate(&env);
+    registry_client.set_admin(&1u64, &member);
+
+    client.set_election_cooldown(&1u64, &member, &u64::MAX, &member);
+}

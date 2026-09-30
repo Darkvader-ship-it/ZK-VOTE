@@ -779,6 +779,13 @@ impl Comments {
             _ => panic_with_error!(&env, CommentsError::NotCommentOwner),
         }
 
+        // SECURITY: the root is caller-supplied here, so without this check an
+        // owner could edit against a root that was never eligible for this
+        // proposal (e.g. one predating the proposal or a revocation). Same
+        // validation `add_anonymous_comment` applies.
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
+
         // Verify ZK proof using VK from voting contract
         let vk = Self::get_vk_from_voting(&env, dao_id);
 
@@ -865,6 +872,11 @@ impl Comments {
             }
             _ => panic_with_error!(&env, CommentsError::NotCommentOwner),
         }
+
+        // SECURITY: same root-eligibility check as add_anonymous_comment —
+        // the root is caller-supplied, so it must be bound to the proposal.
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
 
         let vk = Self::get_vk_from_voting_bls381(&env, dao_id);
 
@@ -985,6 +997,11 @@ impl Comments {
             Some(original_nullifier) if original_nullifier == &nullifier => {}
             _ => panic_with_error!(&env, CommentsError::NotCommentOwner),
         }
+
+        // SECURITY: same root-eligibility check as add_anonymous_comment —
+        // the root is caller-supplied, so it must be bound to the proposal.
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
 
         // Verify ZK proof using VK from voting contract
         let vk = Self::get_vk_from_voting(&env, dao_id);
@@ -2336,6 +2353,229 @@ mod test {
             &old_root,
             &true,
             &proof,
+        );
+    }
+
+    // ========================================================================
+    // Root eligibility on edit/delete of anonymous comments
+    //
+    // `add_anonymous_comment` has always validated the caller-supplied root
+    // against the proposal (Fixed vs Trailing mode). The edit and delete paths
+    // did not, so a comment owner could act against any root they liked —
+    // including one predating the proposal or a member revocation.
+    // ========================================================================
+
+    /// Post an anonymous comment, returning (cid, nullifier, root).
+    fn seed_anonymous_comment(
+        env: &Env,
+        comments_client: &CommentsClient,
+        voting_id: &Address,
+        tree_id: &Address,
+        registry_id: &Address,
+        admin: &Address,
+        dao_id: u64,
+        proposal_id: u64,
+        vote_mode: VoteMode,
+    ) -> (String, U256, U256) {
+        let root = setup_dao_and_proposal(
+            env,
+            voting_id,
+            tree_id,
+            registry_id,
+            admin,
+            dao_id,
+            proposal_id,
+            vote_mode,
+        );
+
+        let content_cid = String::from_str(env, "QmOriginal");
+        let nullifier = U256::from_u32(env, 4242);
+        let proof = create_dummy_proof(env);
+
+        comments_client.add_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &content_cid,
+            &None,
+            &nullifier,
+            &root,
+            &true,
+            &proof,
+        );
+
+        (content_cid, nullifier, root)
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #33)")]
+    fn test_edit_anonymous_rejects_root_predating_removal() {
+        // RootPredatesRemoval = 33
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+        let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, _root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Trailing,
+        );
+
+        // A root that is in history but predates the revocation cut-off.
+        let old_root = U256::from_u32(&env, 54321);
+        tree_client.set_root_valid(&dao_id, &old_root, &true, &5);
+        tree_client.set_min_root(&dao_id, &10);
+
+        comments_client.edit_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &String::from_str(&env, "QmEdited"),
+            &nullifier,
+            &old_root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #33)")]
+    fn test_delete_anonymous_rejects_root_predating_removal() {
+        // RootPredatesRemoval = 33
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+        let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, _root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Trailing,
+        );
+
+        let old_root = U256::from_u32(&env, 54321);
+        tree_client.set_root_valid(&dao_id, &old_root, &true, &5);
+        tree_client.set_min_root(&dao_id, &10);
+
+        comments_client.delete_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &nullifier,
+            &old_root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #29)")]
+    fn test_edit_anonymous_rejects_root_mismatch_in_fixed_mode() {
+        // RootMismatch = 29 — the proposal is in Fixed mode, so any root other
+        // than the snapshot root is ineligible.
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, _root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Fixed,
+        );
+
+        comments_client.edit_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &String::from_str(&env, "QmEdited"),
+            &nullifier,
+            &U256::from_u32(&env, 999),
+            &true,
+            &create_dummy_proof(&env),
+        );
+    }
+
+    #[test]
+    fn test_edit_and_delete_anonymous_accept_eligible_root() {
+        // Positive control: the legitimate owner against the correct root
+        // still works.
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Fixed,
+        );
+
+        let new_cid = String::from_str(&env, "QmEdited");
+        comments_client.edit_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &new_cid,
+            &nullifier,
+            &root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+        assert_eq!(
+            comments_client
+                .get_comment(&dao_id, &proposal_id, &1u64)
+                .content_cid,
+            new_cid
+        );
+
+        comments_client.delete_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &nullifier,
+            &root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+        assert!(
+            comments_client
+                .get_comment(&dao_id, &proposal_id, &1u64)
+                .deleted
         );
     }
 }

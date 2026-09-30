@@ -4702,11 +4702,22 @@ impl Voting {
     }
 
     /// Record a balance checkpoint for time-weighted average balance computation.
-    /// Called by the token contract when a voter's balance changes.
     /// Stores (dao_id, address, ledger) -> balance for TWAB calculation.
-    pub fn record_balance_checkpoint(env: Env, dao_id: u64, voter: Address, balance: i128) {
+    ///
+    /// SECURITY (admin only): checkpoints are the sole input to `get_twab`, which
+    /// feeds the anti-flash-loan `check_voter_eligibility` gate. Permissionless,
+    /// anyone could forge any voter's TWAB history.
+    pub fn record_balance_checkpoint(
+        env: Env,
+        dao_id: u64,
+        voter: Address,
+        balance: i128,
+        admin: Address,
+    ) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
         let ledger = env.ledger().sequence();
         let key = DataKey::BalanceCheckpoint(dao_id, voter.clone(), ledger);
         env.storage().persistent().set(&key, &balance);
@@ -4771,10 +4782,20 @@ impl Voting {
 
     /// Set a transfer cooldown for a voter during an active election.
     /// Prevents the voter from transferring tokens until the cooldown expires.
-    /// Called automatically when a voter registers or votes in a token-gated election.
-    pub fn set_voter_cooldown(env: Env, dao_id: u64, voter: Address) {
+    ///
+    /// SECURITY (admin or self): permissionless, anyone could freeze an
+    /// arbitrary address for 7 days.
+    pub fn set_voter_cooldown(env: Env, dao_id: u64, voter: Address, caller: Address) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
+
+        if caller != voter {
+            caller.require_auth();
+            Self::assert_admin(&env, dao_id, &caller);
+        } else {
+            voter.require_auth();
+        }
+
         // Cooldown lasts until the current proposal ends (max 7 days from now)
         let cooldown_end = env.ledger().timestamp() + 604800; // 7 days
         let key = DataKey::TransferCooldown(dao_id, voter);
@@ -4783,9 +4804,20 @@ impl Voting {
     }
 
     /// Clear a voter's transfer cooldown after an election ends.
-    pub fn clear_voter_cooldown(env: Env, dao_id: u64, voter: Address) {
+    ///
+    /// SECURITY (admin or self): clearing the cooldown mid-election is the
+    /// vote -> leave -> rejoin bypass the cooldown exists to prevent.
+    pub fn clear_voter_cooldown(env: Env, dao_id: u64, voter: Address, caller: Address) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
+
+        if caller != voter {
+            caller.require_auth();
+            Self::assert_admin(&env, dao_id, &caller);
+        } else {
+            voter.require_auth();
+        }
+
         let key = DataKey::TransferCooldown(dao_id, voter);
         env.storage().persistent().remove(&key);
     }
@@ -4805,10 +4837,15 @@ impl Voting {
 
     /// Create a balance snapshot for a proposal (records current token balances).
     /// Stores the snapshot ledger and timestamp for future eligibility checks.
-    /// Called during proposal creation when token-gating is configured.
-    pub fn create_balance_snapshot(env: Env, dao_id: u64, proposal_id: u64) {
+    ///
+    /// SECURITY (admin only): the snapshot ledger is the anti-flash-loan
+    /// boundary for token-gated proposals. Permissionless, anyone could move the
+    /// snapshot forward to include balances acquired after voting opened.
+    pub fn create_balance_snapshot(env: Env, dao_id: u64, proposal_id: u64, admin: Address) {
         Self::bump_instance(&env);
         Self::require_not_paused(&env);
+        admin.require_auth();
+        Self::assert_admin(&env, dao_id, &admin);
         let snapshot = BalanceSnapshotInfo {
             snapshot_ledger: env.ledger().sequence(),
             timestamp: env.ledger().timestamp(),
