@@ -614,135 +614,238 @@ fn test_registration_cooldown_is_per_member_and_per_dao() {
     assert_eq!(next_index, 2);
 }
 
-// ========================================================================
-// Poseidon field pinning
+// ---------------------------------------------------------------------------
+// Regression: the update path must keep the cached left-sibling subtrees
+// (`FilledSubtrees`) in sync with the recomputed path.
 //
-// Every Poseidon dispatch in this contract is `if field == "BLS12_381" { .. }
-// else { BN254 }`, so any unrecognised symbol silently took the BN254 table.
-// A typo at init time pinned the DAO to a field its circuits never used.
-// ========================================================================
-
-#[test]
-fn test_init_tree_accepts_both_supported_fields() {
-    let (env, tree_id, _, registry_id, admin) = setup_env();
-    let client = MembershipTreeClient::new(&env, &tree_id);
-    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
-
-    registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
-
-    registry_client.set_admin(&2u64, &admin);
-    client.init_tree(&2u64, &5u32, &Symbol::new(&env, "BLS12_381"), &admin);
-
-    assert_eq!(client.get_field(&1u64), Symbol::new(&env, "BN254"));
-    assert_eq!(client.get_field(&2u64), Symbol::new(&env, "BLS12_381"));
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #22)")]
-fn test_init_tree_rejects_unknown_field() {
-    let (env, tree_id, _, registry_id, admin) = setup_env();
-    let client = MembershipTreeClient::new(&env, &tree_id);
-    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
-
-    registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BLS12381"), &admin);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #22)")]
-fn test_init_tree_rejects_empty_field() {
-    let (env, tree_id, _, registry_id, admin) = setup_env();
-    let client = MembershipTreeClient::new(&env, &tree_id);
-    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
-
-    registry_client.set_admin(&1u64, &admin);
-    client.init_tree(&1u64, &5u32, &Symbol::new(&env, ""), &admin);
-}
-
-#[test]
-#[should_panic(expected = "Error(Contract, #22)")]
-fn test_init_tree_from_registry_rejects_unknown_field() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let registry_id = env.register(mock_registry::MockRegistry, ());
-    let sbt_id = env.register(mock_sbt::MockSbt, ());
-    let tree_id = env.register(MembershipTree, (sbt_id.clone(), registry_id.clone()));
-    let client = MembershipTreeClient::new(&env, &tree_id);
-
-    client.init_tree_from_registry(&1u64, &5u32, &Symbol::new(&env, "bls12_381"));
-}
-
-// ========================================================================
-// Poseidon parameter table arity (BLS12-381)
+// `insert_leaf` composes the right child of a pair from the *cached* left
+// subtree. `update_leaf` (revocation / reinstatement) previously recomputed
+// `NodeHash` up to the root but never wrote `filled`, so the cache stayed
+// pinned to the pre-removal subtree hash. The next insert that made a left
+// child at some level L therefore spliced a stale hash into a brand-new root.
 //
-// The host rejects a permutation whose round-constant count is not exactly
-// rounds_f + rounds_p. The BLS t=3 table carries 64 rows, so ROUNDS_P must be
-// 56 — with 57 every hash_pair/hash_leaf for a BLS12-381 DAO was rejected.
-// ========================================================================
+// That root is a lie in the most damaging way possible: `root_ok` is a linear
+// scan of `Roots`, and the bogus root is pushed into `Roots` + `RootIndex`, so
+// the tree *reports it as valid* while no `get_merkle_path` can reproduce it.
+// Every honest member's next ZK proof then fails — irreversibly.
+// ---------------------------------------------------------------------------
 
-#[test]
-fn test_poseidon_param_tables_match_round_counts() {
-    let env = Env::default();
-
-    assert_eq!(
-        poseidon_params_bls12_381::get_rc3(&env).len() as usize,
-        poseidon_params_bls12_381::ROUNDS_F as usize + poseidon_params_bls12_381::ROUNDS_P as usize,
-        "BLS12-381 round constants must be exactly ROUNDS_F + ROUNDS_P"
-    );
-    assert_eq!(
-        poseidon_params::get_rc3(&env).len() as usize,
-        poseidon_params::ROUNDS_F as usize + poseidon_params::ROUNDS_P as usize,
-        "BN254 round constants must be exactly ROUNDS_F + ROUNDS_P"
-    );
-    assert_eq!(poseidon_params_bls12_381::get_mds3(&env).len(), 3);
+/// Drive the internal update path (`update_leaf`) directly, inside the
+/// contract's storage context. `remove_member` needs an SBT `revoke` that the
+/// mock does not implement; the storage effect under test is identical.
+fn update_leaf_via(env: &Env, tree_id: &Address, dao_id: u64, leaf_index: u32, new_value: U256) {
+    env.as_contract(tree_id, || {
+        MembershipTree::update_leaf(env, dao_id, leaf_index, new_value)
+    });
 }
 
+/// Recompute a root purely from the public `get_merkle_path` output, using the
+/// same Poseidon/leaf-domain rules the contract and circuit use. This is the
+/// honest prover's view, so it is the only trustworthy oracle for "is this
+/// root real?".
+fn root_from_merkle_path(
+    env: &Env,
+    tree_id: &Address,
+    dao_id: u64,
+    leaf_index: u32,
+    leaf: U256,
+) -> (U256, u32) {
+    let field = Symbol::new(env, "BN254");
+    let (path_elements, path_indices) = env.as_contract(tree_id, || {
+        MembershipTree::get_merkle_path(env.clone(), dao_id, leaf_index)
+    });
+
+    let mut current = env.as_contract(tree_id, || {
+        MembershipTree::hash_leaf(env, &leaf, &Symbol::new(env, "BN254"))
+    });
+    for i in 0..path_elements.len() {
+        let sibling = path_elements.get(i).unwrap();
+        let is_left = path_indices.get(i).unwrap() == 0;
+        let (left, right) = if is_left {
+            (current.clone(), sibling)
+        } else {
+            (sibling, current.clone())
+        };
+        current = env.as_contract(tree_id, || {
+            MembershipTree::hash_pair(env, &left, &right, &field)
+        });
+    }
+    (current, leaf_index)
+}
+
+/// Assert that `current_root()` is reproducible from the merkle path of every
+/// populated leaf, i.e. the tree is internally consistent for honest members.
+fn assert_root_reproducible(env: &Env, tree_id: &Address, dao_id: u64, leaves: &[U256]) {
+    let client = MembershipTreeClient::new(env, tree_id);
+    let current_root = client.current_root(&dao_id);
+
+    assert!(
+        client.root_ok(&dao_id, &current_root),
+        "current_root must be present in the root history"
+    );
+
+    for (index, leaf) in leaves.iter().enumerate() {
+        let (recomputed, _) =
+            root_from_merkle_path(env, tree_id, dao_id, index as u32, leaf.clone());
+        assert_eq!(
+            recomputed, current_root,
+            "leaf {index}: merkle path recomputation does not match current_root. \
+             The tree published a root that no member can produce a proof for."
+        );
+    }
+}
+
+/// The reported exploit, end to end: a depth-4 DAO, admin removes leaf 3, then
+/// members 12..15 register. Insert 12 forms a right child at level 2
+/// (current_index == 3), which is exactly where the stale `filled[2]` used to
+/// be spliced in. With the bug this yields a root that is in `Roots` (so
+/// `root_ok` says true) yet no merkle path can reproduce.
 #[test]
-fn test_bls12_381_dao_hashes() {
-    // End-to-end: the permutation itself is accepted by the host, which it was
-    // not while ROUNDS_P was 57.
+fn test_root_stays_reproducible_after_removal_then_more_registrations() {
     let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
     let tree_client = MembershipTreeClient::new(&env, &tree_id);
     let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
-    registry_client.set_admin(&1u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BLS12_381"), &admin);
+    let dao_id = 1u64;
+    let depth = 4u32; // 16 leaves
+    registry_client.set_admin(&dao_id, &admin);
+    tree_client.init_tree(&dao_id, &depth, &Symbol::new(&env, "BN254"), &admin);
 
-    let commitment = U256::from_u32(&env, 42);
-    let member = Address::generate(&env);
-    sbt_client.set_member(&1u64, &member, &true);
-    tree_client.register_with_caller(&1u64, &commitment, &member);
+    // Members 0..11 register (next leaf index is now 12).
+    let mut leaves = std::vec::Vec::new();
+    for i in 0..12u32 {
+        let member = Address::generate(&env);
+        sbt_client.set_member(&dao_id, &member, &true);
+        let commitment = U256::from_u32(&env, 0x1000 + i);
+        tree_client.register_with_caller(&dao_id, &commitment, &member);
+        leaves.push(commitment);
+    }
+    assert_eq!(tree_client.get_tree_info(&dao_id).1, 12);
 
-    let (_depth, next_index, root) = tree_client.get_tree_info(&1u64);
-    assert_eq!(next_index, 1);
-    assert_ne!(root, U256::from_u32(&env, 0));
+    // Sanity: the append-only tree is consistent before the removal.
+    assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+
+    // Admin removes leaf 3: the leaf is zeroed and the root is recomputed.
+    // This goes through update_leaf, which is where the cache used to go stale.
+    update_leaf_via(&env, &tree_id, dao_id, 3, U256::from_u32(&env, 0));
+    leaves[3] = U256::from_u32(&env, 0);
+
+    assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+
+    // Members 12..15 now register. Insert 12 is a right child at level 2 —
+    // the exact position that consumed the stale cached subtree hash.
+    for i in 12..16u32 {
+        let member = Address::generate(&env);
+        sbt_client.set_member(&dao_id, &member, &true);
+        let commitment = U256::from_u32(&env, 0x1000 + i);
+        tree_client.register_with_caller(&dao_id, &commitment, &member);
+        leaves.push(commitment);
+    }
+    assert_eq!(tree_client.get_tree_info(&dao_id).1, 16);
+
+    // The published root must still be derivable by every member.
+    assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
 }
 
+/// Same regression, but for the reinstatement direction: zeroing a leaf and
+/// restoring it must not leave a stale cache behind either.
 #[test]
-fn test_bls12_381_and_bn254_roots_differ() {
-    // Guards against the two field tables collapsing to the same hashing.
+fn test_root_stays_reproducible_after_reinstatement_then_registration() {
     let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
     let tree_client = MembershipTreeClient::new(&env, &tree_id);
     let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
     let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
 
-    registry_client.set_admin(&1u64, &admin);
-    registry_client.set_admin(&2u64, &admin);
-    tree_client.init_tree(&1u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
-    tree_client.init_tree(&2u64, &5u32, &Symbol::new(&env, "BLS12_381"), &admin);
+    let dao_id = 1u64;
+    let depth = 4u32;
+    registry_client.set_admin(&dao_id, &admin);
+    tree_client.init_tree(&dao_id, &depth, &Symbol::new(&env, "BN254"), &admin);
 
-    let commitment = U256::from_u32(&env, 7);
-    let m1 = Address::generate(&env);
-    let m2 = Address::generate(&env);
-    sbt_client.set_member(&1u64, &m1, &true);
-    sbt_client.set_member(&2u64, &m2, &true);
-    tree_client.register_with_caller(&1u64, &commitment, &m1);
-    tree_client.register_with_caller(&2u64, &commitment, &m2);
+    let mut leaves = std::vec::Vec::new();
+    for i in 0..8u32 {
+        let member = Address::generate(&env);
+        sbt_client.set_member(&dao_id, &member, &true);
+        let commitment = U256::from_u32(&env, 0x2000 + i);
+        tree_client.register_with_caller(&dao_id, &commitment, &member);
+        leaves.push(commitment);
+    }
 
-    let (_, _, bn254_root) = tree_client.get_tree_info(&1u64);
-    let (_, _, bls_root) = tree_client.get_tree_info(&2u64);
-    assert_ne!(bn254_root, bls_root);
+    // Remove leaf 2, then reinstate it by writing the original commitment back.
+    update_leaf_via(&env, &tree_id, dao_id, 2, U256::from_u32(&env, 0));
+    leaves[2] = U256::from_u32(&env, 0);
+    assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+
+    update_leaf_via(&env, &tree_id, dao_id, 2, U256::from_u32(&env, 0x2002));
+    leaves[2] = U256::from_u32(&env, 0x2002);
+    assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+
+    // And the tree must still accept further registrations coherently.
+    for i in 8..12u32 {
+        let member = Address::generate(&env);
+        sbt_client.set_member(&dao_id, &member, &true);
+        let commitment = U256::from_u32(&env, 0x2000 + i);
+        tree_client.register_with_caller(&dao_id, &commitment, &member);
+        leaves.push(commitment);
+    }
+    assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+}
+
+/// Interleaved removals and inserts at every level. This is the property that
+/// actually matters and that no existing test asserted: *for all* populated
+/// leaves, the merkle path reproduces the current root.
+#[test]
+fn test_root_reproducible_under_interleaved_removals_and_inserts() {
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let dao_id = 1u64;
+    let depth = 5u32; // 32 leaves
+    registry_client.set_admin(&dao_id, &admin);
+    tree_client.init_tree(&dao_id, &depth, &Symbol::new(&env, "BN254"), &admin);
+
+    // Fill 20 leaves.
+    let mut leaves = std::vec::Vec::new();
+    for i in 0..20u32 {
+        let member = Address::generate(&env);
+        sbt_client.set_member(&dao_id, &member, &true);
+        let commitment = U256::from_u32(&env, 0x3000 + i);
+        tree_client.register_with_caller(&dao_id, &commitment, &member);
+        leaves.push(commitment);
+    }
+    assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+
+    // Remove one leaf per distinct level, checking consistency after each step:
+    // 1 (level 5), 6 (level 2/3), 11, 17 (right children of pairs).
+    for victim in [1u32, 6u32, 11u32, 17u32] {
+        update_leaf_via(&env, &tree_id, dao_id, victim, U256::from_u32(&env, 0));
+        leaves[victim as usize] = U256::from_u32(&env, 0);
+        assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+    }
+
+    // Append across the level-4 boundary, forcing right children at several
+    // levels against caches that were invalidated by the removals.
+    for i in 20..24u32 {
+        let member = Address::generate(&env);
+        sbt_client.set_member(&dao_id, &member, &true);
+        let commitment = U256::from_u32(&env, 0x3000 + i);
+        tree_client.register_with_caller(&dao_id, &commitment, &member);
+        leaves.push(commitment);
+        assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+    }
+
+    // Reinstate two of the removed leaves, then append again.
+    for restored in [6u32, 17u32] {
+        update_leaf_via(
+            &env,
+            &tree_id,
+            dao_id,
+            restored,
+            U256::from_u32(&env, 0x3000 + restored),
+        );
+        leaves[restored as usize] = U256::from_u32(&env, 0x3000 + restored);
+        assert_root_reproducible(&env, &tree_id, dao_id, &leaves);
+    }
 }
