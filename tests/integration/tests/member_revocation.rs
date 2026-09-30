@@ -66,6 +66,8 @@ fn setup_contracts(env: &Env) -> (Address, Address, Address, Address, Address) {
         voting::Voting,
         (tree_id.clone(), registry_id.clone(), guardian),
     );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(env, &voting_id);
 
     let admin = Address::generate(env);
 

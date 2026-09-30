@@ -9,6 +9,9 @@ mod mock_tree {
     pub enum DataKey {
         SbtContract,
         CurrentRoot(u64),
+        RootIndex(u64, U256),
+        NextRootIdx(u64),
+        MinValidRootIdx(u64),
     }
 
     #[contract]
@@ -27,9 +30,28 @@ mod mock_tree {
                 .unwrap()
         }
 
+        /// Publish a root as the DAO's current one.
+        ///
+        /// Also records an index for it, because the real tree indexes every
+        /// root it publishes and `root_idx` is a hard error for a root it does
+        /// not know. Without that, the mock advertised a current root it could
+        /// not index, and every `root_idx` lookup — which the revocation check
+        /// now performs on *both* vote modes — failed.
         pub fn set_root(env: Env, dao_id: u64, root: U256) {
             let key = DataKey::CurrentRoot(dao_id);
             env.storage().persistent().set(&key, &root);
+            let idx_key = DataKey::RootIndex(dao_id, root.clone());
+            if !env.storage().persistent().has(&idx_key) {
+                let next: u32 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::NextRootIdx(dao_id))
+                    .unwrap_or(0);
+                env.storage().persistent().set(&idx_key, &next);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::NextRootIdx(dao_id), &(next + 1));
+            }
         }
 
         pub fn get_root(env: Env, dao_id: u64) -> U256 {
@@ -40,10 +62,75 @@ mod mock_tree {
                 .unwrap_or(U256::from_u32(&env, 0))
         }
 
-        pub fn curr_idx(_env: Env, _dao_id: u64) -> u32 {
-            // Mock implementation: return index 0 for current root
-            // Real contract tracks root history, mock doesn't need to
+        pub fn curr_idx(env: Env, dao_id: u64) -> u32 {
+            let root = Self::get_root(env.clone(), dao_id);
+            Self::root_idx(env, dao_id, root)
+        }
+
+        /// Index of a root in the mock's history.
+        ///
+        /// This and `min_root` did not exist on the mock before, which is why
+        /// revocation could not be tested at all: the voting contract's root
+        /// check reached for them only on the Trailing arm, so Fixed-mode
+        /// behaviour — the mode revocation actually applies to — had no mock
+        /// surface to express, and the Fixed arm's missing `min_root` check was
+        /// untestable by construction rather than by oversight (#audit-H3).
+        pub fn root_idx(env: Env, dao_id: u64, root: U256) -> u32 {
+            if let Some(idx) = env
+                .storage()
+                .persistent()
+                .get::<_, u32>(&DataKey::RootIndex(dao_id, root.clone()))
+            {
+                return idx;
+            }
+            // The real tree indexes its empty root at 0 when it is initialised,
+            // so a tree that has never had `set_root` called on it still has a
+            // coherent current root. Mirror that: the current root is index 0
+            // until something publishes a later one. Any *other* unknown root
+            // is a genuine RootNotFound, as on the real contract.
+            if root == Self::get_root(env.clone(), dao_id) {
+                return 0;
+            }
+            panic!("RootNotFound")
+        }
+
+        pub fn set_root_index(env: Env, dao_id: u64, root: U256, index: u32) {
+            env.storage()
+                .persistent()
+                .set(&DataKey::RootIndex(dao_id, root), &index);
+        }
+
+        /// The revocation floor, mirroring `MinValidRootIdx` in the real tree:
+        /// `remove_member` raises it, and every root below it predates the
+        /// removal. The real contract has no setter for it either, so the mock
+        /// only offers the same one-way operation.
+        pub fn min_root(env: Env, dao_id: u64) -> u32 {
+            let key = DataKey::MinValidRootIdx(dao_id);
+            env.storage().persistent().get(&key).unwrap_or(0)
+        }
+
+        /// Single-hop form of the three root facts, matching the real tree.
+        /// 0 = eligible, 1 = not in history, 2 = predates the election,
+        /// 3 = predates a member removal.
+        pub fn root_eligibility(env: Env, dao_id: u64, root: U256, earliest: u32) -> u32 {
+            if !Self::root_ok(env.clone(), dao_id, root.clone()) {
+                return 1;
+            }
+            let idx = Self::root_idx(env.clone(), dao_id, root);
+            if idx < earliest {
+                return 2;
+            }
+            if idx < Self::min_root(env, dao_id) {
+                return 3;
+            }
             0
+        }
+
+        /// Simulate `remove_member` advancing the revocation floor.
+        pub fn remove_member_at(env: Env, dao_id: u64, root_index: u32) {
+            env.storage()
+                .persistent()
+                .set(&DataKey::MinValidRootIdx(dao_id), &root_index);
         }
 
         pub fn revok_at(_env: Env, _dao_id: u64, _commitment: U256) -> Option<u64> {
@@ -171,6 +258,16 @@ mod mock_transcript_registry {
     pub enum DataKey {
         AttestedVk(BytesN<32>),
         Attestation(BytesN<32>, BytesN<32>),
+        /// When set, `is_vk_attested` answers true for any hash.
+        ///
+        /// `set_vk` treats a missing transcript registry as a hard error
+        /// (#662, fail-closed on purpose), so every test that registers a
+        /// verification key needs one. Most of them are not testing attestation
+        /// — they are testing the thing the VK exists to verify — so they opt
+        /// into this permissive mode rather than pre-registering a hash for
+        /// every key they construct. The three tests that *do* exercise the
+        /// gate install their own strict registry over the top of this one.
+        AttestAll(bool),
     }
 
     #[contract]
@@ -195,7 +292,21 @@ mod mock_transcript_registry {
                 .set(&DataKey::Attestation(transcript_hash, vk_hash), &attested);
         }
 
+        pub fn set_attest_all(env: Env, attest_all: bool) {
+            env.storage()
+                .persistent()
+                .set(&DataKey::AttestAll(attest_all), &attest_all);
+        }
+
         pub fn is_vk_attested(env: Env, vk_hash: BytesN<32>) -> bool {
+            let attest_all: bool = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AttestAll(true))
+                .unwrap_or(false);
+            if attest_all {
+                return true;
+            }
             env.storage()
                 .persistent()
                 .get(&DataKey::AttestedVk(vk_hash))
@@ -235,6 +346,14 @@ fn setup_env_with_registry() -> (Env, Address, Address, Address, Address, Addres
     sbt_client.set_registry(&registry_id);
 
     let member = Address::generate(&env);
+
+    // `set_vk` is fail-closed without a transcript registry (#662), so give
+    // every test a permissive one. Tests that mean to exercise the attestation
+    // gate overwrite it with a strict registry of their own.
+    let transcript_id = env.register(mock_transcript_registry::MockTranscriptRegistry, ());
+    mock_transcript_registry::MockTranscriptRegistryClient::new(&env, &transcript_id)
+        .set_attest_all(&true);
+    VotingClient::new(&env, &voting_id).set_transcript_registry(&transcript_id);
 
     (env, voting_id, tree_id, sbt_id, registry_id, member)
 }
@@ -2835,7 +2954,7 @@ fn test_commit_reveal_finalizes_candidate_seed() {
     let first_value = BytesN::from_array(&env, &[1; 32]);
     let second_value = BytesN::from_array(&env, &[2; 32]);
 
-    voting.set_election_config(&1, &proposal_id, &0, &0, &2);
+    voting.set_election_config(&1, &proposal_id, &0, &0, &2, &first);
     voting.commit_randomness(
         &1,
         &proposal_id,
@@ -3001,7 +3120,7 @@ fn test_election_config_stores_num_candidates() {
         &VoteMode::Fixed,
     );
 
-    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &3u32);
+    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &3u32, &admin);
 
     let config = voting_client.get_election_config(&1u64, &proposal_id);
     assert!(config.is_some());
@@ -3085,7 +3204,7 @@ fn test_vote_with_num_candidates_1_rejects_vote_choice_1() {
         &VoteMode::Fixed,
     );
 
-    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &1u32);
+    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &1u32, &admin);
 
     let proposal = voting_client.get_proposal(&1u64, &proposal_id);
     let nullifier = U256::from_u32(&env, 99999);
@@ -3127,7 +3246,7 @@ fn test_vote_with_num_candidates_2_accepts_both_choices() {
         &VoteMode::Fixed,
     );
 
-    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &2u32);
+    voting_client.set_election_config(&1u64, &proposal_id, &0, &0, &2u32, &admin);
 
     let proposal = voting_client.get_proposal(&1u64, &proposal_id);
     let proof = create_dummy_proof(&env);
@@ -3367,6 +3486,51 @@ fn test_recursive_tally_submission() {
 // ============================================================================
 
 // QV circuit has 6 public signals -> IC length must be 7.
+/// A verification key shaped for the Sybil-weighted circuit.
+///
+/// `set_sybil_vk` checks `ic.len() == SYBIL_NUM_PUBLIC_SIGNALS + 1` (= 10), which
+/// is a different arity from the plain vote circuit's 7, so the shared
+/// `create_dummy_vk` is rejected by it.
+fn create_dummy_sybil_vk(env: &Env) -> VerificationKey {
+    let g1 = bn254_g1_generator(env);
+    let g2 = bn254_g2_generator(env);
+    let mut ic = soroban_sdk::Vec::new(env);
+    for _ in 0..10u32 {
+        ic.push_back(g1.clone());
+    }
+    VerificationKey {
+        alpha: g1.clone(),
+        beta: g2.clone(),
+        gamma: g2.clone(),
+        delta: g2.clone(),
+        ic,
+    }
+}
+
+/// The Sybil-weighted circuit takes the same `Proof` type as the vote circuit;
+/// the stubbed verifier means its contents do not matter here.
+/// A verification key shaped for the commit-reveal circuit
+/// (`COMMIT_NUM_PUBLIC_SIGNALS + 1` = 5 IC entries).
+fn create_dummy_commit_vk(env: &Env) -> VerificationKey {
+    let g1 = bn254_g1_generator(env);
+    let g2 = bn254_g2_generator(env);
+    let mut ic = soroban_sdk::Vec::new(env);
+    for _ in 0..5u32 {
+        ic.push_back(g1.clone());
+    }
+    VerificationKey {
+        alpha: g1.clone(),
+        beta: g2.clone(),
+        gamma: g2.clone(),
+        delta: g2.clone(),
+        ic,
+    }
+}
+
+fn create_dummy_sybil_proof(env: &Env) -> Proof {
+    create_dummy_proof(env)
+}
+
 fn create_dummy_qv_vk(env: &Env) -> VerificationKey {
     let g1 = bn254_g1_generator(env);
     let g2 = bn254_g2_generator(env);
@@ -4338,9 +4502,9 @@ fn test_cast_votes_leaves_no_nullifier_burned_when_the_batch_fails() {
 #[test]
 #[should_panic(expected = "Error(Contract, #68)")]
 fn test_cast_votes_enforces_the_candidate_bound() {
-    let (env, voting, _admin, proposal_id, root) = setup_batch_election();
+    let (env, voting, admin, proposal_id, root) = setup_batch_election();
     // One candidate means only index 0 is valid, so a "yes" (index 1) is out of range.
-    voting.set_election_config(&1u64, &proposal_id, &0i128, &0u64, &1u32);
+    voting.set_election_config(&1u64, &proposal_id, &0i128, &0u64, &1u32, &admin);
 
     let votes = soroban_sdk::vec![&env, batch_vote(&env, true, 701, &root)];
     voting.cast_votes(&1u64, &proposal_id, &votes);
@@ -4397,7 +4561,15 @@ fn test_set_vk_for_depth_rejects_depth_above_the_maximum() {
 fn test_election_can_declare_a_merkle_depth() {
     let (env, voting, admin, proposal_id, root) = setup_batch_election();
     voting.set_vk_for_depth(&1u64, &10u32, &create_dummy_vk(&env), &admin);
-    voting.set_election_config_with_depth(&1u64, &proposal_id, &0i128, &0u64, &2u32, &10u32);
+    voting.set_election_config_with_depth(
+        &1u64,
+        &proposal_id,
+        &0i128,
+        &0u64,
+        &2u32,
+        &10u32,
+        &admin,
+    );
 
     assert_eq!(voting.get_merkle_depth(&1u64, &proposal_id), 10);
     let config = voting.get_election_config(&1u64, &proposal_id).unwrap();
@@ -4420,14 +4592,22 @@ fn test_election_can_declare_a_merkle_depth() {
 #[test]
 #[should_panic(expected = "Error(Contract, #71)")]
 fn test_election_cannot_declare_a_depth_without_a_registered_key() {
-    let (_env, voting, _admin, proposal_id, _root) = setup_batch_election();
-    voting.set_election_config_with_depth(&1u64, &proposal_id, &0i128, &0u64, &2u32, &15u32);
+    let (_env, voting, admin, proposal_id, _root) = setup_batch_election();
+    voting.set_election_config_with_depth(
+        &1u64,
+        &proposal_id,
+        &0i128,
+        &0u64,
+        &2u32,
+        &15u32,
+        &admin,
+    );
 }
 
 #[test]
 #[should_panic(expected = "Error(Contract, #71)")]
 fn test_election_rejects_a_depth_above_the_maximum() {
-    let (_env, voting, _admin, proposal_id, _root) = setup_batch_election();
+    let (_env, voting, admin, proposal_id, _root) = setup_batch_election();
     voting.set_election_config_with_depth(
         &1u64,
         &proposal_id,
@@ -4435,6 +4615,7 @@ fn test_election_rejects_a_depth_above_the_maximum() {
         &0u64,
         &2u32,
         &(MAX_MERKLE_DEPTH + 1),
+        &admin,
     );
 }
 
@@ -4445,7 +4626,15 @@ fn test_replacing_a_depth_key_mid_election_is_rejected() {
     // must not silently start verifying against a different key.
     let (env, voting, admin, proposal_id, root) = setup_batch_election();
     voting.set_vk_for_depth(&1u64, &10u32, &create_dummy_vk(&env), &admin);
-    voting.set_election_config_with_depth(&1u64, &proposal_id, &0i128, &0u64, &2u32, &10u32);
+    voting.set_election_config_with_depth(
+        &1u64,
+        &proposal_id,
+        &0i128,
+        &0u64,
+        &2u32,
+        &10u32,
+        &admin,
+    );
 
     let mut replacement = create_dummy_vk(&env);
     replacement.alpha = BytesN::from_array(&env, &[0u8; 64]);
@@ -4466,9 +4655,17 @@ fn test_set_election_config_preserves_a_declared_depth() {
     // The plain setter must not silently reset the depth an election declared.
     let (env, voting, admin, proposal_id, _root) = setup_batch_election();
     voting.set_vk_for_depth(&1u64, &20u32, &create_dummy_vk(&env), &admin);
-    voting.set_election_config_with_depth(&1u64, &proposal_id, &0i128, &0u64, &2u32, &20u32);
+    voting.set_election_config_with_depth(
+        &1u64,
+        &proposal_id,
+        &0i128,
+        &0u64,
+        &2u32,
+        &20u32,
+        &admin,
+    );
 
-    voting.set_election_config(&1u64, &proposal_id, &5i128, &10u64, &3u32);
+    voting.set_election_config(&1u64, &proposal_id, &5i128, &10u64, &3u32, &admin);
 
     let config = voting.get_election_config(&1u64, &proposal_id).unwrap();
     assert_eq!(config.merkle_depth, 20);
@@ -4480,7 +4677,15 @@ fn test_set_election_config_preserves_a_declared_depth() {
 fn test_cast_votes_uses_the_depth_key_when_one_is_declared() {
     let (env, voting, admin, proposal_id, root) = setup_batch_election();
     voting.set_vk_for_depth(&1u64, &15u32, &create_dummy_vk(&env), &admin);
-    voting.set_election_config_with_depth(&1u64, &proposal_id, &0i128, &0u64, &2u32, &15u32);
+    voting.set_election_config_with_depth(
+        &1u64,
+        &proposal_id,
+        &0i128,
+        &0u64,
+        &2u32,
+        &15u32,
+        &admin,
+    );
 
     let votes = soroban_sdk::vec![
         &env,
@@ -4555,4 +4760,444 @@ fn test_set_vk_with_transcript_attestation() {
     voting.set_vk_with_transcript(&1u64, &dummy_vk, &admin, &transcript_hash);
     let stored_vk = voting.vk_for_version(&1u64, &1u32);
     assert_eq!(Voting::hash_vk(&env, &stored_vk), vk_hash);
+}
+
+// ── Security regression tests (#audit-H2, #audit-H3, #audit-C1) ─────────────
+//
+// Each of these fails on the code as it stood before the corresponding fix.
+// The note on each one says which behaviour it pins, so a future change that
+// reintroduces the bug fails here rather than in production.
+
+// ── #audit-H2: one nullifier, one storage class ─────────────────────────────
+//
+// `vote` marked nullifiers in Temporary storage and `vote_sybil_weighted`
+// marked them in Persistent, and each looked only in its own class. So the same
+// nullifier could be spent once through `vote` and again through
+// `vote_sybil_weighted`, producing two head-count votes and two weighted
+// tallies from one identity — defeating both the one-member-one-vote floor and
+// the Sybil weight cap at once. The comment in `vote_sybil_weighted` claimed
+// this was impossible; it was the comment that was wrong.
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")] // NullifierUsed
+fn test_sybil_weighted_rejects_a_nullifier_already_spent_by_vote() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+    sbt.set_member(&1u64, &member, &true);
+
+    let root = U256::from_u32(&env, 12345);
+    tree.set_root(&1u64, &root);
+    tree.set_root_index(&1u64, &root, &0);
+    voting.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+    voting.set_sybil_vk(&1u64, &create_dummy_sybil_vk(&env), &admin);
+    voting.set_attestation_root(&1u64, &1u64, &root, &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Cross-path nullifier"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // The same nullifier value in both calls, exactly as a member reusing one
+    // Poseidon(secret, daoId, proposalId) output across two circuits would.
+    let shared = U256::from_u32(&env, 4242);
+
+    voting.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &shared,
+        &root,
+        &create_all_zero_proof(&env),
+    );
+    assert!(voting.is_nullifier_used(&1u64, &proposal_id, &shared));
+
+    // The weighted path must now refuse: before the fix it consulted only
+    // Persistent storage, saw nothing, and accepted a second ballot.
+    voting.vote_sybil_weighted(
+        &1u64,
+        &proposal_id,
+        &true,
+        &shared,
+        &root,
+        &U256::from_u32(&env, 7),
+        &now,
+        &1u32,
+        &create_dummy_sybil_proof(&env),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")] // NullifierUsed
+fn test_commit_vote_rejects_a_nullifier_already_spent_by_vote() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+    sbt.set_member(&1u64, &member, &true);
+
+    let root = U256::from_u32(&env, 12345);
+    tree.set_root(&1u64, &root);
+    tree.set_root_index(&1u64, &root, &0);
+    voting.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+    voting.set_commit_vk(&1u64, &create_dummy_commit_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Commit vs vote"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+    voting.set_commit_reveal(
+        &1u64,
+        &proposal_id,
+        &(now + 600),
+        &(now + 600),
+        &(now + 1200),
+        &false,
+        &admin,
+    );
+
+    let shared = U256::from_u32(&env, 5150);
+    voting.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &shared,
+        &root,
+        &create_all_zero_proof(&env),
+    );
+
+    // Committing and voting directly are documented as mutually exclusive.
+    // They were not, for the same storage-class reason.
+    voting.commit_vote(
+        &1u64,
+        &proposal_id,
+        &shared,
+        &root,
+        &BytesN::from_array(&env, &[9u8; 32]),
+        &create_all_zero_proof(&env),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #50)")] // NotQuadraticProposal
+fn test_sybil_weighted_refuses_a_quadratic_election() {
+    // `vote`, `vote_bls381`, `cast_votes` and `vote_with_circuit` all refuse a
+    // Quadratic election and ballot it through `cast_qv_vote` in a disjoint
+    // `QvBallot` namespace. `vote_sybil_weighted` had no `vote_mode` check at
+    // all, so one member could take a QV ballot *and* a weighted tally in the
+    // same round.
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+    sbt.set_member(&1u64, &member, &true);
+
+    let root = U256::from_u32(&env, 12345);
+    tree.set_root(&1u64, &root);
+    tree.set_root_index(&1u64, &root, &0);
+    voting.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+    voting.set_qv_vk(&1u64, &create_dummy_qv_vk(&env), &admin);
+    voting.set_sybil_vk(&1u64, &create_dummy_sybil_vk(&env), &admin);
+    voting.set_attestation_root(&1u64, &1u64, &root, &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Quadratic"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Quadratic,
+    );
+
+    voting.vote_sybil_weighted(
+        &1u64,
+        &proposal_id,
+        &true,
+        &U256::from_u32(&env, 8080),
+        &root,
+        &U256::from_u32(&env, 7),
+        &now,
+        &1u32,
+        &create_dummy_sybil_proof(&env),
+    );
+}
+
+// ── #audit-H3: revocation must be live in Fixed mode too ───────────────────
+//
+// `remove_member` is the only writer of the tree's `min_root` floor, and it is
+// raised on every removal. Until the fix, only the Trailing arm of the root
+// check consulted it, so for Fixed-mode elections — the default — revocation
+// was inert: a member removed mid-election kept a valid proof against the
+// snapshot root and could still vote. The snapshot root is pinned against
+// eviction for the life of the proposal, so waiting did not help them either.
+
+#[test]
+#[should_panic(expected = "Error(Contract, #24)")]
+fn test_fixed_mode_vote_is_rejected_after_a_member_removal() {
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+    sbt.set_member(&1u64, &member, &true);
+
+    let root = U256::from_u32(&env, 12345);
+    tree.set_root(&1u64, &root);
+    tree.set_root_index(&1u64, &root, &0);
+    voting.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Revocable Fixed election"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    // The snapshot root is still exactly `eligible_root` and still in history,
+    // so nothing but `min_root` can reject this vote.
+    assert_eq!(voting.get_eligible_root(&1u64, &proposal_id), root);
+    assert!(tree.root_ok(&1u64, &root));
+
+    // Admin removes the member: the tree advances `min_root` past this root.
+    tree.remove_member_at(&1u64, &1);
+
+    voting.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &U256::from_u32(&env, 1111),
+        &root,
+        &create_all_zero_proof(&env),
+    );
+}
+
+#[test]
+fn test_fixed_mode_vote_still_works_when_nobody_has_been_removed() {
+    // The revocation floor is 0 for a DAO that has never removed anyone, so the
+    // new check must be a no-op there and not start rejecting honest voters.
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+
+    let admin = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+    sbt.set_member(&1u64, &member, &true);
+
+    let root = U256::from_u32(&env, 12345);
+    tree.set_root(&1u64, &root);
+    tree.set_root_index(&1u64, &root, &0);
+    voting.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting.create_proposal(
+        &1u64,
+        &String::from_str(&env, "No removals"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+
+    assert_eq!(tree.min_root(&1u64), 0);
+    voting.vote(
+        &1u64,
+        &proposal_id,
+        &true,
+        &U256::from_u32(&env, 2222),
+        &root,
+        &create_all_zero_proof(&env),
+    );
+    assert_eq!(voting.get_results(&1u64, &proposal_id), (1, 0));
+}
+
+// ── #audit-C1: admin entrypoints must require auth ─────────────────────────
+
+#[test]
+fn test_set_vk_for_depth_rejects_a_non_admin_caller() {
+    // `assert_admin` only *compares* the argument against the registry's admin;
+    // it never required that argument to authorise anything. The admin address
+    // is public via `get_admin`, so `set_vk_for_depth` was callable by anyone:
+    // register a key you chose, then pin it onto a live election, and every
+    // vote on that election is checked against a key you control.
+    let (env, voting_id, _tree_id, _sbt_id, registry_id, _member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+
+    // Keep `attacker` in scope: it is the address that would profit. The
+    // vulnerable version never consulted the signer at all, only the `admin`
+    // argument, so naming the real admin was enough to get in.
+    let _ = attacker;
+
+    // Turn authorisation mocking off entirely: nothing will sign. The
+    // vulnerable version had no `require_auth` at all, so it accepted this call
+    // and stored the attacker's key.
+    env.set_auths(&[]);
+
+    let res = voting.try_set_vk_for_depth(&1u64, &10u32, &create_dummy_vk(&env), &admin);
+    assert!(res.is_err(), "set_vk_for_depth must require authorisation");
+    assert!(
+        voting.get_vk_for_depth(&1u64, &10u32).is_none(),
+        "no key may be registered without authorisation"
+    );
+}
+
+#[test]
+fn test_set_election_config_rejects_a_non_admin_caller() {
+    // `set_election_config` took no `admin` argument at all, so it was an
+    // unauthenticated public mutator on a live election's configuration.
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+    sbt.set_member(&1u64, &member, &true);
+
+    let root = U256::from_u32(&env, 12345);
+    tree.set_root(&1u64, &root);
+    tree.set_root_index(&1u64, &root, &0);
+    voting.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Live two-candidate election"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &member,
+        &VoteMode::Fixed,
+    );
+    voting.set_election_config(&1u64, &proposal_id, &0i128, &0u64, &2u32, &admin);
+
+    let _ = attacker;
+
+    // Nothing will sign.
+    env.set_auths(&[]);
+
+    // Setting num_candidates to 1 on a live 2-candidate election makes
+    // `vote_choice_index >= num_candidates` reject every YES ballot for the
+    // rest of the election. One unauthenticated call, and the election's YES
+    // side is dead.
+    let res = voting.try_set_election_config(&1u64, &proposal_id, &0i128, &0u64, &1u32, &admin);
+    assert!(res.is_err());
+
+    // The config is untouched, so a YES vote still verifies.
+    assert_eq!(
+        voting
+            .get_election_config(&1u64, &proposal_id)
+            .unwrap()
+            .num_candidates,
+        2
+    );
+}
+
+#[test]
+fn test_set_election_config_accepts_the_proposal_creator() {
+    // The contract documents this setter as callable "during proposal creation
+    // or by DAO admin", so a member who can propose but does not administer the
+    // the DAO must keep working — but on their own proposal only, and with
+    // their own authorisation.
+    let (env, voting_id, tree_id, sbt_id, registry_id, member) = setup_env_with_registry();
+    let voting = VotingClient::new(&env, &voting_id);
+    let tree = mock_tree::MockTreeClient::new(&env, &tree_id);
+    let registry = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let sbt = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+
+    let admin = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    registry.set_admin(&1u64, &admin);
+    sbt.set_member(&1u64, &member, &true);
+    sbt.set_member(&1u64, &proposer, &true);
+
+    let root = U256::from_u32(&env, 12345);
+    tree.set_root(&1u64, &root);
+    tree.set_root_index(&1u64, &root, &0);
+    voting.set_vk(&1u64, &create_dummy_vk(&env), &admin);
+
+    let now = env.ledger().timestamp();
+    let proposal_id = voting.create_proposal(
+        &1u64,
+        &String::from_str(&env, "Proposer's election"),
+        &String::from_str(&env, ""),
+        &(now + 3600),
+        &proposer,
+        &VoteMode::Fixed,
+    );
+
+    // The creator is not the admin, but is authorised for their own proposal.
+    voting.set_election_config(&1u64, &proposal_id, &0i128, &0u64, &3u32, &proposer);
+    assert_eq!(
+        voting
+            .get_election_config(&1u64, &proposal_id)
+            .unwrap()
+            .num_candidates,
+        3
+    );
+
+    // A third party is neither admin nor creator, and is refused. With mocking
+    // off, an unauthenticated caller cannot get in at all; `stranger` is here to
+    // show the refusal is not specific to the admin address.
+    let _ = stranger;
+    env.set_auths(&[]);
+    let res = voting.try_set_election_config(&1u64, &proposal_id, &0i128, &0u64, &1u32, &stranger);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_unset_num_candidates_yields_a_satisfiable_circuit_signal() {
+    // The circuit constrains `LessThan(32)(voteChoice, numCandidates) === 1`.
+    // With `numCandidates == 0` that is unsatisfiable for every voteChoice, so
+    // no witness exists and no proof can be generated. `0` is both the
+    // documented "unbounded" sentinel and the value an election gets *by
+    // default*, because `ElectionConfig` is absent until someone calls the
+    // setter — so the default state of an election was unvotable.
+    assert_eq!(
+        crate::candidate_signal(0),
+        crate::UNBOUNDED_CANDIDATE_SIGNAL
+    );
+    // A real bound is passed through untouched, so the candidate constraint
+    // itself is not weakened.
+    assert_eq!(crate::candidate_signal(1), 1);
+    assert_eq!(crate::candidate_signal(7), 7);
+    assert_eq!(crate::candidate_signal(u32::MAX), u32::MAX);
 }

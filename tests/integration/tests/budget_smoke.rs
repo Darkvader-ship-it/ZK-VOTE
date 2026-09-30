@@ -61,6 +61,8 @@ fn setup(
         voting::Voting,
         (tree_id.clone(), registry_id.clone(), guardian),
     );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(env, &voting_id);
 
     let registry = DaoRegistryClient::new(env, &registry_id);
     let sbt = MembershipSbtClient::new(env, &sbt_id);
@@ -138,6 +140,8 @@ fn budget_set_vk_within_limit() {
         voting::Voting,
         (tree_id.clone(), registry_id.clone(), guardian),
     );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(&env, &voting_id);
 
     let registry = DaoRegistryClient::new(&env, &registry_id);
     let tree = MembershipTreeClient::new(&env, &tree_id);

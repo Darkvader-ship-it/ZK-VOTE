@@ -128,6 +128,8 @@ fn test_migrate_dao_and_vote_in_overlap() {
         voting::Voting,
         (tree_id.clone(), registry_id.clone(), guardian),
     );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(&env, &voting_id);
     let circuit_reg_id = env.register(circuit_registry::CircuitRegistry, (governance,));
 
     let registry_client = DaoRegistryClient::new(&env, &registry_id);
@@ -231,6 +233,8 @@ fn test_wrong_circuit_id_rejected() {
         voting::Voting,
         (tree_id.clone(), registry_id.clone(), guardian),
     );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(&env, &voting_id);
     let circuit_reg_id = env.register(circuit_registry::CircuitRegistry, (governance,));
 
     let registry_client = DaoRegistryClient::new(&env, &registry_id);
@@ -359,6 +363,8 @@ fn test_vote_with_circuit_id() {
         voting::Voting,
         (tree_id.clone(), registry_id.clone(), guardian),
     );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(&env, &voting_id);
     let circuit_reg_id = env.register(circuit_registry::CircuitRegistry, (governance,));
 
     let registry_client = DaoRegistryClient::new(&env, &registry_id);

@@ -7,10 +7,15 @@ edition = "2021"
 crate-type = ["rlib"]
 doctest = false
 
+# `src/lib.rs` exposes a `testkit` module used by the binaries under `tests/`.
+# Those link this crate as a normal dependency, so the crates that module needs
+# have to be real dependencies rather than dev-dependencies — a `#[cfg(test)]`
+# item would not be compiled for them.
 [dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+voting = { path = "../../contracts/voting", package = "voting", features = ["testutils"] }
 
 [dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
 hex = "0.4"
 
 # Import all contract crates with testutils enabled

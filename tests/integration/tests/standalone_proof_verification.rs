@@ -169,6 +169,11 @@ fn test_real_groth16_proof_verification() {
             admin.clone(),
         ),
     );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(
+        &env,
+        &voting_address,
+    );
     let voting_client = VotingClient::new(&env, &voting_address);
     println!("✅ Voting deployed\n");
 
