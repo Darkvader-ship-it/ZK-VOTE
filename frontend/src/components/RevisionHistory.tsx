@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { X, Clock, Loader2, Trash2 } from "lucide-react";
 import { Button } from "./ui/Button";
+import { useMounted } from "../hooks/useMounted";
 import {
   type CommentWithContent,
   type CommentMetadata,
@@ -31,6 +32,7 @@ export default function RevisionHistory({
 }: RevisionHistoryProps) {
   const [revisions, setRevisions] = useState<RevisionEntry[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const mounted = useMounted();
 
   useEffect(() => {
     // Build list of revisions (oldest first, current/deleted last)
@@ -100,35 +102,40 @@ export default function RevisionHistory({
       />
 
       {/* Modal */}
-      <div className="relative bg-background border border-border rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+      <div className="relative bg-background border border-border rounded-lg shadow-xl w-[calc(100%-2rem)] max-w-2xl max-h-[85dvh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
+        <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
           <h3 className="text-lg font-semibold">Revision History</h3>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="h-10 w-10 p-2 sm:h-8 sm:w-8"
+          >
             <X className="w-4 h-4" />
           </Button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden flex flex-col sm:flex-row">
           {/* Revision list */}
-          <div className="w-48 border-r border-border overflow-y-auto">
+          <div className="w-full sm:w-48 border-b sm:border-b-0 sm:border-r border-border overflow-x-auto sm:overflow-y-auto shrink-0 flex sm:flex-col">
             {revisions.map((revision, index) => (
               <button
                 key={revision.cid || `deleted-${index}`}
                 onClick={() => setSelectedIndex(index)}
-                className={`w-full px-4 py-3 text-left border-b border-border hover:bg-muted/50 transition-colors ${
-                  selectedIndex === index ? "bg-muted" : ""
+                className={`flex-1 sm:flex-none px-4 py-3 min-h-[48px] text-left border-r sm:border-r-0 border-b-0 sm:border-b border-border hover:bg-muted/50 transition-colors shrink-0 ${
+                  selectedIndex === index ? "bg-muted font-medium" : ""
                 }`}
               >
                 <div className="flex items-center gap-2">
                   {revision.isDeleted ? (
-                    <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                    <Trash2 className="w-3.5 h-3.5 text-destructive shrink-0" />
                   ) : (
-                    <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                    <Clock className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   )}
                   <span
-                    className={`text-sm font-medium ${revision.isDeleted ? "text-destructive" : ""}`}
+                    className={`text-sm ${revision.isDeleted ? "text-destructive" : ""}`}
                   >
                     {revision.isDeleted
                       ? "Deleted"
@@ -139,11 +146,15 @@ export default function RevisionHistory({
                 </div>
                 {revision.isDeleted && revision.deletedAt ? (
                   <p className="text-xs text-muted-foreground mt-1">
-                    {new Date(revision.deletedAt * 1000).toLocaleString()}
+                    {mounted
+                      ? new Date(revision.deletedAt * 1000).toLocaleString()
+                      : ""}
                   </p>
                 ) : revision.content?.createdAt ? (
                   <p className="text-xs text-muted-foreground mt-1">
-                    {new Date(revision.content.createdAt).toLocaleString()}
+                    {mounted
+                      ? new Date(revision.content.createdAt).toLocaleString()
+                      : ""}
                   </p>
                 ) : null}
               </button>
@@ -151,7 +162,7 @@ export default function RevisionHistory({
           </div>
 
           {/* Selected revision content */}
-          <div className="flex-1 overflow-y-auto p-4">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6">
             {selectedRevision?.isLoading ? (
               <div className="flex items-center justify-center h-full">
                 <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />

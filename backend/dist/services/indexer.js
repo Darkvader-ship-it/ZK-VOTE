@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Event Indexer for DaoVote
  *
@@ -8,6 +9,11 @@ import * as StellarSdk from "@stellar/stellar-sdk";
 import path from "path";
 import { fileURLToPath } from "url";
 import * as db from "./db.js";
+import { serviceLastRunTime, serviceErrors, serviceRunning, indexerEventsProcessed, indexerLag as indexerLagGauge, indexerWatermarkLedger, indexerPollDuration, indexerOverrunSkips, indexerQueueDepth, indexerRpcStreamReconnectsTotal, } from "./metrics.js";
+import { markDegraded, markHealthy } from "./service-health.js";
+import { WatermarkScheduler } from "./indexer-scheduler.js";
+import { withIndexerSpan } from "./indexer-tracing.js";
+import { isReplayCaptureEnabled, recordInteraction, startRecording, stopRecording, writeFixture, } from "./replay.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 // ============================================
@@ -38,9 +44,18 @@ const EVENT_TYPES = {
 // STATE
 // ============================================
 let isPolling = false;
+let isStreamingMode = false;
 let rpcServer = null;
+let indexerLag = 0;
+let hasGap = false;
+let catchUpMode = false;
+let activeScheduler = null;
+let eventQueue = [];
+let isDrainingQueue = false;
+const HIGH_WATERMARK = 500;
+const LOW_WATERMARK = 100;
 const log = (level, event, meta = {}) => {
-    console.log(JSON.stringify({ level, event, ts: new Date().toISOString(), ...meta }));
+    console.info(JSON.stringify({ level, event, ts: new Date().toISOString(), ...meta }));
 };
 // ============================================
 // EVENT PARSING
@@ -54,6 +69,7 @@ function parseEventData(event) {
         const data = event.value;
         let eventType = "unknown";
         let daoId = null;
+        let proposalId = null;
         let parsed = {};
         if (topics.length > 0) {
             const eventName = StellarSdk.scValToNative(topics[0]);
@@ -64,6 +80,21 @@ function parseEventData(event) {
                 }
                 catch {
                     // Not a DAO ID
+                }
+            }
+            // Proposal-scoped events carry the proposal ID as their second topic
+            // (see ProposalEvent / VoteEvent in contracts/voting). It is not part of
+            // the event value, so lift it into `data` — governance analytics (#322)
+            // groups turnout by it.
+            if (topics.length > 2) {
+                try {
+                    const topicProposalId = Number(StellarSdk.scValToNative(topics[2]));
+                    if (Number.isFinite(topicProposalId)) {
+                        proposalId = topicProposalId;
+                    }
+                }
+                catch {
+                    // Not a proposal ID — event is DAO scoped only.
                 }
             }
         }
@@ -78,7 +109,7 @@ function parseEventData(event) {
         return {
             type: eventType,
             daoId,
-            data: parsed,
+            data: proposalId === null ? parsed : { proposalId, ...parsed },
             ledger: event.ledger ?? 0,
             txHash: event.txHash ?? null,
             timestamp: new Date().toISOString(),
@@ -92,22 +123,51 @@ function parseEventData(event) {
 // ============================================
 // POLLING
 // ============================================
-/**
- * Poll for new events from Soroban RPC
- */
-async function pollEvents(server, contracts, startLedger) {
+function throwIfAborted(signal) {
+    if (signal.aborted) {
+        throw signal.reason instanceof Error
+            ? signal.reason
+            : new Error("Indexer poll aborted");
+    }
+}
+/** Poll for new events from Soroban RPC. */
+async function pollEvents(server, contracts, startLedger, parentSpan, signal) {
     try {
-        const latestLedger = await server.getLatestLedger();
+        throwIfAborted(signal);
+        const latestLedger = await withIndexerSpan("indexer.stellar.latest_ledger", parentSpan, { component: "stellar" }, () => server.getLatestLedger());
+        throwIfAborted(signal);
         const currentLedger = latestLedger.sequence;
+        recordInteraction("rpc", "rpc.getLatestLedger", {
+            sequence: currentLedger,
+        });
         if (startLedger >= currentLedger) {
+            indexerLag = 0;
+            indexerLagGauge.set(0);
+            catchUpMode = false;
             return startLedger;
         }
+        indexerLag = currentLedger - startLedger;
+        indexerLagGauge.set(indexerLag);
+        let targetEndLedger = currentLedger;
+        if (indexerLag > 100) {
+            catchUpMode = true;
+            hasGap = true;
+            targetEndLedger = startLedger + 100;
+        }
+        else {
+            catchUpMode = false;
+        }
         for (const contractId of contracts) {
+            throwIfAborted(signal);
             try {
-                // The SDK now requires endLedger
-                const events = await server.getEvents({
+                const events = await withIndexerSpan("indexer.stellar.get_events", parentSpan, {
+                    component: "stellar",
+                    contract: contractId,
+                    start_ledger: startLedger + 1,
+                    end_ledger: targetEndLedger,
+                }, () => server.getEvents({
                     startLedger: startLedger + 1,
-                    endLedger: currentLedger,
+                    endLedger: targetEndLedger,
                     filters: [
                         {
                             type: "contract",
@@ -115,36 +175,55 @@ async function pollEvents(server, contracts, startLedger) {
                         },
                     ],
                     limit: 100,
-                });
+                }));
+                throwIfAborted(signal);
                 if (events.events && events.events.length > 0) {
-                    let addedCount = 0;
-                    for (const event of events.events) {
-                        const parsed = parseEventData(event);
-                        if (parsed && parsed.daoId !== null) {
-                            const eventInput = {
-                                daoId: parsed.daoId,
-                                type: parsed.type,
-                                data: parsed.data,
-                                ledger: parsed.ledger,
-                                txHash: parsed.txHash,
-                                timestamp: parsed.timestamp,
-                                verified: true, // Events from RPC are verified
-                            };
-                            const added = db.addEvent(eventInput);
-                            if (added)
-                                addedCount++;
+                    const addedCount = await withIndexerSpan("indexer.db.persist_events", parentSpan, {
+                        component: "database",
+                        contract: contractId,
+                        event_count: events.events.length,
+                    }, () => {
+                        let count = 0;
+                        for (const event of events.events) {
+                            throwIfAborted(signal);
+                            const parsed = parseEventData(event);
+                            if (parsed && parsed.daoId !== null) {
+                                const eventInput = {
+                                    daoId: parsed.daoId,
+                                    type: parsed.type,
+                                    data: parsed.data,
+                                    ledger: parsed.ledger,
+                                    txHash: parsed.txHash,
+                                    timestamp: parsed.timestamp,
+                                    verified: true,
+                                };
+                                if (db.addEvent(eventInput)) {
+                                    count++;
+                                    recordInteraction("db", "db.addEvent", {
+                                        daoId: eventInput.daoId,
+                                        type: eventInput.type,
+                                        ledger: eventInput.ledger,
+                                        txHash: eventInput.txHash,
+                                        timestamp: eventInput.timestamp,
+                                    });
+                                }
+                            }
                         }
-                    }
+                        return count;
+                    });
                     if (addedCount > 0) {
+                        indexerEventsProcessed.inc({ event_type: "indexed" }, addedCount);
                         log("info", "events_indexed", {
                             contract: contractId.slice(0, 8) + "...",
                             count: addedCount,
-                            latestLedger: currentLedger,
+                            latestLedger: targetEndLedger,
                         });
                     }
                 }
             }
             catch (err) {
+                if (signal.aborted)
+                    throw err;
                 const error = err;
                 if (!error.message.includes("not found")) {
                     log("warn", "poll_contract_failed", {
@@ -154,48 +233,46 @@ async function pollEvents(server, contracts, startLedger) {
                 }
             }
         }
-        return currentLedger;
+        throwIfAborted(signal);
+        await withIndexerSpan("indexer.db.persist_checkpoint", parentSpan, { component: "database", ledger: targetEndLedger }, () => db.setMetadata("indexerCheckpoint", new Date().toISOString()));
+        return targetEndLedger;
     }
     catch (err) {
         log("error", "poll_events_failed", { error: err.message });
-        return startLedger;
+        throw err;
     }
 }
 // ============================================
 // VERIFICATION
 // ============================================
-/**
- * Verify a pending event against the chain
- * Returns true if verified, false if should be deleted
- */
-async function verifyEventOnChain(event) {
+/** Verify a pending event against the chain. */
+async function verifyEventOnChain(event, parentSpan, signal) {
     if (!rpcServer || !event.tx_hash)
         return false;
     try {
-        // Try to get the transaction
-        const txResult = await rpcServer.getTransaction(event.tx_hash);
+        throwIfAborted(signal);
+        const txResult = await withIndexerSpan("indexer.stellar.verify_transaction", parentSpan, { component: "stellar" }, () => rpcServer.getTransaction(event.tx_hash));
+        throwIfAborted(signal);
         if (txResult.status === StellarSdk.rpc.Api.GetTransactionStatus.SUCCESS) {
-            // Transaction confirmed - mark as verified
-            db.verifyEvent(event.tx_hash, txResult.ledger);
+            await withIndexerSpan("indexer.db.verify_event", parentSpan, { component: "database", ledger: txResult.ledger }, () => db.verifyEvent(event.tx_hash, txResult.ledger));
             log("info", "event_verified", {
                 txHash: event.tx_hash,
                 ledger: txResult.ledger,
             });
             return true;
         }
-        else if (txResult.status === StellarSdk.rpc.Api.GetTransactionStatus.FAILED) {
-            // Transaction failed - delete the event
-            db.deleteUnverifiedEvent(event.tx_hash);
+        if (txResult.status === StellarSdk.rpc.Api.GetTransactionStatus.FAILED) {
+            await withIndexerSpan("indexer.db.delete_failed_event", parentSpan, { component: "database" }, () => db.deleteUnverifiedEvent(event.tx_hash));
             log("warn", "event_verification_failed", {
                 txHash: event.tx_hash,
                 status: txResult.status,
             });
-            return false;
         }
-        // NOT_FOUND - keep pending for now
         return false;
     }
     catch (err) {
+        if (signal.aborted)
+            throw err;
         log("warn", "event_verify_error", {
             txHash: event.tx_hash,
             error: err.message,
@@ -203,14 +280,89 @@ async function verifyEventOnChain(event) {
         return false;
     }
 }
-/**
- * Background job to verify pending events
- */
-async function verifyPendingEvents() {
-    const unverified = db.getUnverifiedEvents(10);
+/** Background job to verify pending events. */
+async function verifyPendingEvents(parentSpan, signal) {
+    const unverified = await withIndexerSpan("indexer.db.load_pending_events", parentSpan, { component: "database" }, () => {
+        db.cleanupExpiredPendingEvents(15 * 60 * 1000);
+        return db.getUnverifiedEvents(10);
+    });
+    verificationBacklog = unverified.length;
     for (const event of unverified) {
-        await verifyEventOnChain(event);
+        throwIfAborted(signal);
+        if (await verifyEventOnChain(event, parentSpan, signal)) {
+            verificationBacklog = Math.max(0, verificationBacklog - 1);
+        }
     }
+}
+/** Directory replay fixtures are written to when capture is enabled. */
+const REPLAY_FIXTURE_DIR = process.env.RELAY_REPLAY_DIR ||
+    path.join(__dirname, "..", "..", "data", "replay");
+/** Fixture from the most recent captured cycle, exposed for tooling/tests. */
+let lastReplayFixture = null;
+/**
+ * The replay fixture for the most recently captured poll cycle, or `null`
+ * when capture is disabled or no cycle has completed yet.
+ */
+export function getLastReplayFixture() {
+    return lastReplayFixture;
+}
+/**
+ * Persist a captured cycle so it can be replayed offline (#321).
+ *
+ * Fixture writes are best effort: a full disk or a read-only mount must not
+ * turn a healthy poll cycle into a failed one.
+ */
+function persistReplayFixture(fixture) {
+    lastReplayFixture = fixture;
+    try {
+        writeFixture(path.join(REPLAY_FIXTURE_DIR, `poll-cycle-${fixture.traceId}.json`), fixture);
+        log("info", "replay_fixture_written", {
+            traceId: fixture.traceId,
+            interactions: fixture.interactions.length,
+            digest: fixture.digest,
+        });
+    }
+    catch (error) {
+        log("warn", "replay_fixture_write_failed", {
+            error: error.message,
+        });
+    }
+}
+async function runPollingCycle(server, contracts, lastLedger, signal) {
+    const stopTimer = indexerPollDuration.startTimer();
+    const capturing = isReplayCaptureEnabled();
+    try {
+        return await withIndexerSpan("indexer.poll_cycle", null, { contract_count: contracts.length, start_ledger: lastLedger }, async (rootSpan) => {
+            // Recording starts inside the root span so the fixture inherits the
+            // cycle's trace ID — a fixture and its exported spans are joinable.
+            if (capturing)
+                startRecording("indexer.poll_cycle", rootSpan.traceId);
+            const newLedger = await pollEvents(server, contracts, lastLedger, rootSpan, signal);
+            throwIfAborted(signal);
+            if (newLedger > lastLedger) {
+                await withIndexerSpan("indexer.db.persist_watermark", rootSpan, { component: "database", ledger: newLedger }, () => {
+                    db.setMetadata("lastLedger", newLedger);
+                    recordInteraction("db", "db.setWatermark", { ledger: newLedger });
+                });
+            }
+            indexerWatermarkLedger.set(newLedger);
+            await verifyPendingEvents(rootSpan, signal);
+            markHealthy("indexer");
+            serviceLastRunTime.set({ service: "indexer" }, Date.now() / 1000);
+            return newLedger;
+        });
+    }
+    finally {
+        stopTimer();
+        const fixture = capturing ? stopRecording() : null;
+        if (fixture)
+            persistReplayFixture(fixture);
+    }
+}
+function handlePollError(error) {
+    serviceErrors.inc({ service: "indexer" });
+    markDegraded("indexer", error.message);
+    log("error", "poll_failed", { error: error.message });
 }
 // ============================================
 // PUBLIC API
@@ -225,52 +377,95 @@ export async function startIndexer(server, contracts, pollIntervalMs = 5000) {
     }
     isPolling = true;
     rpcServer = server;
+    serviceRunning.set({ service: "indexer" }, 1);
     // Initialize database and migrate from JSON if exists
     db.initDb();
     const jsonPath = path.join(__dirname, "..", "..", "data", "events.json");
     db.migrateFromJson(jsonPath);
+    // Migrate from monolithic events table to per-DAO partitions
+    // Idempotent — safe to run on every startup until migration is complete
+    const migrated = db.migrateToPartitions();
+    if (migrated > 0) {
+        log("info", "partition_migration_complete", { migrated });
+    }
     let lastLedger = db.getMetadata("lastLedger") ?? 0;
     log("info", "indexer_started", {
         contracts: contracts.length,
         pollInterval: pollIntervalMs,
         startLedger: lastLedger,
     });
-    // Initial poll
-    lastLedger = await pollEvents(rpcServer, contracts, lastLedger);
-    db.setMetadata("lastLedger", lastLedger);
-    // Periodic polling
-    const poll = async () => {
-        if (!isPolling)
-            return;
-        try {
-            const newLedger = await pollEvents(rpcServer, contracts, lastLedger);
-            if (newLedger > lastLedger) {
-                lastLedger = newLedger;
-                db.setMetadata("lastLedger", lastLedger);
-            }
-            // Also verify any pending events
-            await verifyPendingEvents();
-        }
-        catch (err) {
-            log("error", "poll_failed", { error: err.message });
-        }
-        setTimeout(poll, pollIntervalMs);
-    };
-    setTimeout(poll, pollIntervalMs);
+    const initialController = new AbortController();
+    try {
+        lastLedger = await runPollingCycle(rpcServer, contracts, lastLedger, initialController.signal);
+    }
+    catch (error) {
+        handlePollError(error instanceof Error ? error : new Error(String(error)));
+    }
+    activeScheduler = new WatermarkScheduler({
+        intervalMs: pollIntervalMs,
+        maxQueueDepth: MAX_VERIFICATION_BACKLOG,
+        getQueueDepth: () => verificationBacklog,
+        runCycle: async (signal) => {
+            lastLedger = await runPollingCycle(rpcServer, contracts, lastLedger, signal);
+            indexerCyclesTotal.inc({ result: "completed" });
+        },
+        onOverrun: (skippedPolls, reason) => {
+            indexerOverrunSkips.inc(skippedPolls);
+            if (reason === "queue_full")
+                indexerShedPolls.inc(skippedPolls);
+            log("warn", "indexer_poll_overrun", {
+                skippedPolls,
+                reason,
+                backlog: verificationBacklog,
+            });
+        },
+        onBackpressure: (stats) => {
+            indexerBackpressureLevel.set(stats.backpressureLevel);
+            indexerPollIntervalSeconds.set(stats.currentIntervalMs / 1000);
+            log("warn", "indexer_backpressure_changed", {
+                level: stats.backpressureLevel,
+                intervalMs: stats.currentIntervalMs,
+                skippedPolls: stats.skippedPolls,
+                shedPolls: stats.shedPolls,
+                backlog: verificationBacklog,
+            });
+        },
+        onError: (error) => {
+            indexerCyclesTotal.inc({ result: "failed" });
+            handlePollError(error);
+        },
+    });
+    indexerBackpressureLevel.set(0);
+    indexerPollIntervalSeconds.set(pollIntervalMs / 1000);
+    activeScheduler.start();
 }
 /**
  * Stop the indexer
  */
 export function stopIndexer() {
     isPolling = false;
-    db.closeDb();
-    log("info", "indexer_stopped");
+    serviceRunning.set({ service: "indexer" }, 0);
+    rpcServer = null;
+    verificationBacklog = 0;
+    const scheduler = activeScheduler;
+    activeScheduler = null;
+    // The returned promise settles only once the in-flight cycle has unwound and
+    // the database is closed, so a caller that awaits it — shutdown, or a test —
+    // is guaranteed no poll is still touching the connection (#323).
+    const stopped = scheduler ? scheduler.stop() : Promise.resolve();
+    return stopped
+        .catch(() => undefined)
+        .then(() => {
+        if (!isPolling)
+            db.closeDb();
+        log("info", "indexer_stopped");
+    });
 }
 /**
  * Get events for a specific DAO
  */
 export function getEventsForDao(daoId, options = {}) {
-    db.initDb(); // Ensure DB is initialized
+    db.getReadDb(); // Ensure DB is initialized
     const result = db.getEventsForDao(daoId, options);
     return {
         events: result.events,
@@ -281,18 +476,79 @@ export function getEventsForDao(daoId, options = {}) {
  * Get all indexed DAOs
  */
 export function getIndexedDaos() {
-    db.initDb();
+    db.getReadDb();
     const daos = db.getIndexedDaos();
     return daos.map((d) => d.daoId);
+}
+/**
+ * Ingest an event through the backpressure queue
+ */
+export async function pushStreamEvent(eventInput) {
+    eventQueue.push(eventInput);
+    indexerQueueDepth.set(eventQueue.length);
+    // If queue exceeds high watermark, apply backpressure by awaiting drain
+    if (eventQueue.length >= HIGH_WATERMARK) {
+        log("warn", "indexer_backpressure_engaged", {
+            queueLength: eventQueue.length,
+            highWatermark: HIGH_WATERMARK,
+        });
+        await drainEventQueue();
+    }
+    else if (!isDrainingQueue) {
+        void drainEventQueue();
+    }
+    return true;
+}
+/**
+ * Drain queued stream events to persistent storage
+ */
+export async function drainEventQueue() {
+    if (isDrainingQueue || eventQueue.length === 0)
+        return 0;
+    isDrainingQueue = true;
+    let processed = 0;
+    try {
+        while (eventQueue.length > 0) {
+            const batch = eventQueue.splice(0, 50);
+            for (const item of batch) {
+                if (db.addEvent(item)) {
+                    processed++;
+                    indexerEventsProcessed.inc({ event_type: "stream_indexed" }, 1);
+                }
+            }
+            indexerQueueDepth.set(eventQueue.length);
+            if (eventQueue.length <= LOW_WATERMARK) {
+                // Backpressure relieved
+            }
+        }
+    }
+    finally {
+        isDrainingQueue = false;
+    }
+    return processed;
+}
+/**
+ * Start indexer in streaming mode with automatic gap detection and backpressure
+ */
+export async function startStreamingIndexer(server, contracts, pollIntervalMs = 2000) {
+    isStreamingMode = true;
+    indexerRpcStreamReconnectsTotal.inc();
+    await startIndexer(server, contracts, pollIntervalMs);
 }
 /**
  * Get indexer status
  */
 export function getIndexerStatus() {
-    db.initDb();
+    db.getReadDb();
     const status = db.getDbStatus();
     return {
         isRunning: isPolling,
+        isStreaming: isStreamingMode,
+        queueDepth: eventQueue.length,
+        indexerLag,
+        hasGap,
+        catchUpMode,
+        checkpoint: db.getMetadata("indexerCheckpoint") ?? null,
         ...status,
     };
 }
@@ -300,7 +556,7 @@ export function getIndexerStatus() {
  * Manually add an event (useful for testing)
  */
 export function addManualEvent(daoId, type, data, ledger = 0) {
-    db.initDb();
+    db.getWriteDb();
     db.addEvent({
         daoId: Number(daoId),
         type,
@@ -316,7 +572,7 @@ export function addManualEvent(daoId, type, data, ledger = 0) {
  * The event is stored as pending and verified against the chain
  */
 export function notifyEvent(daoId, type, data, txHash) {
-    db.initDb();
+    db.getWriteDb();
     db.addPendingEvent(daoId, type, data, txHash);
     log("info", "event_notified", { daoId, type, txHash });
 }
@@ -332,7 +588,7 @@ export function getRpcServer() {
  * This handles DAOs created before the indexer started watching
  */
 export function ensureDaoCreateEvent(daoId, daoData) {
-    db.initDb();
+    db.getWriteDb();
     // Check if dao_create event already exists for this DAO
     const existingEvents = db.getEventsForDao(daoId, {
         types: ["dao_create", "dao_create_event"],

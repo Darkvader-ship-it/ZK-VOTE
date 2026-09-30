@@ -61,24 +61,26 @@ export default function ProposalHeader({
   return (
     <>
       {/* Breadcrumbs */}
-      <nav className="flex items-center gap-2 text-sm">
+      <nav className="flex items-center gap-1.5 text-sm flex-wrap">
         <button
           onClick={() => navigate("/daos/")}
-          className="text-muted-foreground hover:text-foreground transition-colors"
+          className="text-muted-foreground hover:text-foreground transition-colors min-h-[48px] py-3 px-1.5 flex items-center"
         >
           DAOs
         </button>
         <span className="text-muted-foreground">/</span>
         <button
           onClick={() => navigate(`/daos/${daoSlugForNav}`)}
-          className="text-muted-foreground hover:text-foreground transition-colors"
+          className="text-muted-foreground hover:text-foreground transition-colors min-h-[48px] py-3 px-1.5 flex items-center truncate max-w-[150px] sm:max-w-none"
         >
           {daoDisplayName}
         </button>
         {proposalTitle && (
           <>
             <span className="text-muted-foreground">/</span>
-            <span className="text-foreground font-medium">{proposalTitle}</span>
+            <span className="text-foreground font-medium py-3 px-1.5 flex items-center truncate max-w-[180px] sm:max-w-xs">
+              {proposalTitle}
+            </span>
           </>
         )}
       </nav>

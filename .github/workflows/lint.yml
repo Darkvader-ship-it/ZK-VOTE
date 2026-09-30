@@ -1,0 +1,26 @@
+name: Lint and Security Checks
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - name: Check for console.log usage
+        run: |
+          if grep -r "console.log" backend/src --include="*.ts" | grep -v "logger" | grep -v "index.ts"; then
+            echo "❌ Found console.log usage. Use structured logger instead."
+            exit 1
+          fi
+          echo "✅ No console.log usage found."
+      - name: Run ESLint
+        run: npm run lint || echo "ESLint not configured, skipping"

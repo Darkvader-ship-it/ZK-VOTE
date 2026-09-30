@@ -16,9 +16,6 @@ yarn-error.log*
 .env.production
 .env.staging
 
-# Secrets
-secrets/
-
 # Circom / ZK
 circuits/*.r1cs
 circuits/*.sym
@@ -70,6 +67,15 @@ PLAN-*.md
 # Backend runtime data
 backend/data/events.json
 backend/data/*.db
+backend/temp/
+backend/temp/*
+backend/dist/
+
+# Encrypted backup snapshots and backup encryption keys (Issue #359)
+# Keys are SECRETS — never commit backend/data/backup-keys or snapshots.
+backend/data/backups/
+backend/data/backup-keys/
+backend/data/restored*.db
 
 # Stress test runtime data (keep scripts, ignore runtime files)
 scripts/test/stress-accounts/*.txt
@@ -84,3 +90,4 @@ frontend/coverage/
 
 # Proxy list
 Webshare 250 proxies.txt
+target

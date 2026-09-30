@@ -1,10 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import VoteModal from "./VoteModal";
 
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = createTestQueryClient();
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
 // Mock all external dependencies
-vi.mock("../lib/contracts", () => ({
-  initializeContractClients: vi.fn(() => ({
+vi.mock("../lib/client", () => ({
+  getZkVoteClient: vi.fn(() => ({
     membershipTree: {
       get_leaf_index: vi.fn().mockResolvedValue({ result: 0 }),
       current_root: vi.fn().mockResolvedValue({ result: BigInt("12345") }),
@@ -41,20 +56,86 @@ vi.mock("../lib/merkletree", () => ({
   }),
 }));
 
+vi.mock("../lib/fetchWithProgress", () => ({
+  fetchWithProgress: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+}));
+
 vi.mock("../lib/zk", () => ({
   generateDeterministicZKCredentials: vi.fn().mockResolvedValue({
     secret: "123",
     salt: "456",
+    blindingFactor: "999",
     commitment: "789",
+  }),
+  generateFakeZKCredentials: vi.fn().mockResolvedValue({
+    secret: "fake_secret_111",
+    salt: "fake_salt_222",
+    blindingFactor: "fake_blinding_333",
+    commitment: "fake_commitment_444",
   }),
   getZKCredentials: vi.fn().mockReturnValue({
     secret: "123",
     salt: "456",
+    blindingFactor: "999",
     commitment: "789",
     leafIndex: 0,
   }),
   storeZKCredentials: vi.fn(),
 }));
+
+vi.mock("../lib/circuitDepth", () => ({
+  resolveCircuitUrls: vi.fn().mockReturnValue({
+    wasmUrl: "/circuits/vote.wasm",
+    zkeyUrl: "/circuits/vote_final.zkey",
+  }),
+}));
+
+vi.mock("../queries/proposalQueries", () => ({
+  useOptimisticVote: () => ({
+    setOptimisticVote: vi.fn(() => vi.fn()),
+    clearPendingVote: vi.fn(),
+  }),
+}));
+
+vi.mock("../hooks/useReceipts", () => ({
+  useReceipts: () => ({ addReceipt: vi.fn() }),
+}));
+
+const mockProcessEntry = vi.fn();
+vi.mock("../lib/queueProcessor", () => ({
+  processEntry: (...args: unknown[]) => mockProcessEntry(...args),
+}));
+
+const queueEntries: Record<string, { status: string; txHash: string | null; conflictDetail: string | null; lastError: string | null }> = {};
+
+vi.mock("../store/submissionQueue", async () => {
+  const actual = await vi.importActual<typeof import("../store/submissionQueue")>(
+    "../store/submissionQueue",
+  );
+  return {
+    ...actual,
+    submissionQueue: {
+      ...actual.submissionQueue,
+      enqueue: vi.fn((payload: { nullifier: string }) => {
+        const entry = {
+          id: payload.nullifier,
+          payload,
+          status: "pending" as const,
+          attempts: 0,
+          enqueuedAt: Date.now(),
+          lastAttemptAt: null,
+          retryAfter: null,
+          lastError: null,
+          conflictDetail: null,
+          txHash: null,
+        };
+        queueEntries[payload.nullifier] = entry;
+        return entry;
+      }),
+      getState: vi.fn(() => ({ entries: queueEntries })),
+    },
+  };
+});
 
 // Mock fetch for relay submission
 global.fetch = vi.fn();
@@ -74,6 +155,16 @@ describe("VoteModal", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.keys(queueEntries).forEach((k) => delete queueEntries[k]);
+    mockProcessEntry.mockImplementation(async (entry: { id: string }) => {
+      queueEntries[entry.id] = {
+        ...queueEntries[entry.id],
+        status: "submitted",
+        txHash: "abc123",
+        conflictDetail: null,
+        lastError: null,
+      };
+    });
     (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ txHash: "abc123" }),
@@ -81,7 +172,7 @@ describe("VoteModal", () => {
   });
 
   it("renders the vote selection screen initially", () => {
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     expect(screen.getByText("Cast Anonymous Vote")).toBeInTheDocument();
     expect(screen.getByText("Vote Yes")).toBeInTheDocument();
@@ -89,27 +180,54 @@ describe("VoteModal", () => {
   });
 
   it("shows snapshot voting warning in Fixed mode", () => {
-    render(<VoteModal {...defaultProps} voteMode="Fixed" />);
+    renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Fixed" />);
 
     expect(
+      screen.getByText(/Revocation semantics in Fixed \(snapshot\) mode/),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(
-        /Only members present when this proposal was created can vote/,
+        /Only members who were present when the proposal was created/,
       ),
     ).toBeInTheDocument();
   });
 
   it("does not show snapshot warning in Trailing mode", () => {
-    render(<VoteModal {...defaultProps} voteMode="Trailing" />);
+    renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Trailing" />);
 
     expect(
       screen.queryByText(
-        /Only members present when this proposal was created can vote/,
+        /Only members who were present when the proposal was created/,
       ),
     ).not.toBeInTheDocument();
   });
 
+  it("shows revocation semantics explainer for Trailing mode", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Trailing" />);
+
+    expect(
+      screen.getByText(/Revocation semantics in Trailing \(dynamic\) mode/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/their eligibility ends immediately/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows accurate Fixed-mode revocation semantics when already revoked", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Fixed" />);
+
+    // Fixed-mode snapshot: a member revoked AFTER creation can still vote
+    // with a pre-revocation proof (intentional privacy boundary).
+    expect(
+      screen.getByText(
+        /cached a valid ZK proof generated before the revocation/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/This is intentional/)).toBeInTheDocument();
+  });
+
   it("calls onClose when clicking outside the modal", () => {
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     // Click the backdrop (the outer div)
     const backdrop = screen.getByText("Cast Anonymous Vote").closest(".fixed");
@@ -121,7 +239,7 @@ describe("VoteModal", () => {
   });
 
   it("does not call onClose when clicking inside the modal", () => {
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     // Click a button inside the modal
     fireEvent.click(screen.getByText("Vote Yes"));
@@ -132,20 +250,16 @@ describe("VoteModal", () => {
   });
 
   it("calls onClose when clicking the X close button", () => {
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
-    // Get the X button specifically (sr-only "Close" span)
-    const closeButtons = screen.getAllByRole("button");
-    const xButton = closeButtons.find((btn) => btn.querySelector(".sr-only"));
-    if (xButton) {
-      fireEvent.click(xButton);
-    }
+    const xButton = screen.getByRole("button", { name: "Close voting dialog" });
+    fireEvent.click(xButton);
 
     expect(defaultProps.onClose).toHaveBeenCalled();
   });
 
   it("shows generating state after clicking Vote Yes", async () => {
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     fireEvent.click(screen.getByText("Vote Yes"));
 
@@ -160,7 +274,7 @@ describe("VoteModal", () => {
   });
 
   it("shows generating state after clicking Vote No", async () => {
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     fireEvent.click(screen.getByText("Vote No"));
 
@@ -175,7 +289,7 @@ describe("VoteModal", () => {
   });
 
   it("displays progress messages during proof generation", async () => {
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     fireEvent.click(screen.getByText("Vote Yes"));
 
@@ -195,7 +309,7 @@ describe("VoteModal", () => {
   it("provides correct vote choice to proof generation", async () => {
     const { generateVoteProof } = await import("../lib/zkproof");
 
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     fireEvent.click(screen.getByText("Vote Yes"));
 
@@ -213,7 +327,7 @@ describe("VoteModal", () => {
   it("uses eligibleRoot in Fixed mode", async () => {
     const { generateVoteProof } = await import("../lib/zkproof");
 
-    render(<VoteModal {...defaultProps} voteMode="Fixed" />);
+    renderWithQueryClient(<VoteModal {...defaultProps} voteMode="Fixed" />);
 
     fireEvent.click(screen.getByText("Vote Yes"));
 
@@ -242,65 +356,95 @@ describe("VoteModal error handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.keys(queueEntries).forEach((k) => delete queueEntries[k]);
+    mockProcessEntry.mockImplementation(async (entry: { id: string }) => {
+      queueEntries[entry.id] = {
+        ...queueEntries[entry.id],
+        status: "failed",
+        txHash: null,
+        conflictDetail: null,
+        lastError: "Network error",
+      };
+    });
   });
 
-  it("shows error state when relay submission fails", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: false,
-      json: () => Promise.resolve({ error: "Network error" }),
-    });
-
-    render(<VoteModal {...defaultProps} />);
+  it("shows error when relay rejects the vote", async () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     fireEvent.click(screen.getByText("Vote Yes"));
 
-    // Should eventually show error
     expect(await screen.findByText("Error")).toBeInTheDocument();
-  });
-
-  it("shows double-vote error message", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: false,
-      json: () =>
-        Promise.resolve({ error: "You have already voted on this proposal" }),
-    });
-
-    render(<VoteModal {...defaultProps} />);
-
-    fireEvent.click(screen.getByText("Vote Yes"));
-
-    // Should show specific double-vote error
-    expect(
-      await screen.findByText(/already voted on this proposal/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Network error/i)).toBeInTheDocument();
   });
 
   it("provides Close button in error state", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: false,
-      json: () => Promise.resolve({ error: "Some error" }),
-    });
-
-    render(<VoteModal {...defaultProps} />);
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
     fireEvent.click(screen.getByText("Vote Yes"));
 
-    // Wait for error state
-    await screen.findByText("Error");
-
-    // Should have Close buttons (X icon has sr-only "Close", plus visible Close button)
-    const closeButtons = screen.getAllByRole("button", { name: /close/i });
-    // At least the visible "Close" text button should exist
-    expect(closeButtons.length).toBeGreaterThanOrEqual(1);
-    // Find the visible one (not the X icon with sr-only text)
-    const visibleCloseButton = closeButtons.find(
-      (btn) => btn.textContent === "Close",
-    );
-    expect(visibleCloseButton).toBeInTheDocument();
+    expect(await screen.findByText("Error")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /close|done/i })).toBeInTheDocument();
   });
 });
 
 describe("VoteModal success state", () => {
+  const defaultProps = {
+    proposalId: 1,
+    eligibleRoot: BigInt("12345"),
+    voteMode: "Fixed" as const,
+    vkVersion: 1,
+    daoId: 1,
+    publicKey: "GDTEST...",
+    kit: null,
+    onClose: vi.fn(),
+    onComplete: vi.fn(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.keys(queueEntries).forEach((k) => delete queueEntries[k]);
+    mockProcessEntry.mockImplementation(async (entry: { id: string }) => {
+      queueEntries[entry.id] = {
+        ...queueEntries[entry.id],
+        status: "submitted",
+        txHash: "abc123",
+        conflictDetail: null,
+        lastError: null,
+      };
+    });
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ txHash: "abc123" }),
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows success state after successful submission", async () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    fireEvent.click(screen.getByText("Vote Yes"));
+
+    // Should eventually show success only after processEntry resolves
+    expect(await screen.findByText("Vote Submitted!")).toBeInTheDocument();
+  });
+
+  it("displays success message", async () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    fireEvent.click(screen.getByText("Vote Yes"));
+
+    expect(
+      await screen.findByText(/Your anonymous vote has been recorded/),
+    ).toBeInTheDocument();
+  });
+});
+
+// ─── Issue #337 – Panic-mode UI tests ───────────────────────────────────────
+
+describe("VoteModal panic-mode (coercion resistance, issue #337)", () => {
   const defaultProps = {
     proposalId: 1,
     eligibleRoot: BigInt("12345"),
@@ -321,26 +465,114 @@ describe("VoteModal success state", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
+  it("renders the coercion-resistant mode toggle", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    const toggle = screen.getByTestId("panic-mode-toggle");
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAttribute("role", "switch");
   });
 
-  it("shows success state after successful submission", async () => {
-    render(<VoteModal {...defaultProps} />);
+  it("does NOT show panic-mode warning when toggle is off", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
-    fireEvent.click(screen.getByText("Vote Yes"));
-
-    // Should eventually show success
-    expect(await screen.findByText("Vote Submitted!")).toBeInTheDocument();
+    expect(screen.queryByTestId("panic-mode-warning")).not.toBeInTheDocument();
   });
 
-  it("displays success message", async () => {
-    render(<VoteModal {...defaultProps} />);
+  it("shows panic-mode warning after enabling the toggle", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
 
-    fireEvent.click(screen.getByText("Vote Yes"));
+    const toggle = screen.getByTestId("panic-mode-toggle");
+    fireEvent.click(toggle);
 
+    expect(screen.getByTestId("panic-mode-warning")).toBeInTheDocument();
     expect(
-      await screen.findByText(/Your anonymous vote has been recorded/),
+      screen.getByText(/Panic mode is ON — decoy credentials will be used/),
     ).toBeInTheDocument();
+  });
+
+  it("toggle aria-checked becomes true after enabling", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    const toggle = screen.getByTestId("panic-mode-toggle");
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("warning disappears after toggling off again", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    const toggle = screen.getByTestId("panic-mode-toggle");
+    // enable
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("panic-mode-warning")).toBeInTheDocument();
+    // disable
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("panic-mode-warning")).not.toBeInTheDocument();
+  });
+
+  it("calls generateFakeZKCredentials (not real) when panic mode is on", async () => {
+    const { generateFakeZKCredentials, getZKCredentials } =
+      await import("../lib/zk");
+
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    // Enable panic mode
+    fireEvent.click(screen.getByTestId("panic-mode-toggle"));
+
+    // Cast a vote
+    fireEvent.click(screen.getByText("Vote Yes"));
+
+    await vi.waitFor(() => {
+      expect(generateFakeZKCredentials).toHaveBeenCalled();
+    });
+
+    // Real credentials must never be accessed
+    expect(getZKCredentials).not.toHaveBeenCalled();
+  });
+
+  it("real credentials are accessible after panic mode vote (real cred untouched)", async () => {
+    const { getZKCredentials } = await import("../lib/zk");
+
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    // Enable panic mode
+    fireEvent.click(screen.getByTestId("panic-mode-toggle"));
+
+    // Cast a panic vote
+    fireEvent.click(screen.getByText("Vote Yes"));
+
+    await vi.waitFor(() => {
+      expect(
+        screen.queryByText(/Vote Submitted|Generating|Submitting/),
+      ).toBeInTheDocument();
+    });
+
+    // getZKCredentials was never called (real creds untouched)
+    expect(getZKCredentials).not.toHaveBeenCalled();
+  });
+
+  it("still shows vote buttons when panic mode is enabled", () => {
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    fireEvent.click(screen.getByTestId("panic-mode-toggle"));
+
+    expect(screen.getByText("Vote Yes")).toBeInTheDocument();
+    expect(screen.getByText("Vote No")).toBeInTheDocument();
+  });
+
+  it("panic mode is off by default (real credentials used)", async () => {
+    const { getZKCredentials } = await import("../lib/zk");
+
+    renderWithQueryClient(<VoteModal {...defaultProps} />);
+
+    // Do NOT enable panic mode, just cast vote
+    fireEvent.click(screen.getByText("Vote Yes"));
+
+    await vi.waitFor(() => {
+      expect(getZKCredentials).toHaveBeenCalled();
+    });
   });
 });

@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import {
   getReadOnlyDaoRegistry,
   getReadOnlyMembershipSbt,
   getReadOnlyMembershipTree,
   getReadOnlyVoting,
 } from "../lib/readOnlyContracts";
-import { LoadingSpinner, Badge } from "./ui";
+import { LoadingSpinner, Badge, Alert } from "./ui";
 import {
   CheckCircle,
   Copy,
@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import defaultVK from "../lib/verification_key_soroban.json";
 import ProfileChangesModal from "./ProfileChangesModal";
+import { getExplorerUrl } from "../lib/utils";
 
 // Relayer URL for fetching events
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL || "http://localhost:3001";
@@ -39,9 +40,11 @@ interface DAODetails {
   membershipOpen: boolean;
   membersCanPropose: boolean;
   memberCount: number;
+  anonymitySetSize: number;
   merkleRoot: string;
   treeDepth: number;
   leafCount: number;
+  rootHistoryLen: number;
   vkVersion: number | null;
   vk: {
     alpha: string;
@@ -221,6 +224,10 @@ export default function DAOInfoPanel({
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [selectedProfileEvent, setSelectedProfileEvent] =
     useState<DAOEvent | null>(null);
+  const rootEvictionWarning =
+    details && details.rootHistoryLen >= 27
+      ? `Root history is nearing eviction (${details.rootHistoryLen}/30 roots retained). Old roots are evicted after 30 updates, which can invalidate stale proofs in trailing mode.`
+      : null;
 
   useEffect(() => {
     loadDAODetails();
@@ -274,7 +281,7 @@ export default function DAOInfoPanel({
 
       if (publicKey) {
         try {
-          const clients = initializeContractClients(publicKey);
+          const clients = getZkVoteClient(publicKey);
           // Test if account exists by making a simple call
           await clients.daoRegistry.get_dao({ dao_id: BigInt(daoId) });
           // If successful, use authenticated clients (same interface as read-only)
@@ -302,20 +309,35 @@ export default function DAOInfoPanel({
       });
 
       // Fetch tree info (depth, leaf count, root) - may not exist if tree not initialized
-      let treeInfo: { depth: number; leafCount: number; merkleRoot: string } = {
+      let treeInfo: {
+        depth: number;
+        leafCount: number;
+        merkleRoot: string;
+        rootHistoryLen: number;
+        anonymitySetSize: number;
+      } = {
         depth: 0,
         leafCount: 0,
         merkleRoot: "0",
+        rootHistoryLen: 0,
+        anonymitySetSize: 0,
       };
       try {
-        const treeInfoResult = await membershipTree.get_tree_info({
-          dao_id: BigInt(daoId),
-        });
+        const [treeInfoResult, analyticsResult] = await Promise.all([
+          membershipTree.get_tree_info({ dao_id: BigInt(daoId) }),
+          fetch(`${RELAYER_URL}/analytics/${daoId}`).then((response) =>
+            response.ok ? response.json() : null,
+          ),
+        ]);
         if (treeInfoResult.result) {
           treeInfo = {
             depth: Number(treeInfoResult.result[0]),
             leafCount: Number(treeInfoResult.result[1]),
             merkleRoot: treeInfoResult.result[2]?.toString() || "0",
+            rootHistoryLen: Number(analyticsResult?.rootHistoryLen ?? 0),
+            anonymitySetSize: Number(
+              analyticsResult?.anonymitySetSize ?? treeInfoResult.result[1] ?? 0,
+            ),
           };
         }
       } catch {
@@ -373,9 +395,11 @@ export default function DAOInfoPanel({
         membershipOpen: daoResult.result.membership_open,
         membersCanPropose: membersCanProposeValue,
         memberCount: Number(memberCountResult.result),
+        anonymitySetSize: treeInfo.anonymitySetSize || treeInfo.leafCount || Number(memberCountResult.result),
         merkleRoot: treeInfo.merkleRoot,
         treeDepth: treeInfo.depth,
         leafCount: treeInfo.leafCount,
+        rootHistoryLen: treeInfo.rootHistoryLen,
         vkVersion,
         vk,
       });
@@ -408,12 +432,18 @@ export default function DAOInfoPanel({
   return (
     <div className="space-y-4">
       {/* Basic Info */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="rounded-xl border bg-card p-4">
           <h3 className="text-sm font-medium text-muted-foreground mb-1">
             Members
           </h3>
           <p className="text-2xl font-bold">{details.memberCount}</p>
+        </div>
+        <div className="rounded-xl border bg-card p-4">
+          <h3 className="text-sm font-medium text-muted-foreground mb-1">
+            Anonymity Set
+          </h3>
+          <p className="text-2xl font-bold">{details.anonymitySetSize}</p>
         </div>
         <div className="rounded-xl border bg-card p-4">
           <h3 className="text-sm font-medium text-muted-foreground mb-1">
@@ -436,6 +466,15 @@ export default function DAOInfoPanel({
           </div>
         </div>
       </div>
+
+      {rootEvictionWarning && (
+        <Alert variant="warning" className="text-sm">
+          <div className="flex items-start gap-2">
+            <Shield className="w-4 h-4 mt-0.5 shrink-0" />
+            <p>{rootEvictionWarning}</p>
+          </div>
+        </Alert>
+      )}
 
       {/* Admin */}
       <div className="rounded-xl border bg-card p-4">
@@ -591,7 +630,7 @@ export default function DAOInfoPanel({
             <p className="text-xs text-muted-foreground">
               View events on{" "}
               <a
-                href="https://stellar.expert"
+                href={getExplorerUrl("contract", String(daoId))}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-primary hover:underline"

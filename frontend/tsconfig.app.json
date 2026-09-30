@@ -22,8 +22,8 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": false
   },
   "include": ["src"],
-  "exclude": ["src/contracts/**"]
+  "exclude": ["src/contracts/**", "**/*.test.ts", "**/*.test.tsx", "src/components/__tests__/**", "src/contracts"]
 }

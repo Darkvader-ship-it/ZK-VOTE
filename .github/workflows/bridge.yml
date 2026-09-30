@@ -12,6 +12,13 @@ on:
       - "tests/bridge/**"
       - ".github/workflows/bridge.yml"
   pull_request:
+    paths:
+      - "circuits/bridge.circom"
+      - "circuits/evm_verifier.circom"
+      - "contracts/bridge/**"
+      - "backend/src/routes/bridge.ts"
+      - "backend/src/services/bridge.ts"
+      - "tests/bridge/**"
 
 jobs:
   bridge-circuits:
@@ -31,7 +38,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cargo
-          cargo install --git https://github.com/iden3/circom.git
+          # Pin circom version to match .circomversion
+          cargo install --locked --git https://github.com/iden3/circom.git --tag v2.1.8
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
       - name: Install dependencies
         run: npm ci
@@ -65,7 +73,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain from rust-toolchain.toml
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.91.1
       - uses: actions/cache@v4
         with:
           path: |
@@ -76,9 +87,9 @@ jobs:
       - name: Add WASM target
         run: rustup target add wasm32v1-none
       - name: Build bridge contract
-        run: cargo build -p bridge-soroban --target wasm32v1-none --release
+        run: cargo build -p bridge-soroban --target wasm32v1-none --release --locked
       - name: Run bridge contract tests
-        run: cargo test -p bridge-soroban
+        run: cargo test -p bridge-soroban --locked
 
   backend-bridge:
     name: Backend Bridge

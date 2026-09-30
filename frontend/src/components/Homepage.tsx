@@ -1,43 +1,94 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "./ui/Button";
+import { useTranslation } from "../i18n/I18nContext";
+
+interface PublicProtocolStats {
+  totalDaos: number;
+  totalEvents: number;
+  lastLedger: number;
+  lastUpdated: string;
+}
 
 export function Homepage() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
+  const [protocolStats] = useState<PublicProtocolStats | null>(null);
+  const [statsLoading] = useState(false);
 
   return (
     <div className="animate-fade-in">
       {/* Hero Section */}
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-200px)]">
-        <div className="text-center max-w-4xl space-y-8">
-          <div className="space-y-6">
-            <h1 className="text-5xl md:text-7xl font-bold tracking-tighter leading-[1.1]">
-              Private voting for
+      <div className="flex flex-col items-center justify-center min-h-[calc(100dvh-140px)] py-12 px-4">
+        <div className="text-center max-w-4xl space-y-6 sm:space-y-8 w-full">
+          <div className="space-y-4 sm:space-y-6">
+            <h1 className="text-3xl sm:text-5xl md:text-7xl font-bold tracking-tighter leading-[1.15] break-words">
+              {t("home.hero.title")}
               <br />
               <span className="bg-clip-text text-transparent bg-gradient-to-r from-foreground to-muted-foreground">
-                decentralized organizations
+                {t("home.hero.subtitle")}
               </span>
             </h1>
-            <p className="text-xl text-muted-foreground max-w-[700px] mx-auto leading-relaxed">
-              Zero-knowledge proof voting on Stellar. Cast your vote privately
-              while maintaining full verifiability through Groth16 SNARKs.
+            <p className="text-base sm:text-xl text-muted-foreground max-w-[700px] mx-auto leading-relaxed">
+              {t("home.hero.description")}
             </p>
           </div>
-          <div className="flex items-center justify-center gap-4 pt-4">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 pt-2 sm:pt-4 w-full max-w-sm sm:max-w-none mx-auto">
             <Button
               onClick={() => navigate("/daos/")}
               size="lg"
-              className="h-12 px-8 text-base"
+              className="w-full sm:w-auto min-h-[48px] px-8 text-base font-semibold"
             >
-              Start voting
+              {t("home.hero.startVoting")}
             </Button>
             <Button
-              variant="ghost"
+              variant="outline"
               size="lg"
               onClick={() => navigate("/docs/")}
-              className="h-12 px-8 text-base text-muted-foreground hover:text-foreground"
+              className="w-full sm:w-auto min-h-[48px] px-8 text-base"
             >
-              Documentation <span className="ml-2">→</span>
+              {t("home.hero.documentation")} <span className="ml-2">→</span>
             </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Public Protocol Stats */}
+      <div className="py-16 border-t border-border/40">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex items-center justify-between gap-4 mb-8">
+            <div>
+              <p className="text-sm text-muted-foreground">Public protocol stats</p>
+              <h2 className="text-3xl font-bold tracking-tight mt-2">
+                Anonymous network activity
+              </h2>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {protocolStats?.lastUpdated
+                ? new Date(protocolStats.lastUpdated).toLocaleString()
+                : "Live"}
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-xl border border-border/60 bg-card p-6">
+              <p className="text-sm text-muted-foreground">DAOs indexed</p>
+              <p className="mt-4 text-4xl font-bold tracking-tight">
+                {statsLoading ? "…" : (protocolStats?.totalDaos ?? 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/60 bg-card p-6">
+              <p className="text-sm text-muted-foreground">Events processed</p>
+              <p className="mt-4 text-4xl font-bold tracking-tight">
+                {statsLoading ? "…" : (protocolStats?.totalEvents ?? 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/60 bg-card p-6">
+              <p className="text-sm text-muted-foreground">Latest ledger</p>
+              <p className="mt-4 text-4xl font-bold tracking-tight">
+                {statsLoading ? "…" : (protocolStats?.lastLedger ?? 0).toLocaleString()}
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -46,7 +97,7 @@ export function Homepage() {
       <div className="py-16 border-t border-border/40">
         <div className="text-center mb-8">
           <p className="text-sm text-muted-foreground">
-            Built on Stellar with cutting-edge cryptographic primitives
+            {t("home.techStack")}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-8 md:gap-16 opacity-60">

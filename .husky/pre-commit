@@ -2,22 +2,66 @@
 
 echo "Running pre-commit checks..."
 
-# Format Rust code
-echo "→ Checking Rust formatting..."
-if ! cargo fmt --check 2>/dev/null; then
-    echo "ERROR: Rust code not formatted. Run 'cargo fmt' first."
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+
+# Secret Scanner: Block committed secret key patterns (SDKA... / S[A-Z2-7]{55} secret seeds)
+echo "→ Checking for committed secrets..."
+SECRET_LEAK=0
+for file in $STAGED; do
+    if [ -f "$file" ]; then
+        # Match SDKA... pattern or any S followed by 55 base32 characters (including actual leaked keys)
+        if git diff --cached "$file" | grep -E '\+.*(SDKA[A-Z0-9]{52}|S[A-Z2-7]{55})' | grep -vE 'SXXXXXXX|REPLACE_ME|placeholder|example'; then
+            echo "ERROR: Hardcoded secret key detected in $file! Replace with a placeholder before committing."
+            SECRET_LEAK=1
+        fi
+    fi
+done
+
+if [ "$SECRET_LEAK" -ne 0 ]; then
+    echo "Commit aborted due to potential secret leakage."
     exit 1
 fi
-echo "✓ Rust formatting OK"
+echo "✓ Secret scan OK"
 
-# Run Rust clippy (warnings only, don't block)
-echo "→ Running Rust clippy..."
-cargo clippy --workspace --quiet 2>/dev/null || true
+# Database File Scanner: Block committed *.db files (Issue #535)
+echo "→ Checking for database files..."
+DB_LEAK=0
+for file in $STAGED; do
+    if echo "$file" | grep -qE '\.(db|db-wal|db-shm)$'; then
+        echo "ERROR: Database file detected: $file. Database files must not be committed to git."
+        DB_LEAK=1
+    fi
+done
+
+if [ "$DB_LEAK" -ne 0 ]; then
+    echo "Commit aborted due to database file leakage."
+    exit 1
+fi
+echo "✓ Database file scan OK"
+
+# Format Rust code — only when Rust sources are staged
+if echo "$STAGED" | grep -qE '\.rs$|(^|/)Cargo\.(toml|lock)$'; then
+    if command -v cargo >/dev/null 2>&1; then
+        echo "→ Checking Rust formatting..."
+        if ! cargo fmt --check; then
+            echo "ERROR: Rust code not formatted. Run 'cargo fmt' first."
+            exit 1
+        fi
+        echo "✓ Rust formatting OK"
+
+        echo "→ Running Rust clippy..."
+        cargo clippy --workspace --quiet || true
+    else
+        echo "→ Skipping Rust checks (cargo not installed)"
+    fi
+else
+    echo "→ Skipping Rust checks (no Rust files staged)"
+fi
 
 # Lint frontend if changes in frontend/
-if git diff --cached --name-only | grep -q "^frontend/"; then
+if echo "$STAGED" | grep -q "^frontend/"; then
     echo "→ Linting frontend..."
-    cd frontend && npm run lint --silent 2>/dev/null || {
+    cd frontend && npm run lint --silent || {
         echo "ERROR: Frontend lint failed. Run 'cd frontend && npm run lint' to see errors."
         exit 1
     }
@@ -25,19 +69,15 @@ if git diff --cached --name-only | grep -q "^frontend/"; then
     echo "✓ Frontend lint OK"
 fi
 
-# Lint backend if changes in backend/ and lint script exists
-if git diff --cached --name-only | grep -q "^backend/"; then
+# Lint backend if changes in backend/
+if echo "$STAGED" | grep -q "^backend/"; then
     if grep -q '"lint"' backend/package.json 2>/dev/null; then
         echo "→ Linting backend..."
-        cd backend && npm run lint --silent 2>/dev/null || {
-            echo "ERROR: Backend lint failed. Run 'cd backend && npm run lint' to see errors."
+        cd backend && npm run lint --silent || {
+            echo "ERROR: Backend lint failed."
             exit 1
         }
         cd ..
         echo "✓ Backend lint OK"
-    else
-        echo "→ Skipping backend lint (no lint script)"
     fi
 fi
-
-echo "✓ Pre-commit checks passed"

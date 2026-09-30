@@ -80,7 +80,8 @@ fn create_test_vk(env: &Env) -> voting::VerificationKey {
             g1_gen.clone(),
             g1_gen.clone(),
             g1_gen.clone(),
-            g1_gen, // 6 elements for 5 public signals + 1
+            g1_gen.clone(),
+            g1_gen, // 7 elements for 6 public signals + 1
         ],
     }
 }

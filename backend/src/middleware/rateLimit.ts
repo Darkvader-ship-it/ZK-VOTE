@@ -6,22 +6,80 @@
  */
 
 import rateLimit from "express-rate-limit";
+import slowDown from "express-slow-down";
 import crypto from "crypto";
-import type { Request, Response, NextFunction } from "express";
+import cluster from "node:cluster";
+import type { Request, Response, NextFunction, RequestHandler } from "express";
+import { config } from "../config.js";
+import { log } from "../services/logger.js";
+import { ClusterRateLimitStore } from "../services/cluster.js";
+import { membershipRegistrationLimited } from "../services/metrics.js";
 
 const isTestMode = process.env.RELAYER_TEST_MODE === "true";
+
+function getStore(name: string) {
+  if (config.clusterEnabled && cluster.isWorker) {
+    return new ClusterRateLimitStore(name);
+  }
+  return undefined;
+}
 
 // N11 hardening: RELAYER_TEST_MODE neuters auth + rate limits AND stubs the
 // relayer keypair (stellar.ts). Refusing to start in this configuration in
 // production prevents a post-foothold env flip from silently breaking every
 // guardrail at the next restart.
 if (process.env.NODE_ENV === "production" && isTestMode) {
-  // eslint-disable-next-line no-console
   console.error(
     "[fatal] RELAYER_TEST_MODE=true is forbidden when NODE_ENV=production",
   );
   process.exit(1);
 }
+
+// CORS hardening: exact-match allowlist; no wildcards in production.
+const corsOriginList = String(config.corsOrigins || "*")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+if (process.env.NODE_ENV === "production" && corsOriginList.includes("*")) {
+  console.error("[fatal] CORS_ORIGIN='*' is forbidden when NODE_ENV=production");
+  process.exit(1);
+}
+
+/**
+ * Strict CORS options for the `cors` middleware.
+ * Validates against an exact list, restricts methods/headers, caches preflight.
+ */
+export const corsOptions = {
+  origin(
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: unknown) => void,
+  ): void {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    if (corsOriginList.includes("*") && process.env.NODE_ENV !== "production") {
+      callback(null, true);
+      return;
+    }
+    if (corsOriginList.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    log("warn", "cors_origin_rejected", { origin });
+    callback(new Error(`Origin "${origin}" is not allowed by CORS`));
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Wallet-Address",
+    "X-CSRF-Token",
+  ],
+  credentials: true,
+  maxAge: 3600,
+};
 
 /**
  * No-op middleware for test mode - skips rate limiting
@@ -43,22 +101,166 @@ function hashIp(ip: string | undefined): string {
  * Key generator for rate limiters - uses hashed IP
  */
 const keyGenerator = (req: Express.Request): string =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   hashIp((req as any).ip || "");
+
+// ============================================
+// PER-ENDPOINT METRICS (#193)
+// ============================================
+
+interface RateLimitMetricEntry {
+  total: number;
+  blocked: number;
+}
+
+const rateLimitMetrics: Record<string, RateLimitMetricEntry> = {};
+
+function recordRequest(name: string): void {
+  const entry = (rateLimitMetrics[name] ??= { total: 0, blocked: 0 });
+  entry.total++;
+}
+
+function recordBlocked(name: string): void {
+  const entry = (rateLimitMetrics[name] ??= { total: 0, blocked: 0 });
+  entry.blocked++;
+}
+
+/**
+ * Get per-limiter request/block counts (in-process, resets on restart).
+ * Surfaced via GET /health for authenticated callers.
+ */
+export function getRateLimitMetrics(): Record<
+  string,
+  RateLimitMetricEntry & { blockRate: number }
+> {
+  const out: Record<string, RateLimitMetricEntry & { blockRate: number }> = {};
+  for (const [name, m] of Object.entries(rateLimitMetrics)) {
+    out[name] = {
+      ...m,
+      blockRate:
+        m.total > 0 ? Math.round((m.blocked / m.total) * 100) / 100 : 0,
+    };
+  }
+  return out;
+}
+
+/**
+ * Wrap a limiter to count every request that passes through it (allowed or blocked).
+ */
+function withMetrics(name: string, limiter: RequestHandler): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    recordRequest(name);
+    limiter(req, res, next);
+  };
+}
+
+/**
+ * Build a 429 handler that includes structured rate-limit info in the body
+ * (limit/remaining/retryAfter/resetTime), on top of the standard headers
+ * express-rate-limit already sets (RateLimit-*, X-RateLimit-*, Retry-After).
+ */
+function makeHandler(name: string, message: string) {
+  return (req: Request, res: Response): void => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const info = (req as any).rateLimit as
+      | { limit: number; remaining: number; resetTime?: Date }
+      | undefined;
+    const resetTime = info?.resetTime;
+    const retryAfter = resetTime
+      ? Math.max(0, Math.ceil((resetTime.getTime() - Date.now()) / 1000))
+      : 60;
+
+    recordBlocked(name);
+    log("warn", "rate_limit_exceeded", { limiter: name, path: req.path });
+
+    res.status(429).json({
+      error: message,
+      limiter: name,
+      limit: info?.limit,
+      remaining: info?.remaining ?? 0,
+      retryAfter,
+      resetTime: resetTime ? resetTime.toISOString() : undefined,
+    });
+  };
+}
+
+/**
+ * Shared header config: both the modern RateLimit-* (draft-6) headers and the
+ * legacy X-RateLimit-* headers are sent, since API consumers may expect either.
+ */
+const headerOptions = {
+  standardHeaders: true as const,
+  legacyHeaders: true,
+};
+
+/**
+ * Key generator for wallet address rate limiter
+ *
+ * Wallet-only: no IP fallback. Anonymous relay/Tor clients share egress IPs,
+ * so keying on IP would both leak linkability and false-positive under the
+ * MPC submitter / cover-traffic scheduler.
+ */
+const walletKeyGenerator = (req: Express.Request): string => {
+  const wallet =
+    (req as any).body?.walletAddress ||
+    (req as any).headers?.["x-wallet-address"] ||
+    "";
+  return crypto.createHash("sha256").update(String(wallet)).digest("hex");
+};
+
+/**
+ * Rate limiter for vote submissions per wallet address
+ * Default 5 per minute per wallet address
+ *
+ * NOTE (#131): this and every limiter below use express-rate-limit's default
+ * in-memory MemoryStore (or ClusterRateLimitStore when RELAYER_CLUSTER is
+ * enabled, which only shares state across worker processes on the *same*
+ * host). Neither is a true distributed store: when the backend runs as
+ * multiple separate instances behind a load balancer (e.g. Fly.io scaling
+ * across machines), each instance still counts independently, so the
+ * effective limit is multiplied by the instance count. Fixing that requires
+ * a shared external store (e.g. Redis via `rate-limit-redis`), which is a
+ * new runtime dependency and real infra work — intentionally out of scope
+ * for this pass. What's included here instead: both limiters now emit the
+ * standard `RateLimit-*` headers plus the legacy `X-RateLimit-Remaining` /
+ * `X-RateLimit-Reset` headers (previously only some limiters set the legacy
+ * form), so clients can see and react to their remaining budget regardless
+ * of which store ends up backing this later.
+ */
+export const walletRateLimiter = isTestMode
+  ? noopMiddleware
+  : rateLimit({
+      windowMs: 60 * 1000,
+      max: 5,
+      message: {
+        error:
+          "Too many proof submissions for this wallet address, please try again later",
+      },
+      standardHeaders: true,
+      legacyHeaders: true,
+      keyGenerator: walletKeyGenerator,
+    });
 
 /**
  * Rate limiter for vote submissions
- * 10 votes per minute per IP
+ * 10 votes per minute per wallet
  */
 export const voteLimiter = isTestMode
   ? noopMiddleware
-  : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 10,
-      message: { error: "Too many vote requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+  : withMetrics(
+      "vote",
+      rateLimit({
+        windowMs: 60 * 1000, // 1 minute
+        max: 10,
+        ...headerOptions,
+        store: getStore("vote"),
+        keyGenerator: walletKeyGenerator,
+        handler: makeHandler(
+          "vote",
+          "Too many vote requests, please try again later",
+        ),
+      }),
+    );
 
 /**
  * Rate limiter for general queries
@@ -66,14 +268,20 @@ export const voteLimiter = isTestMode
  */
 export const queryLimiter = isTestMode
   ? noopMiddleware
-  : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 60,
-      message: { error: "Too many requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+  : withMetrics(
+      "query",
+      rateLimit({
+        windowMs: 60 * 1000, // 1 minute
+        max: 60,
+        ...headerOptions,
+        store: getStore("query"),
+        keyGenerator,
+        handler: makeHandler(
+          "query",
+          "Too many requests, please try again later",
+        ),
+      }),
+    );
 
 /**
  * Rate limiter for IPFS uploads
@@ -81,14 +289,20 @@ export const queryLimiter = isTestMode
  */
 export const ipfsUploadLimiter = isTestMode
   ? noopMiddleware
-  : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 10,
-      message: { error: "Too many upload requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+  : withMetrics(
+      "ipfsUpload",
+      rateLimit({
+        windowMs: 60 * 1000, // 1 minute
+        max: 10,
+        ...headerOptions,
+        store: getStore("ipfsUpload"),
+        keyGenerator,
+        handler: makeHandler(
+          "ipfsUpload",
+          "Too many upload requests, please try again later",
+        ),
+      }),
+    );
 
 /**
  * Rate limiter for IPFS reads (more generous, cached content)
@@ -96,14 +310,20 @@ export const ipfsUploadLimiter = isTestMode
  */
 export const ipfsReadLimiter = isTestMode
   ? noopMiddleware
-  : rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 200,
-      message: { error: "Too many requests, please try again later" },
-      standardHeaders: true,
-      legacyHeaders: false,
-      keyGenerator,
-    });
+  : withMetrics(
+      "ipfsRead",
+      rateLimit({
+        windowMs: 60 * 1000, // 1 minute
+        max: 200,
+        ...headerOptions,
+        store: getStore("ipfsRead"),
+        keyGenerator,
+        handler: makeHandler(
+          "ipfsRead",
+          "Too many requests, please try again later",
+        ),
+      }),
+    );
 
 /**
  * Rate limiter for comment submissions
@@ -111,11 +331,271 @@ export const ipfsReadLimiter = isTestMode
  */
 export const commentLimiter = isTestMode
   ? noopMiddleware
+  : withMetrics(
+      "comment",
+      rateLimit({
+        windowMs: 60 * 1000, // 1 minute
+        max: 20,
+        ...headerOptions,
+        store: getStore("comment"),
+        keyGenerator,
+        handler: makeHandler(
+          "comment",
+          "Too many comment requests, please try again later",
+        ),
+      }),
+    );
+
+/**
+ * Graduated throttling — applied globally, ahead of the per-route hard limiters.
+ * Adds an increasing delay once a client crosses 40 requests/minute, capped at
+ * 3s, so clients slow down before they get hard-blocked by a route's limiter.
+ */
+export const graduatedSlowDown = isTestMode
+  ? noopMiddleware
+  : slowDown({
+      windowMs: 60 * 1000,
+      delayAfter: 40,
+      delayMs: (used: number) => Math.min((used - 40) * 100, 3000),
+      maxDelayMs: 3000,
+      store: getStore("slowDown") as any,
+      keyGenerator,
+      validate: { delayMs: false },
+    });
+
+/**
+ * Rate limiter for vote-to-earn claim submissions
+ * 10 claims per minute per wallet (same as vote, anonymity-sensitive)
+ */
+export const claimLimiter = isTestMode
+  ? noopMiddleware
   : rateLimit({
       windowMs: 60 * 1000, // 1 minute
-      max: 20,
-      message: { error: "Too many comment requests, please try again later" },
+      max: 10,
+      message: { error: "Too many claim requests, please try again later" },
       standardHeaders: true,
       legacyHeaders: false,
+      keyGenerator: walletKeyGenerator,
+    });
+
+/**
+ * Rate limiter for blind signature issuance (end-to-end RSA blind-signature
+ * credentials). Limit is intentionally strict to prevent signature farming:
+ * each voter should only need one blind signature per election/campaign.
+ * Keyed by wallet address so rate limit buckets are tied to a pseudonymous
+ * identity, never the raw IP.
+ */
+export const blindSignLimiter = isTestMode
+  ? noopMiddleware
+  : rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 5,
+      message: {
+        error: "Too many blind signature requests, please try again later",
+      },
+      standardHeaders: true,
+      legacyHeaders: false,
+      keyGenerator: walletKeyGenerator,
+    });
+
+// ============================================
+// PER-MEMBER RATE LIMITING (#371)
+// ============================================
+
+/**
+ * Key generator for per-member limiters. Uses the explicit `caller` address
+ * from the request body (the member registering a commitment), falling back
+ * to the wallet address header and finally to a hashed IP.
+ */
+const memberKeyGenerator = (req: Express.Request): string => {
+  const member =
+    (req as any).body?.caller ||
+    (req as any).body?.walletAddress ||
+    (req as any).headers?.["x-wallet-address"] ||
+    (req as any).ip ||
+    "";
+  return crypto.createHash("sha256").update(String(member)).digest("hex");
+};
+
+interface PerMemberLimiterOptions {
+  name: string;
+  max: number;
+  windowMs: number;
+  message: string;
+  onBlocked?: (req: Request, res: Response) => void;
+}
+
+/**
+ * Build a per-member rate limiter (exports the `commitmentRegistrationLimiter`
+ * singleton below). Exported as a factory so the {@link #371} route tests can
+ * exercise real limiting behavior with a small window without test mode.
+ */
+export function createPerMemberLimiter(
+  opts: PerMemberLimiterOptions,
+): RequestHandler {
+  const structuredHandler = makeHandler(opts.name, opts.message);
+  return withMetrics(
+    opts.name,
+    rateLimit({
+      windowMs: opts.windowMs,
+      max: opts.max,
+      ...headerOptions,
+      store: getStore(opts.name),
+      keyGenerator: memberKeyGenerator,
+      handler: (req, res) => {
+        opts.onBlocked?.(req, res);
+        structuredHandler(req, res);
+      },
+    }),
+  );
+}
+
+/**
+ * Rate limiter for commitment registration submissions, keyed per member.
+ * Config-driven (COMMITMENT_REGISTRATION_RATE_LIMIT /
+ * COMMITMENT_REGISTRATION_RATE_WINDOW_MS); mirrors the on-chain per-member
+ * cooldown in the membership-tree contract (#371).
+ */
+export const commitmentRegistrationLimiter = isTestMode
+  ? noopMiddleware
+  : createPerMemberLimiter({
+      name: "commitmentRegistration",
+      max: config.commitmentRegistrationRateLimit,
+      windowMs: config.commitmentRegistrationRateWindowMs,
+      message:
+        "Too many commitment registrations for this member, please try again later",
+      onBlocked: () => membershipRegistrationLimited.inc({ reason: "api_rate_limit" }),
+    });
+
+/**
+ * Rate limiter for tally proof verification requests.
+ * Verification is public (any observer can check final tallies), but the
+ * endpoint performs expensive SNARK/pairing checks, so it is still capped.
+ */
+export const verifyTallyProofLimiter = isTestMode
+  ? noopMiddleware
+  : withMetrics(
+      "verifyTallyProof",
+      rateLimit({
+        windowMs: 60 * 1000, // 1 minute
+        max: 30,
+        ...headerOptions,
+        store: getStore("verifyTallyProof"),
+        keyGenerator,
+        handler: makeHandler(
+          "verifyTallyProof",
+          "Too many tally proof verification requests, please try again later",
+        ),
+      }),
+    );
+
+// ============================================
+// COST-BASED RATE LIMITING (#525)
+// ============================================
+
+/**
+ * Cost-based rate limiter for batch operations that amplify a single HTTP
+ * request into multiple operations. Prevents bypass of per-IP limits via
+ * batch endpoints (e.g., POST /pay/batch with 100 ops counts as 100 cost).
+ *
+ * Usage:
+ *   router.post('/pay/batch', costBasedLimiter({ maxCost: 100 }), handler)
+ *
+ * The handler must call req.rateLimit.cost(n) to set the cost for the request.
+ */
+export function costBasedLimiter(opts: {
+  name: string;
+  maxCost: number;
+  windowMs: number;
+  message: string;
+}): RequestHandler {
+  const store = getStore(opts.name);
+  const costTracking = new Map<string, { cost: number; resetTime: number }>();
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = keyGenerator(req);
+    const now = Date.now();
+    const windowEnd = now + opts.windowMs;
+
+    // Clean up expired entries
+    for (const [k, v] of costTracking.entries()) {
+      if (v.resetTime < now) {
+        costTracking.delete(k);
+      }
+    }
+
+    // Get or create tracking entry
+    let entry = costTracking.get(key);
+    if (!entry || entry.resetTime < now) {
+      entry = { cost: 0, resetTime: windowEnd };
+      costTracking.set(key, entry);
+    }
+
+    // Attach cost function to request
+    (req as any).rateLimit = {
+      ...(req as any).rateLimit,
+      cost: (n: number) => {
+        if (!entry) return;
+        entry.cost += n;
+        recordRequest(opts.name);
+
+        // Check if over limit
+        if (entry.cost > opts.maxCost) {
+          recordBlocked(opts.name);
+          const retryAfter = Math.ceil((entry.resetTime - Date.now()) / 1000);
+          log("warn", "cost_rate_limit_exceeded", {
+            limiter: opts.name,
+            path: req.path,
+            cost: entry.cost,
+            maxCost: opts.maxCost,
+          });
+
+          res.status(429).json({
+            error: opts.message,
+            limiter: opts.name,
+            cost: entry.cost,
+            maxCost: opts.maxCost,
+            retryAfter,
+            resetTime: new Date(entry.resetTime).toISOString(),
+          });
+          return true; // Blocked
+        }
+        return false; // Not blocked
+      },
+    };
+
+    next();
+  };
+}
+
+/**
+ * Cost-based limiter for payment batch operations.
+ * Max 100 operations per minute per IP (each op counts as 1 cost).
+ */
+export const paymentBatchCostLimiter = isTestMode
+  ? noopMiddleware
+  : costBasedLimiter({
+      name: "paymentBatch",
+      maxCost: 100,
+      windowMs: 60 * 1000,
+      message:
+        "Too many payment operations, please try again later. Batch operations count toward your rate limit.",
+    });
+
+/**
+ * WebSocket rate limiter for WS connections.
+ * Limits connections per IP to prevent WebSocket flooding.
+ */
+export const wsConnectionLimiter = isTestMode
+  ? noopMiddleware
+  : rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 10, // 10 new connections per minute per IP
+      ...headerOptions,
+      store: getStore("wsConnection"),
       keyGenerator,
+      handler: makeHandler(
+        "wsConnection",
+        "Too many WebSocket connection attempts, please try again later",
+      ),
     });

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import { getZKCredentials } from "../lib/zk";
 import { toIdSlug } from "../lib/utils";
+import { useMounted } from "../hooks/useMounted";
 import { Badge } from "./ui/Badge";
 import { Button } from "./ui/Button";
 import { Card, CardContent } from "./ui/Card";
@@ -41,6 +42,7 @@ interface ProposalCardProps {
     voteMode: "Fixed" | "Trailing";
     endTime: number;
     vkVersion?: number | null;
+    isPendingVote?: boolean;
   };
   daoId: number;
   daoName?: string;
@@ -65,6 +67,7 @@ export default function ProposalCard({
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [imageLoaded, setImageLoaded] = useState(false);
+  const mounted = useMounted();
   const MAX_RETRIES = 3;
 
   const totalVotes = proposal.yesVotes + proposal.noVotes;
@@ -75,7 +78,7 @@ export default function ProposalCard({
 
   const isRegistered = publicKey ? !!getZKCredentials(daoId, publicKey) : false;
 
-  const now = Math.floor(Date.now() / 1000);
+  const now = mounted ? Math.floor(Date.now() / 1000) : 0;
   const hasDeadline = proposal.endTime > 0;
   const isPastDeadline = hasDeadline && now > proposal.endTime;
 
@@ -218,10 +221,13 @@ export default function ProposalCard({
                     </Badge>
                     {proposal.hasVoted && (
                       <Badge
-                        variant="blue"
-                        className="text-[10px] px-1.5 py-0 h-5"
+                        variant={proposal.isPendingVote ? "warning" : "blue"}
+                        className="text-[10px] px-1.5 py-0 h-5 flex items-center gap-1"
                       >
-                        Voted
+                        {proposal.isPendingVote && (
+                          <div className="w-2 h-2 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                        )}
+                        {proposal.isPendingVote ? "Pending" : "Voted"}
                       </Badge>
                     )}
                     {isPastDeadline && (
@@ -302,7 +308,11 @@ export default function ProposalCard({
                         e.stopPropagation();
                         setShowVoteModal(true);
                       }}
-                      disabled={!isRegistered || isPastDeadline}
+                      disabled={
+                        !isRegistered ||
+                        isPastDeadline ||
+                        proposal.isPendingVote
+                      }
                       variant="outline"
                       size="sm"
                     >
@@ -313,6 +323,8 @@ export default function ProposalCard({
                         </>
                       ) : isPastDeadline ? (
                         "Closed"
+                      ) : proposal.isPendingVote ? (
+                        "Pending..."
                       ) : (
                         <>
                           <Vote className="w-4 h-4 mr-1.5" />

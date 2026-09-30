@@ -30,8 +30,8 @@ fn zero_g2(env: &Env) -> BytesN<128> {
 
 fn dummy_vk(env: &Env) -> VerificationKey {
     let mut ic = soroban_sdk::Vec::new(env);
-    // IC needs 6 elements for 5 public signals (commitment is now private)
-    for _ in 0..6 {
+    // IC needs 7 elements for 6 public signals (commitment is now private, numCandidates added)
+    for _ in 0..7 {
         ic.push_back(zero_g1(env));
     }
     VerificationKey {

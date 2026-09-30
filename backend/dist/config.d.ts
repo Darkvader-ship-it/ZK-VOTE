@@ -2,31 +2,87 @@
  * Environment Configuration
  *
  * Centralizes all environment variables and configuration.
+ * Secrets can be retrieved dynamically via the SecretManager
+ * for runtime fetch from Vault or Fly.io secrets.
  */
 /**
  * Validate Stellar contract ID format
  */
 export declare function isValidContractId(contractId: string | undefined): contractId is string;
 export declare const config: {
+    readonly NODE_ENV: "development" | "production" | "test";
     readonly port: number;
+    readonly otelExporterOtlpEndpoint: string | undefined;
+    readonly otelServiceName: string;
+    readonly otelSdkDisabled: boolean;
+    readonly otelExportTimeoutMs: number;
+    readonly clusterEnabled: boolean;
+    readonly clusterWorkers: number;
     readonly rpcUrl: string;
+    readonly rpcUrls: string[];
     readonly networkPassphrase: string;
     readonly rpcTimeoutMs: number;
+    readonly shutdownDrainTimeoutMs: number;
     readonly relayerAuthToken: string | undefined;
     readonly relayerSecretKey: string | undefined;
+    readonly relayerSecondarySecretKey: string | undefined;
+    readonly relayerSecondaryPublicKey: string | undefined;
+    readonly relayerMinBalanceXlm: number;
+    readonly relayerAutoRotateLowBalance: boolean;
+    readonly friendbotUrl: string | undefined;
+    readonly relayerSignerType: "local" | "aws_kms" | "gcp_kms" | "pkcs11";
+    readonly relayerPublicKey: string;
+    readonly kmsKeyId: string | undefined;
+    readonly kmsRegion: string | undefined;
+    readonly kmsProvider: string | undefined;
+    readonly decentralizedRelayEnabled: any;
+    readonly mpcQuorumSize: any;
+    readonly mpcRelayNodeUrls: any;
+    readonly coverTrafficEnabled: any;
+    readonly coverTrafficIntervalMs: any;
+    readonly coverTrafficBatchSize: any;
+    readonly missingVoteMonitorIntervalMs: any;
+    readonly missingVoteMonitorThreshold: any;
+    readonly anonymousSubmissionEnabled: any;
+    readonly authMasterKey: string | undefined;
+    readonly tokenRotationEnabled: boolean;
+    readonly tokenRotationIntervalMs: number;
+    readonly tokenRotationTransitionMs: number;
+    readonly defaultTokenLifetimeMs: number;
+    readonly tokenAuditLogEnabled: boolean;
     readonly votingContractId: string | undefined;
     readonly treeContractId: string | undefined;
     readonly commentsContractId: string | undefined;
     readonly daoRegistryContractId: string | undefined;
     readonly membershipSbtContractId: string | undefined;
+    readonly bridgeContractId: string | undefined;
+    readonly circuitRegistryContractId: string | undefined;
+    readonly rewardsContractId: string | undefined;
+    readonly treasuryContractId: string | undefined;
+    readonly usdcIssuer: string;
+    readonly eurcIssuer: string;
+    readonly horizonUrl: string;
+    readonly anchorUsdcUrl: string;
+    readonly anchorEurcUrl: string;
+    readonly soroswapApi: string;
     readonly staticVkVersion: number | undefined;
-    readonly corsOrigins: string[] | "*";
+    readonly corsOrigins: string[];
+    readonly corsAllowedMethods: string[];
+    readonly corsAllowedHeaders: string[];
+    readonly corsMaxAge: 3600;
     readonly logClientIp: "plain" | "hash" | undefined;
     readonly logRequestBody: boolean;
     readonly stripRequestBodies: boolean;
+    readonly logSampleRate: number | undefined;
     readonly genericErrors: boolean;
     readonly healthExposeDetails: boolean;
     readonly healthcheckPing: boolean;
+    readonly logSamplingRate: number;
+    readonly logSamplingErrorRate: number;
+    readonly logSamplingSlowRate: number;
+    readonly logSlowThresholdMs: number;
+    readonly logBodyMaxChars: number;
+    readonly hotReloadEnabled: boolean;
     readonly indexerEnabled: boolean;
     readonly indexerPollIntervalMs: number;
     readonly daoSyncIntervalMs: number;
@@ -34,22 +90,138 @@ export declare const config: {
     readonly pinataJwt: string | undefined;
     readonly pinataGateway: string | undefined;
     readonly ipfsEnabled: boolean;
+    readonly ipfsSubdomain: string | undefined;
+    readonly ipfsBackupDir: string;
+    readonly web3StorageToken: string | undefined;
+    readonly pinVerifyIntervalMs: number;
+    readonly pinAlertThreshold: number;
+    readonly pinAutoRepin: boolean;
+    readonly powEnabled: boolean;
+    readonly powDifficulty: number;
+    readonly powChallengeTtlMs: number;
+    readonly commitmentRateLimit: number;
+    readonly commitmentRateWindowMs: number;
+    readonly commitmentRegistrationRateLimit: number;
+    readonly commitmentRegistrationRateWindowMs: number;
+    readonly flagThreshold: number;
+    readonly flagPowDifficulty: number;
+    readonly ttlRenewalIntervalMs: number;
+    readonly ttlRenewalThresholdMs: number;
+    readonly ttlGracePeriodMs: number;
+    readonly ttlBatchSize: number;
+    readonly ttlCheckEnabled: boolean;
+    readonly ttlCostTrackingEnabled: boolean;
+    readonly ttlMaxFee: string;
+    readonly ttlSlippageLedgers: number;
+    readonly sbtTransferWatchIntervalMs: number;
+    readonly adminAlertWebhookUrl: string | undefined;
+    readonly backupIntervalMs: number;
+    readonly s3Bucket: string | undefined;
+    readonly backupEncryptionEnabled: boolean;
+    readonly backupEncryptionAutoInit: boolean;
+    readonly backupEncryptionKey: string | undefined;
+    readonly backupEncryptionKeyFile: string | undefined;
+    readonly backupKeyRingDir: string | undefined;
+    readonly backupRetentionCount: number;
+    readonly archivalAgeDays: number;
+    readonly archivalIntervalMs: number;
+    readonly auditLogRetentionDays: number;
+    readonly auditLogRotationIntervalMs: number;
+    readonly auditLogArchiveDir: string;
+    readonly maxProofAgeSeconds: number;
+    readonly requireClientCert: boolean;
+    readonly walletRateLimitMax: number;
+    readonly walletRateLimitWindowMs: number;
+    readonly maxSponsoredFeeStroops: number;
+    readonly circuitBreakerRpcFailureThreshold: number;
+    readonly circuitBreakerRpcResetMs: number;
+    readonly circuitBreakerPinataFailureThreshold: number;
+    readonly circuitBreakerPinataResetMs: number;
+    readonly circuitBreakerGatewayFailureThreshold: number;
+    readonly circuitBreakerGatewayResetMs: number;
+    readonly memoryMonitorIntervalMs: number;
+    readonly memoryLimitMb: number;
+    readonly memoryWarnRatio: number;
+    readonly memoryCriticalRatio: number;
+    readonly memoryAutoRestart: boolean;
+    readonly maxCachedDaos: number;
+    readonly dbQueryCacheMaxEntries: number;
+    readonly dbBackend: "sqlite" | "postgres" | "spanner";
+    readonly databaseUrl: string | undefined;
+    readonly dbDualWrite: boolean;
+    readonly dbDualWriteUrl: string | undefined;
+    readonly dbBusyTimeoutMs: number;
+    readonly dbCheckpointIntervalMs: number;
+    readonly dbCheckpointTransactionCount: number;
+    readonly dbWalWarningThresholdBytes: number;
+    readonly dbBackupIntervalMs: number;
+    readonly dbRetryCount: number;
+    readonly dbRetryBaseDelayMs: number;
+    readonly dbRetryMaxDelayMs: number;
+    readonly submitQueueMaxDepth: number;
+    readonly submitQueueItemTimeoutMs: number;
+    readonly rpcMaxConcurrentRequests: number;
+    readonly nullifierCacheTtlMs: number;
+    readonly proofCacheTtlMs: number;
+    readonly membershipCacheTtlMs: number;
+    readonly nullifierCacheMaxEntries: number;
+    readonly proofCacheMaxEntries: number;
+    readonly maxSequenceRetryAttempts: number;
+    readonly voteSubmissionPendingTtlMs: number;
+    readonly voteQueueMaxDepth: number;
     readonly testMode: boolean;
+    readonly confirmationQueueEnabled: boolean;
+    readonly confirmationInitialDelayMs: number;
+    readonly confirmationMaxDelayMs: number;
+    readonly confirmationMaxWaitMs: number;
+    readonly confirmationBackoffFactor: number;
+    readonly confirmationJitterEnabled: boolean;
+    readonly confirmationResultCacheTtlMs: number;
+    readonly confirmationWsEnabled: boolean;
+    readonly confirmationWsPath: string;
+    readonly quotaEnabled: boolean;
+    readonly quotaDefaultRateLimit: number;
+    readonly quotaDefaultRateWindowMs: number;
+    readonly quotaDefaultLedgerLimit: number;
+    readonly quotaDefaultStorageLimitBytes: number;
+    readonly quotaDefaultQueueDepth: number;
+    readonly quotaAbuseAlertThreshold: number;
+    readonly quotaAbuseAlertWindowMs: number;
+    readonly quotaOverageJson: string | undefined;
+};
+export declare const corsOptions: {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => void;
+    methods: string[];
+    allowedHeaders: string[];
+    maxAge: 3600;
 };
 export declare const LIMITS: {
     readonly MAX_IMAGE_SIZE: number;
+    readonly MAX_IMAGE_DIMENSION: 4096;
+    readonly MAX_UPLOAD_MEMORY_LIMIT: number;
     readonly MAX_METADATA_SIZE: number;
     readonly MAX_PROPOSAL_BODY: 100000;
     readonly MAX_COMMENT_BODY: 10000;
     readonly MAX_JSON_BODY: number;
     readonly IPFS_CACHE_TTL: number;
 };
-export declare const ALLOWED_IMAGE_MIMES: readonly ["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml", "image/heic", "image/heif", "image/avif", "image/bmp", "image/tiff"];
+export declare const ALLOWED_IMAGE_MIMES: readonly ["image/jpeg", "image/png", "image/gif", "image/webp"];
+export declare const IMAGE_UPLOAD_SECURITY: {
+    readonly ENFORCE_MAGIC_BYTES: true;
+    readonly MAX_DIMENSION: 4096;
+    readonly MEMORY_LIMIT: number;
+    readonly STRIP_METADATA: true;
+    readonly REJECT_POLYGLOTS: true;
+    readonly MALWARE_SCAN_ENABLED: true;
+    readonly AUDIT_LOG_ENABLED: true;
+};
 export declare const BN254_MODULUS: bigint;
 export declare const BN254_SCALAR_FIELD: bigint;
 /**
- * Validate required environment variables
- * Throws if required vars are missing
+ * Validate required environment variables and business logic constraints.
+ * Zod validates structural/type constraints on module load; this function
+ * validates business logic (required fields, contract ID format, key strength).
+ * Throws if validation fails.
  */
 export declare function validateEnv(): void;
 //# sourceMappingURL=config.d.ts.map

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import { useWallet } from "../hooks/useWallet";
 import { useMemberData } from "../hooks/useMemberData";
 import type { TreeInfo, Member } from "../hooks/useMemberData";
@@ -41,20 +41,21 @@ function MemberActionsMenu({
       <button
         onClick={() => setIsOpen(!isOpen)}
         disabled={disabled}
-        className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors disabled:opacity-50"
+        className="p-3 min-h-[48px] min-w-[48px] flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-colors disabled:opacity-50"
         title="Member actions"
+        aria-label="Member actions"
       >
-        <MoreVertical className="w-4 h-4" />
+        <MoreVertical className="w-5 h-5" />
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-popover border border-border rounded-md shadow-lg z-50">
+        <div className="absolute right-0 top-full mt-1 w-48 bg-popover border border-border rounded-md shadow-lg z-50 p-1">
           <button
             onClick={() => {
               setIsOpen(false);
               onMakeAdmin();
             }}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-muted transition-colors"
+            className="w-full flex items-center gap-3 px-3 py-3 min-h-[48px] text-sm text-left hover:bg-muted rounded-md transition-colors"
           >
             <Shield className="w-4 h-4 text-primary" />
             <span>Make Admin</span>
@@ -64,7 +65,7 @@ function MemberActionsMenu({
               setIsOpen(false);
               onRemove();
             }}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left text-destructive hover:bg-destructive/10 transition-colors"
+            className="w-full flex items-center gap-3 px-3 py-3 min-h-[48px] text-sm text-left text-destructive hover:bg-destructive/10 rounded-md transition-colors"
           >
             <UserMinus className="w-4 h-4" />
             <span>Remove Member</span>
@@ -163,7 +164,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       // Check if address already has an SBT
       const alreadyHas = await clients.membershipSbt.has({
@@ -297,7 +298,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       if (!kit) {
         throw new Error("Wallet kit not available");
@@ -372,7 +373,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       // Call the leave contract function
       const tx = await clients.membershipSbt.leave({
@@ -441,7 +442,7 @@ export default function ManageMembers({
       // Encrypt the new alias
       const encrypted = encryptAlias(newAlias, key);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       const tx = await clients.membershipSbt.update_alias({
         dao_id: BigInt(daoId),
@@ -489,7 +490,7 @@ export default function ManageMembers({
       setError(null);
       setSuccess(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       if (!kit) {
         throw new Error("Wallet kit not available");
@@ -666,12 +667,15 @@ export default function ManageMembers({
             No members yet. {isAdmin ? "Mint an SBT to add members." : ""}
           </p>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-3">
             {members.map((member) => (
-              <div key={member.address} className="p-3 bg-muted/50 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 flex-1">
-                    <div className="flex flex-col">
+              <div
+                key={member.address}
+                className="p-4 bg-muted/40 border border-border/60 rounded-xl space-y-3 sm:space-y-0"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start sm:items-center gap-3 flex-1 min-w-0">
+                    <div className="flex flex-col flex-1 min-w-0">
                       {editingAlias === member.address ? (
                         <input
                           type="text"
@@ -687,7 +691,7 @@ export default function ManageMembers({
                             }
                           }}
                           placeholder="Enter new alias..."
-                          className="text-sm font-medium px-2 py-1 border border-primary/30 rounded bg-background text-primary"
+                          className="text-base sm:text-sm font-medium px-3 py-2 min-h-[48px] sm:min-h-0 border border-primary/30 rounded bg-background text-primary w-full"
                           autoFocus
                         />
                       ) : (
@@ -695,34 +699,35 @@ export default function ManageMembers({
                           <div className="min-h-[20px] transition-all duration-200">
                             {aliasesVisible ? (
                               memberAliases.has(member.address) && (
-                                <p className="text-sm font-medium text-primary">
+                                <p className="text-sm font-medium text-primary break-words">
                                   {memberAliases.get(member.address)}
                                 </p>
                               )
                             ) : (
-                              <p className="text-sm font-medium text-muted-foreground truncate max-w-xs">
+                              <p className="text-xs font-mono text-muted-foreground break-all">
                                 {encryptedAliases.get(member.address)}
                               </p>
                             )}
                           </div>
                         )
                       )}
-                      <p className="font-mono text-xs text-muted-foreground">
-                        {/* Truncated on mobile, full on md+ */}
-                        <span className="md:hidden">
-                          {truncateAddress(member.address, 5, 5)}
+                      <p className="font-mono text-xs text-muted-foreground break-all mt-1">
+                        <span className="sm:hidden">
+                          {truncateAddress(member.address, 6, 6)}
                         </span>
-                        <span className="hidden md:inline">
+                        <span className="hidden sm:inline">
                           {member.address}
                         </span>
                       </p>
                     </div>
-                    {member.isAdmin && <Badge variant="blue">Admin</Badge>}
-                    {member.address === publicKey && (
-                      <Badge variant="secondary">You</Badge>
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                      {member.isAdmin && <Badge variant="blue">Admin</Badge>}
+                      {member.address === publicKey && (
+                        <Badge variant="secondary">You</Badge>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-end gap-2 shrink-0 border-t sm:border-t-0 pt-2 sm:pt-0 border-border/40">
                     {isAdmin &&
                       memberAliases.has(member.address) &&
                       editingAlias !== member.address && (
@@ -733,11 +738,12 @@ export default function ManageMembers({
                               memberAliases.get(member.address) || "",
                             );
                           }}
-                          className="p-1 text-primary hover:bg-primary/10 rounded transition-colors"
+                          className="p-3 min-h-[48px] min-w-[48px] flex items-center justify-center text-primary hover:bg-primary/10 rounded-md transition-colors"
                           title="Edit alias"
+                          aria-label="Edit alias"
                         >
                           <svg
-                            className="w-4 h-4"
+                            className="w-5 h-5"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -756,11 +762,11 @@ export default function ManageMembers({
                         <button
                           onClick={() => handleUpdateAlias(member.address)}
                           disabled={updatingAlias}
-                          className="p-1 text-green-600 dark:text-green-400 hover:bg-green-500/10 rounded transition-colors disabled:opacity-50"
+                          className="p-3 min-h-[48px] min-w-[48px] flex items-center justify-center text-green-600 dark:text-green-400 hover:bg-green-500/10 rounded-md transition-colors disabled:opacity-50"
                           title="Save alias"
                         >
                           <svg
-                            className="w-4 h-4"
+                            className="w-5 h-5"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -779,11 +785,11 @@ export default function ManageMembers({
                             setNewAlias("");
                           }}
                           disabled={updatingAlias}
-                          className="p-1 text-muted-foreground hover:bg-muted rounded transition-colors disabled:opacity-50"
+                          className="p-3 min-h-[48px] min-w-[48px] flex items-center justify-center text-muted-foreground hover:bg-muted rounded-md transition-colors disabled:opacity-50"
                           title="Cancel"
                         >
                           <svg
-                            className="w-4 h-4"
+                            className="w-5 h-5"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -815,7 +821,7 @@ export default function ManageMembers({
                       <button
                         onClick={handleLeaveClick}
                         disabled={leaving}
-                        className="px-3 py-1 text-sm font-medium text-destructive bg-destructive/10 border border-destructive/20 rounded-md hover:bg-destructive/20 transition-colors disabled:opacity-50"
+                        className="px-4 py-2.5 min-h-[48px] text-sm font-medium text-destructive bg-destructive/10 border border-destructive/20 rounded-md hover:bg-destructive/20 transition-colors disabled:opacity-50"
                         title="Leave DAO"
                       >
                         {leaving ? "Leaving..." : "Leave"}

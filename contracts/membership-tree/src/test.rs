@@ -1,6 +1,8 @@
 use super::*;
 use soroban_sdk::{testutils::Address as _, Env};
 
+extern crate std;
+
 // Mock Registry contract for testing
 mod mock_registry {
     use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
@@ -438,6 +440,180 @@ fn test_duplicate_commitment_different_address_fails() {
     tree_client.register_with_caller(&1u64, &commitment, &member_b);
 }
 
+// #167: leaves must be domain-separated (Poseidon(LEAF_DOMAIN, leaf)) before
+// entering the tree, not inserted as a raw commitment. Regression-tests that:
+//   1. the leaf's domain-tagged hash differs from the raw commitment, and
+//   2. independently reconstructing the root from get_merkle_path's siblings
+//      using that same domain-tagged leaf hash reproduces get_root's value —
+//      i.e. the on-chain tree and an off-chain verifier (frontend/circuit)
+//      that domain-tags leaves the same way stay in agreement.
+#[test]
+fn test_leaf_is_domain_separated_before_tree_insertion() {
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let member_a = Address::generate(&env);
+    let member_b = Address::generate(&env);
+
+    registry_client.set_admin(&1u64, &admin);
+    tree_client.init_tree(&1u64, &3u32, &Symbol::new(&env, "BN254"), &admin);
+    sbt_client.set_member(&1u64, &member_a, &true);
+    sbt_client.set_member(&1u64, &member_b, &true);
+
+    let commitment_a = U256::from_u32(&env, 111);
+    let commitment_b = U256::from_u32(&env, 222);
+    tree_client.register_with_caller(&1u64, &commitment_a, &member_a);
+    tree_client.register_with_caller(&1u64, &commitment_b, &member_b);
+
+    let field = Symbol::new(&env, "BN254");
+    let leaf_domain = U256::from_u32(&env, 1);
+
+    // 1. The domain-tagged leaf hash must differ from the raw commitment —
+    // otherwise leaves would still be indistinguishable from arbitrary
+    // internal-node hashes.
+    let leaf_hash_a = tree_client.test_poseidon_hash(&leaf_domain, &commitment_a, &field);
+    assert_ne!(leaf_hash_a, commitment_a);
+
+    // 2. Rebuild the root off-chain using get_merkle_path's siblings and the
+    // same domain-tagged leaf hash the circuit/frontend would compute, and
+    // confirm it matches get_root.
+    let (path_elements, path_indices) = tree_client.get_merkle_path(&1u64, &0u32);
+    let mut current = leaf_hash_a;
+    for i in 0..path_elements.len() {
+        let sibling = path_elements.get(i).unwrap();
+        let is_left = path_indices.get(i).unwrap() == 0;
+        current = if is_left {
+            tree_client.test_poseidon_hash(&current, &sibling, &field)
+        } else {
+            tree_client.test_poseidon_hash(&sibling, &current, &field)
+        };
+    }
+
+    assert_eq!(current, tree_client.get_root(&1u64));
+}
+
+// #371: per-member commitment registration cooldown. A member cannot register
+// another commitment until MIN_REGISTRATION_INTERVAL_SECS (3600s) have elapsed.
+use soroban_sdk::testutils::Ledger as _;
+use soroban_sdk::Address;
+
+fn set_timestamp(env: &Env, timestamp: u64) {
+    let mut info = env.ledger().get();
+    info.timestamp = timestamp;
+    env.ledger().set(info);
+}
+
+/// Register `commitment` for a fresh member in `dao_id` at the given timestamp.
+/// Returns (env, tree_id, sbt_id, registry_id, admin, member).
+fn register_member(
+    dao_id: u64,
+    commitment: u32,
+    timestamp: u64,
+) -> (Env, Address, Address, Address, Address, Address) {
+    let (env, tree_id, sbt_id, registry_id, admin) = setup_env();
+    set_timestamp(&env, timestamp);
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+    let member = Address::generate(&env);
+
+    registry_client.set_admin(&dao_id, &admin);
+    tree_client.init_tree(&dao_id, &5u32, &Symbol::new(&env, "BN254"), &admin);
+    sbt_client.set_member(&dao_id, &member, &true);
+    tree_client.register_with_caller(&dao_id, &U256::from_u32(&env, commitment), &member);
+
+    (env, tree_id, sbt_id, registry_id, admin, member)
+}
+
+fn panic_message(
+    client: &MembershipTreeClient,
+    dao_id: u64,
+    commitment: U256,
+    member: &Address,
+) -> Option<std::string::String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.register_with_caller(&dao_id, &commitment, member);
+    }));
+    match result {
+        Ok(_) => None,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<std::string::String>() {
+                s.clone()
+            } else if let Some(s) = payload.downcast_ref::<&str>() {
+                std::string::String::from(*s)
+            } else {
+                std::string::String::from("unknown panic payload")
+            };
+            Some(msg)
+        }
+    }
+}
+
+#[test]
+fn test_register_within_cooldown_rate_limited() {
+    let (env, tree_id, _sbt_id, _registry_id, _admin, member) =
+        register_member(1u64, 12345, 1_000_000);
+
+    // Advance inside the cooldown window and attempt a re-registration.
+    set_timestamp(&env, 1_001_800);
+    let client = MembershipTreeClient::new(&env, &tree_id);
+    let msg = panic_message(&client, 1u64, U256::from_u32(&env, 54321), &member);
+    let msg = msg.expect("re-registration within cooldown should panic");
+    assert!(
+        msg.contains("#17"),
+        "expected RateLimited error #17, got: {msg}"
+    );
+
+    // The original registration is untouched.
+    let client = MembershipTreeClient::new(&env, &tree_id);
+    assert_eq!(client.get_tree_info(&1u64).1, 1);
+}
+
+#[test]
+fn test_register_after_cooldown_allowed() {
+    let (env, tree_id, _sbt_id, _registry_id, _admin, member) =
+        register_member(1u64, 12345, 1_000_000);
+
+    // Past the cooldown window: the cooldown no longer blocks; the member is
+    // instead rejected by the existing member-exists rule (#6) — proving the
+    // window expired without letting a duplicate registration through.
+    set_timestamp(&env, 1_003_600);
+    let client = MembershipTreeClient::new(&env, &tree_id);
+    let msg = panic_message(&client, 1u64, U256::from_u32(&env, 54321), &member);
+    let msg = msg.expect("re-registration after cooldown should be rejected downstream");
+    assert!(
+        msg.contains("#6"),
+        "expected MemberExists error #6 after cooldown, got: {msg}"
+    );
+    assert!(
+        !msg.contains("#17"),
+        "cooldown should have expired, got RateLimited {msg}"
+    );
+}
+
+#[test]
+fn test_registration_cooldown_is_per_member_and_per_dao() {
+    let (env, tree_id, sbt_id, registry_id, admin, member) = register_member(1u64, 111, 1_000_000);
+    let tree_client = MembershipTreeClient::new(&env, &tree_id);
+    let sbt_client = mock_sbt::MockSbtClient::new(&env, &sbt_id);
+    let registry_client = mock_registry::MockRegistryClient::new(&env, &registry_id);
+
+    // Different member in the same DAO/window is unaffected.
+    let other = Address::generate(&env);
+    sbt_client.set_member(&1u64, &other, &true);
+    tree_client.register_with_caller(&1u64, &U256::from_u32(&env, 222), &other);
+
+    // Same member in a different DAO/window is unaffected (per-dao scoping).
+    registry_client.set_admin(&2u64, &admin);
+    tree_client.init_tree(&2u64, &5u32, &Symbol::new(&env, "BN254"), &admin);
+    sbt_client.set_member(&2u64, &member, &true);
+    tree_client.register_with_caller(&2u64, &U256::from_u32(&env, 333), &member);
+
+    let (_, next_index, _) = tree_client.get_tree_info(&1u64);
+    assert_eq!(next_index, 2);
+}
+
 // ========================================================================
 // Poseidon field pinning
 //
@@ -463,7 +639,7 @@ fn test_init_tree_accepts_both_supported_fields() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #17)")]
+#[should_panic(expected = "Error(Contract, #22)")]
 fn test_init_tree_rejects_unknown_field() {
     let (env, tree_id, _, registry_id, admin) = setup_env();
     let client = MembershipTreeClient::new(&env, &tree_id);
@@ -474,7 +650,7 @@ fn test_init_tree_rejects_unknown_field() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #17)")]
+#[should_panic(expected = "Error(Contract, #22)")]
 fn test_init_tree_rejects_empty_field() {
     let (env, tree_id, _, registry_id, admin) = setup_env();
     let client = MembershipTreeClient::new(&env, &tree_id);
@@ -485,7 +661,7 @@ fn test_init_tree_rejects_empty_field() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #17)")]
+#[should_panic(expected = "Error(Contract, #22)")]
 fn test_init_tree_from_registry_rejects_unknown_field() {
     let env = Env::default();
     env.mock_all_auths();

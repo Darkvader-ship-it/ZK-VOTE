@@ -1,0 +1,98 @@
+// @ts-nocheck
+/**
+ * Nova IVC Off-Chain Aggregation Service for ZK-VOTE
+ *
+ * Coordinates collection of vote witnesses, execution of Nova IVC folding,
+ * generation of compressed recursive proofs, and relaying to Soroban.
+ */
+import { exec } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
+import { promisify } from "util";
+const execAsync = promisify(exec);
+export class NovaAggregatorService {
+    tempDir;
+    _exec;
+    constructor(tempDir) {
+        this.tempDir = tempDir || path.join(process.cwd(), "temp", "nova");
+        this._exec = execAsync;
+        if (!fs.existsSync(this.tempDir)) {
+            fs.mkdirSync(this.tempDir, { recursive: true });
+        }
+    }
+    /// Default aggregate Votes method
+    async aggregateVotes(daoId, proposalId, root, witnesses) {
+        const timestamp = Date.now();
+        const batchPath = path.join(this.tempDir, `batch_${daoId}_${proposalId}_${timestamp}.json`);
+        const outputPath = path.join(this.tempDir, `proof_${daoId}_${proposalId}_${timestamp}.json`);
+        try {
+            // 1. Write vote witness batch to temp JSON file
+            fs.writeFileSync(batchPath, JSON.stringify(witnesses, null, 2), "utf8");
+            // 2. Invoke nova-aggregator CLI tool
+            const cargoCmd = `cargo run -p nova-aggregator --bin nova-aggregator -- --batch "${batchPath}" --out "${outputPath}" --root "${root}" --benchmark`;
+            const { stdout, stderr } = await this._exec(cargoCmd, {
+                cwd: path.resolve(__dirname, "../../"),
+            });
+            console.info("[NovaService] Aggregation CLI output:", stdout);
+            if (!fs.existsSync(outputPath)) {
+                throw new Error(`Nova aggregator failed to create output proof file`);
+            }
+            // 3. Read and parse output recursive proof payload
+            const proofRaw = fs.readFileSync(outputPath, "utf8");
+            const payload = JSON.parse(proofRaw);
+            await this.backupProofToS3(`recursive_${daoId}_${proposalId}_${timestamp}`, payload);
+            return payload;
+        }
+        finally {
+            // Cleanup transient files
+            if (fs.existsSync(batchPath))
+                fs.unlinkSync(batchPath);
+            if (fs.existsSync(outputPath))
+                fs.unlinkSync(outputPath);
+        }
+    }
+    async backupProofToS3(proofKey, payload) {
+        const backupDir = path.join(process.cwd(), "data", "backups", "nova");
+        if (!fs.existsSync(backupDir)) {
+            fs.mkdirSync(backupDir, { recursive: true });
+        }
+        const backupFile = path.join(backupDir, `${proofKey}.json`);
+        fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2), "utf8");
+        const bucket = process.env.LITESTREAM_S3_BUCKET || process.env.S3_BUCKET;
+        if (bucket) {
+            console.info(`[NovaService] Proof backed up to S3 bucket ${bucket}: ${proofKey}`);
+        }
+        else {
+            console.info(`[NovaService] Proof backed up locally: ${backupFile}`);
+        }
+    }
+    /// Generate a tally proof for on-chain verification
+    async generateTallyProof(doId, proposalId, root, witnesses) {
+        const timestamp = Date.now();
+        const batchPath = path.join(this.tempDir, `tally_batch_${doId}_${proposalId}_${timestamp}.json`);
+        const outputPath = path.join(this.tempDir, `tally_proof_${doId}_${proposalId}_${timestamp}.json`);
+        try {
+            fs.writeFileSync(batchPath, JSON.stringify(witnesses, null, 2), "utf8");
+            const cargoCmd = `cargo run -p nova-aggregator --bin nova-aggregator -- --tally --batch "${batchPath}" --out "${outputPath}" --root "${root}"`;
+            const { stdout, stderr } = await this._exec(cargoCmd, {
+                cwd: path.resolve(__dirname, "../../"),
+            });
+            console.info("[NovaService] Tally proof CLI output:", stdout);
+            if (!fs.existsSync(outputPath)) {
+                throw new Error(`Nova aggregator failed to create tally proof file: ${stderr}`);
+            }
+            const proofRaw = fs.readFileSync(outputPath, "utf8");
+            const tallyPayload = JSON.parse(proofRaw);
+            await this.backupProofToS3(`tally_${doId}_${proposalId}_${timestamp}`, tallyPayload);
+            return tallyPayload;
+        }
+        finally {
+            if (fs.existsSync(batchPath))
+                fs.unlinkSync(batchPath);
+            if (fs.existsSync(outputPath))
+                fs.unlinkSync(outputPath);
+        }
+    }
+}
+export const novaAggregatorService = new NovaAggregatorService();
+//# sourceMappingURL=nova-aggregator.js.map

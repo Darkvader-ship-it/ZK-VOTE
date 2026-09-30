@@ -31,6 +31,50 @@ export default tseslint.config(
       'jsdoc/check-tag-names': 'warn',
       'jsdoc/check-types': 'warn',
       'jsdoc/valid-types': 'warn',
+
+      // SQL Injection Prevention Rules
+      'no-template-curly-in-string': 'error',
+      
+      // Custom SQL injection detection rules
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'TemplateLiteral[expressions.length>0][quasis.0.value.raw*="SELECT"]',
+          message: 'Potential SQL injection: Avoid template literals with variables in SELECT statements. Use parameterized queries instead.'
+        },
+        {
+          selector: 'TemplateLiteral[expressions.length>0][quasis.0.value.raw*="INSERT"]',
+          message: 'Potential SQL injection: Avoid template literals with variables in INSERT statements. Use parameterized queries instead.'
+        },
+        {
+          selector: 'TemplateLiteral[expressions.length>0][quasis.0.value.raw*="UPDATE"]',
+          message: 'Potential SQL injection: Avoid template literals with variables in UPDATE statements. Use parameterized queries instead.'
+        },
+        {
+          selector: 'TemplateLiteral[expressions.length>0][quasis.0.value.raw*="DELETE"]',
+          message: 'Potential SQL injection: Avoid template literals with variables in DELETE statements. Use parameterized queries instead.'
+        },
+        {
+          selector: 'TemplateLiteral[expressions.length>0][quasis.0.value.raw*="ORDER BY"]',
+          message: 'Potential SQL injection: Avoid template literals with variables in ORDER BY clauses. Use allowlisted columns instead.'
+        },
+        {
+          selector: 'BinaryExpression[operator="+"][left.type="Literal"][left.value*="SELECT"]',
+          message: 'Potential SQL injection: Avoid string concatenation in SELECT statements. Use parameterized queries instead.'
+        },
+        {
+          selector: 'BinaryExpression[operator="+"][left.type="Literal"][left.value*="INSERT"]',
+          message: 'Potential SQL injection: Avoid string concatenation in INSERT statements. Use parameterized queries instead.'
+        },
+        {
+          selector: 'BinaryExpression[operator="+"][left.type="Literal"][left.value*="UPDATE"]',
+          message: 'Potential SQL injection: Avoid string concatenation in UPDATE statements. Use parameterized queries instead.'
+        },
+        {
+          selector: 'BinaryExpression[operator="+"][left.type="Literal"][left.value*="DELETE"]',
+          message: 'Potential SQL injection: Avoid string concatenation in DELETE statements. Use parameterized queries instead.'
+        }
+      ]
     },
   },
 );
