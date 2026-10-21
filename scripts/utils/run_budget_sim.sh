@@ -23,6 +23,7 @@ if [[ -z "$SOURCE" ]]; then
   echo "❌ Set SOURCE to a funded key name (stellar keys list) for contract deploys"
   exit 1
 fi
+GUARDIAN=${GUARDIAN:-$(soroban keys address "$SOURCE")}
 
 echo "Simulating budget for set_vk/create_proposal/vote"
 echo "Voting WASM:   $VOTING_WASM"
@@ -35,7 +36,7 @@ echo "Deploying temporary contracts (simulation mode)..."
 REG_ID=$(soroban contract deploy --source-account "$SOURCE" --wasm "$REGISTRY_WASM" --rpc-url "$STELLAR_RPC_URL" --network-passphrase "$STELLAR_NETWORK_PASSPHRASE")
 SBT_ID=$(soroban contract deploy --source-account "$SOURCE" --wasm "$SBT_WASM" --rpc-url "$STELLAR_RPC_URL" --network-passphrase "$STELLAR_NETWORK_PASSPHRASE" -- --registry "$REG_ID")
 TREE_ID=$(soroban contract deploy --source-account "$SOURCE" --wasm "$TREE_WASM" --rpc-url "$STELLAR_RPC_URL" --network-passphrase "$STELLAR_NETWORK_PASSPHRASE" -- --sbt "$SBT_ID")
-VOTING_ID=$(soroban contract deploy --source-account "$SOURCE" --wasm "$VOTING_WASM" --rpc-url "$STELLAR_RPC_URL" --network-passphrase "$STELLAR_NETWORK_PASSPHRASE" -- --tree "$TREE_ID")
+VOTING_ID=$(soroban contract deploy --source-account "$SOURCE" --wasm "$VOTING_WASM" --rpc-url "$STELLAR_RPC_URL" --network-passphrase "$STELLAR_NETWORK_PASSPHRASE" -- --tree "$TREE_ID" --registry "$REG_ID" --guardian "$GUARDIAN")
 
 echo "Registry: $REG_ID"
 echo "SBT:      $SBT_ID"

@@ -25,7 +25,9 @@ use soroban_sdk::{
 };
 
 // Re-export shared Groth16 types and utilities
-pub use zkvote_groth16::{Groth16Error, Proof, VerificationKey};
+pub use zkvote_groth16::{
+    CurveId, Groth16Error, PathContext, Proof, ProofBls381, VerificationKey, VerificationKeyBls381,
+};
 
 const TREE_CONTRACT: Symbol = symbol_short!("tree");
 const REGISTRY: Symbol = symbol_short!("registry");
@@ -63,6 +65,79 @@ pub enum CommentsError {
     InvalidNullifier = 32,
     /// Root predates member removal (invalid for Trailing mode after revocation)
     RootPredatesRemoval = 33,
+
+    /// ── Coarse error codes (100–106) ──────────────────────────────────
+    /// Collapsed categories for anonymous-submission production paths.
+    /// Admin and test contexts continue to return the specific fine-grained
+    /// discriminants above.  See [`CommentsError::to_coarse`].
+    InvalidInput = 100,
+    EligibilityFailed = 101,
+    ProofInvalid = 102,
+    AlreadySubmitted = 103,
+    WindowClosed = 104,
+    InsufficientFunds = 105,
+    ConfigError = 106,
+}
+
+impl CommentsError {
+    /// Collapse fine-grained discriminants into one of the seven stable
+    /// coarse categories (codes 100–106) when `ctx` is
+    /// [`PathContext::Anonymous`].  [`PathContext::Admin`] returns the
+    /// original value unchanged so administrative tooling and tests keep
+    /// full diagnostic granularity.
+    pub fn to_coarse(&self, ctx: PathContext) -> CommentsError {
+        #[cfg(test)]
+        return *self;
+        #[cfg(not(test))]
+        match ctx {
+            PathContext::Admin => *self,
+            PathContext::Anonymous => match self {
+                // ── Input / field / content failures → InvalidInput (100) ──
+                CommentsError::SignalNotInField
+                | CommentsError::InvalidNullifier
+                | CommentsError::CommentContentTooLong
+                | CommentsError::InvalidParentComment => CommentsError::InvalidInput,
+
+                // ── Eligibility / root / revocation → EligibilityFailed (101) ──
+                CommentsError::CommitmentRevoked
+                | CommentsError::RootMismatch
+                | CommentsError::RootNotInHistory
+                | CommentsError::RootPredatesProposal
+                | CommentsError::RootPredatesRemoval => CommentsError::EligibilityFailed,
+
+                // ── Proof verification → ProofInvalid (102) ──
+                CommentsError::InvalidProof => CommentsError::ProofInvalid,
+
+                // ── Pass-throughs (public-state / admin-only) ──
+                CommentsError::ProposalNotFound
+                | CommentsError::CommentNotFound
+                | CommentsError::CommentDeleted
+                | CommentsError::NotCommentOwner
+                | CommentsError::NotAdmin
+                | CommentsError::Unauthorized
+                | CommentsError::NotDaoMember
+                | CommentsError::ContractNotSet
+                | CommentsError::AlreadyInitialized => *self,
+
+                // Already-coarse variants are idempotent.
+                CommentsError::InvalidInput
+                | CommentsError::EligibilityFailed
+                | CommentsError::ProofInvalid
+                | CommentsError::AlreadySubmitted
+                | CommentsError::WindowClosed
+                | CommentsError::InsufficientFunds
+                | CommentsError::ConfigError => *self,
+            },
+        }
+    }
+}
+
+/// Panic with a coarse version of `err` when the submission context is
+/// anonymous, otherwise panic with the specific error.  Shorthand for
+/// `panic_with_error!(env, err.to_coarse(ctx))`.
+#[inline]
+fn panic_coarse(env: &Env, ctx: PathContext, err: CommentsError) {
+    panic_with_error!(env, err.to_coarse(ctx));
 }
 
 /// Vote mode for proposal eligibility (mirrors voting contract)
@@ -85,6 +160,12 @@ pub enum DataKey {
     CommentNullifier(u64, u64, U256), // (dao_id, proposal_id, nullifier) -> bool (for duplicate detection)
     CommitmentNonce(u64, u64, U256), // (dao_id, proposal_id, commitment) -> next nonce for this commitment
     VotingContract,                  // Address of voting contract for proposal lookups and VK
+    /// Test-only: overrides proof verification. NOT USED IN PRODUCTION.
+    ///
+    /// Appended at the end so existing storage discriminants stay stable. Only
+    /// `#[cfg(test)]` code reads it and only `#[cfg(test)]` code writes it, so
+    /// no deployable build can disable proof verification through this key.
+    VerifyOverride,
 }
 
 /// Who deleted a comment
@@ -195,19 +276,37 @@ impl Comments {
     }
 
     /// Validate that a U256 value is within the BN254 scalar field (< r)
-    /// Panics with CommentsError::SignalNotInField if value >= r
-    fn assert_in_field(env: &Env, value: &U256) {
+    /// Panics with a coarse-mapped CommentsError::SignalNotInField under
+    /// [`PathContext::Anonymous`].
+    fn assert_in_field(env: &Env, ctx: PathContext, value: &U256) {
         if zkvote_groth16::assert_in_field(env, value).is_err() {
-            panic_with_error!(env, CommentsError::SignalNotInField);
+            panic_coarse(env, ctx, CommentsError::SignalNotInField);
         }
     }
 
-    /// Get VK from voting contract (single source of truth)
+    /// Validate that a U256 value is within the BLS12-381 scalar field
+    fn assert_in_field_bls381(env: &Env, ctx: PathContext, value: &U256) {
+        if zkvote_groth16::assert_in_field_bls381(env, value).is_err() {
+            panic_coarse(env, ctx, CommentsError::SignalNotInField);
+        }
+    }
+
+    /// Get VK from voting contract (single source of truth) - BN254
     fn get_vk_from_voting(env: &Env, dao_id: u64) -> VerificationKey {
         let voting_contract: Address = Self::voting_contract(env.clone());
         env.invoke_contract(
             &voting_contract,
             &symbol_short!("get_vk"),
+            soroban_sdk::vec![env, dao_id.into_val(env)],
+        )
+    }
+
+    /// Get BLS12-381 VK from voting contract
+    fn get_vk_from_voting_bls381(env: &Env, dao_id: u64) -> VerificationKeyBls381 {
+        let voting_contract: Address = Self::voting_contract(env.clone());
+        env.invoke_contract(
+            &voting_contract,
+            &Symbol::new(env, "get_vk_bls381"),
             soroban_sdk::vec![env, dao_id.into_val(env)],
         )
     }
@@ -242,7 +341,13 @@ impl Comments {
     }
 
     /// Validate root matches proposal eligibility (Fixed vs Trailing mode)
-    fn validate_root_eligibility(env: &Env, dao_id: u64, proposal_id: u64, root: &U256) {
+    fn validate_root_eligibility(
+        env: &Env,
+        ctx: PathContext,
+        dao_id: u64,
+        proposal_id: u64,
+        root: &U256,
+    ) {
         let (vote_mode, eligible_root, earliest_root_index) =
             Self::get_proposal_eligibility(env, dao_id, proposal_id);
 
@@ -252,41 +357,72 @@ impl Comments {
             VoteMode::Fixed => {
                 // Fixed mode: root must exactly match the snapshot at proposal creation
                 if root != &eligible_root {
-                    panic_with_error!(env, CommentsError::RootMismatch);
+                    panic_coarse(env, ctx, CommentsError::RootMismatch);
                 }
+                // SECURITY (#audit-H3): and the snapshot must still be a valid
+                // proof of *current* membership. A member removed after the
+                // snapshot keeps a proof against the pre-removal root, and
+                // because the voting contract pins an Active Fixed snapshot
+                // against root eviction, that root never ages out — so without
+                // this check a Fixed-mode comment thread stays permanently
+                // open to a removed member. This mirrors the identical
+                // `min_root` check the Trailing arm below already performs.
+                Self::assert_root_not_revoked(env, ctx, dao_id, root);
             }
             VoteMode::Trailing => {
-                // Trailing mode: check root is in valid history
-                let root_valid: bool = env.invoke_contract(
+                // Trailing mode: any root in the tree's history is eligible, so
+                // long as it is neither older than the proposal nor older than
+                // the last removal. The tree answers all three conditions in one
+                // call, so this is a single hop.
+                let code: u32 = env.invoke_contract(
                     &tree_contract,
-                    &symbol_short!("root_ok"),
-                    soroban_sdk::vec![env, dao_id.into_val(env), root.clone().into_val(env)],
+                    &Symbol::new(env, "root_eligibility"),
+                    soroban_sdk::vec![
+                        env,
+                        dao_id.into_val(env),
+                        root.clone().into_val(env),
+                        earliest_root_index.into_val(env),
+                    ],
                 );
-                if !root_valid {
-                    panic_with_error!(env, CommentsError::RootNotInHistory);
-                }
-
-                // Check root index >= earliest_root_index
-                let root_index: u32 = env.invoke_contract(
-                    &tree_contract,
-                    &symbol_short!("root_idx"),
-                    soroban_sdk::vec![env, dao_id.into_val(env), root.clone().into_val(env)],
-                );
-                if root_index < earliest_root_index {
-                    panic_with_error!(env, CommentsError::RootPredatesProposal);
-                }
-
-                // SECURITY: Check root index >= min_valid_root_index
-                // This prevents revoked members from commenting using pre-revocation roots
-                let min_valid_root: u32 = env.invoke_contract(
-                    &tree_contract,
-                    &symbol_short!("min_root"),
-                    soroban_sdk::vec![env, dao_id.into_val(env)],
-                );
-                if root_index < min_valid_root {
-                    panic_with_error!(env, CommentsError::RootPredatesRemoval);
+                match code {
+                    0 => {}
+                    1 => panic_coarse(env, ctx, CommentsError::RootNotInHistory),
+                    2 => panic_coarse(env, ctx, CommentsError::RootPredatesProposal),
+                    _ => panic_coarse(env, ctx, CommentsError::RootPredatesRemoval),
                 }
             }
+        }
+    }
+
+    /// Reject a root that a member removal has invalidated.
+    ///
+    /// `min_root` is the tree's monotonic revocation floor: `remove_member`
+    /// raises it to the index of the root it just produced, so every root below
+    /// it predates the removal. `remove_member` is its only writer and there is
+    /// no setter, so it can never be lowered. A DAO that removes nobody leaves
+    /// it at 0, where this is a no-op.
+    ///
+    /// Asked of the tree as one `root_eligibility` question rather than as three
+    /// separate lookups. All three facts live in the tree, and a caller that
+    /// remembers to ask for two of them is exactly how Fixed mode ended up with
+    /// no revocation check at all (#audit-H3).
+    fn assert_root_not_revoked(env: &Env, ctx: PathContext, dao_id: u64, root: &U256) {
+        let tree_contract: Address = Self::tree_contract(env.clone());
+        let code: u32 = env.invoke_contract(
+            &tree_contract,
+            &Symbol::new(env, "root_eligibility"),
+            soroban_sdk::vec![
+                env,
+                dao_id.into_val(env),
+                root.clone().into_val(env),
+                0u32.into_val(env),
+            ],
+        );
+        match code {
+            0 => {}
+            1 => panic_coarse(env, ctx, CommentsError::RootNotInHistory),
+            2 => panic_coarse(env, ctx, CommentsError::RootPredatesProposal),
+            _ => panic_coarse(env, ctx, CommentsError::RootPredatesRemoval),
         }
     }
 
@@ -384,18 +520,21 @@ impl Comments {
         proof: Proof,
     ) -> u64 {
         Self::bump_instance(&env);
+
+        let ctx = PathContext::Anonymous;
+
         // SECURITY: Validate public signals are within BN254 scalar field FIRST
         // This prevents modular reduction attacks where values >= r verify identically
-        Self::assert_in_field(&env, &nullifier);
-        Self::assert_in_field(&env, &root);
+        Self::assert_in_field(&env, ctx, &nullifier);
+        Self::assert_in_field(&env, ctx, &root);
 
         // Check nullifier is non-zero
         if nullifier == U256::from_u32(&env, 0) {
-            panic_with_error!(&env, CommentsError::InvalidNullifier);
+            panic_coarse(&env, ctx, CommentsError::InvalidNullifier);
         }
 
         if content_cid.len() > MAX_CID_LEN {
-            panic_with_error!(&env, CommentsError::CommentContentTooLong);
+            panic_coarse(&env, ctx, CommentsError::CommentContentTooLong);
         }
 
         // NOTE: We intentionally do NOT check nullifier uniqueness for comments!
@@ -406,7 +545,7 @@ impl Comments {
         if let Some(pid) = parent_id {
             let parent_key = DataKey::Comment(dao_id, proposal_id, pid);
             if !env.storage().persistent().has(&parent_key) {
-                panic_with_error!(&env, CommentsError::InvalidParentComment);
+                panic_coarse(&env, ctx, CommentsError::InvalidParentComment);
             }
         }
 
@@ -414,7 +553,7 @@ impl Comments {
         Self::assert_proposal_exists(&env, dao_id, proposal_id);
 
         // Validate root eligibility (Fixed vs Trailing mode - matches voting contract logic)
-        Self::validate_root_eligibility(&env, dao_id, proposal_id, &root);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
 
         // Get VK from voting contract (single source of truth)
         let vk = Self::get_vk_from_voting(&env, dao_id);
@@ -440,7 +579,7 @@ impl Comments {
         ];
 
         if !Self::verify_groth16(&env, &vk, &proof, &pub_signals) {
-            panic_with_error!(&env, CommentsError::InvalidProof);
+            panic_coarse(&env, ctx, CommentsError::InvalidProof);
         }
 
         // No nullifier tracking for comments - allow unlimited comments per user
@@ -462,6 +601,100 @@ impl Comments {
             deleted_by: DELETED_BY_NONE,
             nullifier: Some(nullifier),
             comment_nonce: None, // No longer tracking nonce
+        };
+
+        let key = DataKey::Comment(dao_id, proposal_id, comment_id);
+        env.storage().persistent().set(&key, &comment);
+        Self::bump_persistent(&env, &key);
+
+        CommentCreatedEvent {
+            dao_id,
+            proposal_id,
+            comment_id,
+            is_anonymous: true,
+        }
+        .publish(&env);
+
+        comment_id
+    }
+
+    /// Add an anonymous comment with BLS12-381 ZK proof
+    pub fn add_anonymous_comment_bls381(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        content_cid: String,
+        parent_id: Option<u64>,
+        nullifier: U256,
+        root: U256,
+        vote_choice: bool,
+        proof: ProofBls381,
+    ) -> u64 {
+        Self::bump_instance(&env);
+
+        let ctx = PathContext::Anonymous;
+
+        Self::assert_in_field_bls381(&env, ctx, &nullifier);
+        Self::assert_in_field_bls381(&env, ctx, &root);
+
+        if nullifier == U256::from_u32(&env, 0) {
+            panic_coarse(&env, ctx, CommentsError::InvalidNullifier);
+        }
+
+        if content_cid.len() > MAX_CID_LEN {
+            panic_coarse(&env, ctx, CommentsError::CommentContentTooLong);
+        }
+
+        if let Some(pid) = parent_id {
+            let parent_key = DataKey::Comment(dao_id, proposal_id, pid);
+            if !env.storage().persistent().has(&parent_key) {
+                panic_coarse(&env, ctx, CommentsError::InvalidParentComment);
+            }
+        }
+
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
+
+        let vk = Self::get_vk_from_voting_bls381(&env, dao_id);
+
+        let dao_signal = U256::from_u128(&env, dao_id as u128);
+        let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+        let choice_signal = if vote_choice {
+            U256::from_u32(&env, 1)
+        } else {
+            U256::from_u32(&env, 0)
+        };
+
+        let pub_signals = soroban_sdk::vec![
+            &env,
+            root.clone(),
+            nullifier.clone(),
+            dao_signal,
+            proposal_signal,
+            choice_signal,
+        ];
+
+        if !Self::verify_groth16_bls381(&env, &vk, &proof, &pub_signals) {
+            panic_coarse(&env, ctx, CommentsError::InvalidProof);
+        }
+
+        let comment_id = Self::next_comment_id(&env, dao_id, proposal_id);
+        let now = env.ledger().timestamp();
+
+        let comment = CommentInfo {
+            id: comment_id,
+            dao_id,
+            proposal_id,
+            author: None,
+            content_cid,
+            parent_id,
+            created_at: now,
+            updated_at: now,
+            revision_cids: Vec::new(&env),
+            deleted: false,
+            deleted_by: DELETED_BY_NONE,
+            nullifier: Some(nullifier),
+            comment_nonce: None,
         };
 
         let key = DataKey::Comment(dao_id, proposal_id, comment_id);
@@ -543,12 +776,15 @@ impl Comments {
         proof: Proof,
     ) {
         Self::bump_instance(&env);
+
+        let ctx = PathContext::Anonymous;
+
         // SECURITY: Validate public signals are within BN254 scalar field FIRST
-        Self::assert_in_field(&env, &nullifier);
-        Self::assert_in_field(&env, &root);
+        Self::assert_in_field(&env, ctx, &nullifier);
+        Self::assert_in_field(&env, ctx, &root);
 
         if new_content_cid.len() > MAX_CID_LEN {
-            panic_with_error!(&env, CommentsError::CommentContentTooLong);
+            panic_coarse(&env, ctx, CommentsError::CommentContentTooLong);
         }
 
         let key = DataKey::Comment(dao_id, proposal_id, comment_id);
@@ -574,6 +810,13 @@ impl Comments {
             _ => panic_with_error!(&env, CommentsError::NotCommentOwner),
         }
 
+        // SECURITY: the root is caller-supplied here, so without this check an
+        // owner could edit against a root that was never eligible for this
+        // proposal (e.g. one predating the proposal or a revocation). Same
+        // validation `add_anonymous_comment` applies.
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
+
         // Verify ZK proof using VK from voting contract
         let vk = Self::get_vk_from_voting(&env, dao_id);
 
@@ -597,7 +840,96 @@ impl Comments {
         ];
 
         if !Self::verify_groth16(&env, &vk, &proof, &pub_signals) {
-            panic_with_error!(&env, CommentsError::InvalidProof);
+            panic_coarse(&env, ctx, CommentsError::InvalidProof);
+        }
+
+        if comment.revision_cids.len() < MAX_REVISIONS {
+            comment.revision_cids.push_back(comment.content_cid.clone());
+        }
+
+        comment.content_cid = new_content_cid;
+        comment.updated_at = env.ledger().timestamp();
+
+        env.storage().persistent().set(&key, &comment);
+        Self::bump_persistent(&env, &key);
+
+        CommentEditedEvent {
+            dao_id,
+            proposal_id,
+            comment_id,
+        }
+        .publish(&env);
+    }
+
+    /// Edit an anonymous comment with BLS12-381 proof (requires proof with same nullifier)
+    pub fn edit_anonymous_comment_bls381(
+        env: Env,
+        dao_id: u64,
+        proposal_id: u64,
+        comment_id: u64,
+        new_content_cid: String,
+        nullifier: U256,
+        root: U256,
+        vote_choice: bool,
+        proof: ProofBls381,
+    ) {
+        Self::bump_instance(&env);
+
+        let ctx = PathContext::Anonymous;
+
+        Self::assert_in_field_bls381(&env, ctx, &nullifier);
+        Self::assert_in_field_bls381(&env, ctx, &root);
+
+        if new_content_cid.len() > MAX_CID_LEN {
+            panic_coarse(&env, ctx, CommentsError::CommentContentTooLong);
+        }
+
+        let key = DataKey::Comment(dao_id, proposal_id, comment_id);
+        let mut comment: CommentInfo = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, CommentsError::CommentNotFound));
+
+        if comment.deleted {
+            panic_with_error!(&env, CommentsError::CommentDeleted);
+        }
+
+        match &comment.nullifier {
+            Some(original_nullifier) => {
+                if &nullifier != original_nullifier {
+                    panic_with_error!(&env, CommentsError::NotCommentOwner);
+                }
+            }
+            _ => panic_with_error!(&env, CommentsError::NotCommentOwner),
+        }
+
+        // SECURITY: same root-eligibility check as add_anonymous_comment —
+        // the root is caller-supplied, so it must be bound to the proposal.
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
+
+        let vk = Self::get_vk_from_voting_bls381(&env, dao_id);
+
+        let dao_signal = U256::from_u128(&env, dao_id as u128);
+        let proposal_signal = U256::from_u128(&env, proposal_id as u128);
+        let choice_signal = if vote_choice {
+            U256::from_u32(&env, 1)
+        } else {
+            U256::from_u32(&env, 0)
+        };
+
+        let pub_signals = soroban_sdk::vec![
+            &env,
+            root.clone(),
+            nullifier.clone(),
+            dao_signal,
+            proposal_signal,
+            choice_signal,
+        ];
+
+        if !Self::verify_groth16_bls381(&env, &vk, &proof, &pub_signals) {
+            panic_coarse(&env, ctx, CommentsError::InvalidProof);
         }
 
         if comment.revision_cids.len() < MAX_REVISIONS {
@@ -673,9 +1005,12 @@ impl Comments {
         proof: Proof,
     ) {
         Self::bump_instance(&env);
+
+        let ctx = PathContext::Anonymous;
+
         // SECURITY: Validate public signals are within BN254 scalar field FIRST
-        Self::assert_in_field(&env, &nullifier);
-        Self::assert_in_field(&env, &root);
+        Self::assert_in_field(&env, ctx, &nullifier);
+        Self::assert_in_field(&env, ctx, &root);
 
         let key = DataKey::Comment(dao_id, proposal_id, comment_id);
         let mut comment: CommentInfo = env
@@ -693,6 +1028,11 @@ impl Comments {
             Some(original_nullifier) if original_nullifier == &nullifier => {}
             _ => panic_with_error!(&env, CommentsError::NotCommentOwner),
         }
+
+        // SECURITY: same root-eligibility check as add_anonymous_comment —
+        // the root is caller-supplied, so it must be bound to the proposal.
+        Self::assert_proposal_exists(&env, dao_id, proposal_id);
+        Self::validate_root_eligibility(&env, ctx, dao_id, proposal_id, &root);
 
         // Verify ZK proof using VK from voting contract
         let vk = Self::get_vk_from_voting(&env, dao_id);
@@ -717,7 +1057,7 @@ impl Comments {
         ];
 
         if !Self::verify_groth16(&env, &vk, &proof, &pub_signals) {
-            panic_with_error!(&env, CommentsError::InvalidProof);
+            panic_coarse(&env, ctx, CommentsError::InvalidProof);
         }
 
         comment.deleted = true;
@@ -911,13 +1251,68 @@ impl Comments {
     }
 
     /// Verify Groth16 proof using shared verification library.
+    ///
+    /// In a `cfg(test)` build only, an instance-storage override lets a test
+    /// decide the outcome of verification so it can exercise logic around the
+    /// check without a real proof. Gated on `cfg(test)` rather than a cargo
+    /// feature, so no deployable build can consult it and there is no setter
+    /// outside tests. An unset override in a test build accepts a well-shaped
+    /// proof, matching the long-standing behaviour of this suite.
     fn verify_groth16(
         env: &Env,
         vk: &VerificationKey,
         proof: &Proof,
         pub_signals: &Vec<U256>,
     ) -> bool {
+        #[cfg(test)]
+        {
+            if let Some(override_val) = env
+                .storage()
+                .instance()
+                .get::<DataKey, bool>(&DataKey::VerifyOverride)
+            {
+                return override_val;
+            }
+            // Bypass the pairing, not the structural IC/signal-count check.
+            return pub_signals.len() + 1 == vk.ic.len();
+        }
+
+        #[cfg(not(test))]
         zkvote_groth16::verify_groth16(env, vk, proof, pub_signals)
+    }
+
+    /// Verify BLS12-381 Groth16 proof using shared verification library.
+    ///
+    /// Same `cfg(test)`-only override as [`Comments::verify_groth16`].
+    fn verify_groth16_bls381(
+        env: &Env,
+        vk: &VerificationKeyBls381,
+        proof: &ProofBls381,
+        pub_signals: &Vec<U256>,
+    ) -> bool {
+        #[cfg(test)]
+        {
+            if let Some(override_val) = env
+                .storage()
+                .instance()
+                .get::<DataKey, bool>(&DataKey::VerifyOverride)
+            {
+                return override_val;
+            }
+            return pub_signals.len() + 1 == vk.ic.len();
+        }
+
+        #[cfg(not(test))]
+        zkvote_groth16::verify_groth16_bls381(env, vk, proof, pub_signals)
+    }
+
+    /// Test-only: force the outcome of proof verification for the remainder of
+    /// the test. Compiled out of every non-test build.
+    #[cfg(test)]
+    fn set_verify_override_for_tests(env: Env, accept: bool) {
+        env.storage()
+            .instance()
+            .set(&DataKey::VerifyOverride, &accept);
     }
 }
 
@@ -1005,6 +1400,23 @@ mod test {
                     .persistent()
                     .get(&DataKey::MinRoot(dao_id))
                     .unwrap_or(0)
+            }
+
+            /// Single-hop form, matching the real tree: 0 = eligible,
+            /// 1 = not in history, 2 = predates the election, 3 = predates a
+            /// member removal.
+            pub fn root_eligibility(env: Env, dao_id: u64, root: U256, earliest: u32) -> u32 {
+                if !Self::root_ok(env.clone(), dao_id, root.clone()) {
+                    return 1;
+                }
+                let idx = Self::root_idx(env.clone(), dao_id, root);
+                if idx < earliest {
+                    return 2;
+                }
+                if idx < Self::min_root(env, dao_id) {
+                    return 3;
+                }
+                0
             }
         }
     }
@@ -1989,6 +2401,229 @@ mod test {
             &old_root,
             &true,
             &proof,
+        );
+    }
+
+    // ========================================================================
+    // Root eligibility on edit/delete of anonymous comments
+    //
+    // `add_anonymous_comment` has always validated the caller-supplied root
+    // against the proposal (Fixed vs Trailing mode). The edit and delete paths
+    // did not, so a comment owner could act against any root they liked —
+    // including one predating the proposal or a member revocation.
+    // ========================================================================
+
+    /// Post an anonymous comment, returning (cid, nullifier, root).
+    fn seed_anonymous_comment(
+        env: &Env,
+        comments_client: &CommentsClient,
+        voting_id: &Address,
+        tree_id: &Address,
+        registry_id: &Address,
+        admin: &Address,
+        dao_id: u64,
+        proposal_id: u64,
+        vote_mode: VoteMode,
+    ) -> (String, U256, U256) {
+        let root = setup_dao_and_proposal(
+            env,
+            voting_id,
+            tree_id,
+            registry_id,
+            admin,
+            dao_id,
+            proposal_id,
+            vote_mode,
+        );
+
+        let content_cid = String::from_str(env, "QmOriginal");
+        let nullifier = U256::from_u32(env, 4242);
+        let proof = create_dummy_proof(env);
+
+        comments_client.add_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &content_cid,
+            &None,
+            &nullifier,
+            &root,
+            &true,
+            &proof,
+        );
+
+        (content_cid, nullifier, root)
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #33)")]
+    fn test_edit_anonymous_rejects_root_predating_removal() {
+        // RootPredatesRemoval = 33
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+        let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, _root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Trailing,
+        );
+
+        // A root that is in history but predates the revocation cut-off.
+        let old_root = U256::from_u32(&env, 54321);
+        tree_client.set_root_valid(&dao_id, &old_root, &true, &5);
+        tree_client.set_min_root(&dao_id, &10);
+
+        comments_client.edit_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &String::from_str(&env, "QmEdited"),
+            &nullifier,
+            &old_root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #33)")]
+    fn test_delete_anonymous_rejects_root_predating_removal() {
+        // RootPredatesRemoval = 33
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+        let tree_client = mock_tree::MockTreeClient::new(&env, &tree_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, _root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Trailing,
+        );
+
+        let old_root = U256::from_u32(&env, 54321);
+        tree_client.set_root_valid(&dao_id, &old_root, &true, &5);
+        tree_client.set_min_root(&dao_id, &10);
+
+        comments_client.delete_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &nullifier,
+            &old_root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #29)")]
+    fn test_edit_anonymous_rejects_root_mismatch_in_fixed_mode() {
+        // RootMismatch = 29 — the proposal is in Fixed mode, so any root other
+        // than the snapshot root is ineligible.
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, _root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Fixed,
+        );
+
+        comments_client.edit_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &String::from_str(&env, "QmEdited"),
+            &nullifier,
+            &U256::from_u32(&env, 999),
+            &true,
+            &create_dummy_proof(&env),
+        );
+    }
+
+    #[test]
+    fn test_edit_and_delete_anonymous_accept_eligible_root() {
+        // Positive control: the legitimate owner against the correct root
+        // still works.
+        let (env, comments_id, voting_id, tree_id, _sbt_id, registry_id, _member) = setup_env();
+        let comments_client = CommentsClient::new(&env, &comments_id);
+
+        let dao_id = 1u64;
+        let proposal_id = 1u64;
+        let admin = Address::generate(&env);
+
+        let (_cid, nullifier, root) = seed_anonymous_comment(
+            &env,
+            &comments_client,
+            &voting_id,
+            &tree_id,
+            &registry_id,
+            &admin,
+            dao_id,
+            proposal_id,
+            VoteMode::Fixed,
+        );
+
+        let new_cid = String::from_str(&env, "QmEdited");
+        comments_client.edit_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &new_cid,
+            &nullifier,
+            &root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+        assert_eq!(
+            comments_client
+                .get_comment(&dao_id, &proposal_id, &1u64)
+                .content_cid,
+            new_cid
+        );
+
+        comments_client.delete_anonymous_comment(
+            &dao_id,
+            &proposal_id,
+            &1u64,
+            &nullifier,
+            &root,
+            &true,
+            &create_dummy_proof(&env),
+        );
+        assert!(
+            comments_client
+                .get_comment(&dao_id, &proposal_id, &1u64)
+                .deleted
         );
     }
 }

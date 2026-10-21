@@ -48,7 +48,7 @@ fn test_empty_tree_root() {
     // Test what the empty tree root is with P25
     // This helps understand zero leaf handling
 
-    use soroban_sdk::{testutils::Address as _, Address, Env, String};
+    use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol};
 
     // Import actual contract clients from crates (not WASM)
     use dao_registry::DaoRegistryClient;
@@ -82,7 +82,7 @@ fn test_empty_tree_root() {
     );
 
     // Initialize empty tree with depth 20
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Get the empty root
     let empty_root = tree_client.current_root(&dao_id);

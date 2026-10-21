@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { initializeContractClients } from "../lib/contracts";
+import { getZkVoteClient } from "../lib/client";
 import {
   getReadOnlyDaoRegistry,
   getReadOnlyMembershipSbt,
@@ -19,12 +19,15 @@ import {
   CardTitle,
   CardDescription,
 } from "./ui/Card";
+import { Key, BarChart3 } from "lucide-react";
 import ProposalList from "./ProposalList";
 import ManageMembers from "./ManageMembers";
 import DAOInfoPanel from "./DAOInfoPanel";
 import DAOSettings from "./DAOSettings";
 import DAOHeader, { type DAOTab, type DAOInfo } from "./DAOHeader";
 import RegistrationFlow from "./RegistrationFlow";
+import { ThresholdPanel } from "./ThresholdPanel";
+import { AnalyticsPanel } from "./AnalyticsPanel";
 
 interface DAODashboardProps {
   publicKey: string | null;
@@ -118,6 +121,14 @@ export default function DAODashboard({
         title: `${daoName} - New Proposal | ZKVote`,
         description: `Create a new proposal for ${daoName} DAO. Start a vote for the community.`,
       },
+      threshold: {
+        title: `${daoName} - Threshold Encryption | ZKVote`,
+        description: `Manage threshold encryption key setup and ceremonies for ${daoName} DAO.`,
+      },
+      analytics: {
+        title: `${daoName} - Analytics | ZKVote`,
+        description: `Privacy-preserving participation analytics for ${daoName} DAO — homomorphic tally aggregates with threshold decryption.`,
+      },
     };
 
     const { title, description } = tabMeta[activeTab];
@@ -158,7 +169,7 @@ export default function DAODashboard({
 
       if (publicKey && !useReadOnly) {
         try {
-          const clients = initializeContractClients(publicKey);
+          const clients = getZkVoteClient(publicKey);
           daoResult = await clients.daoRegistry.get_dao({
             dao_id: BigInt(daoId),
           });
@@ -236,7 +247,7 @@ export default function DAODashboard({
     if (!publicKey) return false;
     try {
       try {
-        const clients = initializeContractClients(publicKey);
+        const clients = getZkVoteClient(publicKey);
         const result = await clients.membershipSbt.has({
           dao_id: BigInt(daoId),
           of: publicKey,
@@ -286,7 +297,7 @@ export default function DAODashboard({
       setJoining(true);
       setError(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       if (!kit) {
         throw new Error("Wallet kit not available");
@@ -343,7 +354,7 @@ export default function DAODashboard({
       setCreatingProposal(true);
       setError(null);
 
-      const clients = initializeContractClients(publicKey || "");
+      const clients = getZkVoteClient(publicKey || "");
 
       let endTime: bigint;
       if (data.deadlineSeconds === 0) {
@@ -512,6 +523,48 @@ export default function DAODashboard({
           metadataCid={dao.metadataCid}
           onSettingsChanged={loadDAOInfo}
         />
+      )}
+
+      {activeTab === "threshold" && dao.isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Key className="w-5 h-5" />
+              Threshold Decryption
+            </CardTitle>
+            <CardDescription>
+              Configure distributed trust for tally decryption. Register tally
+              authorities and manage the DKG ceremony to enable threshold
+              decryption of election results.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ThresholdPanel
+              daoId={daoId}
+              proposalId={0}
+              isConnected={!!publicKey}
+              publicKey={publicKey}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {activeTab === "analytics" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5" />
+              Privacy-Preserving Analytics
+            </CardTitle>
+            <CardDescription>
+              Turnout and participation computed homomorphically over encrypted
+              tally aggregates — per-voter participation is never revealed.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AnalyticsPanel daoId={daoId} isAdmin={dao.isAdmin} />
+          </CardContent>
+        </Card>
       )}
     </div>
   );

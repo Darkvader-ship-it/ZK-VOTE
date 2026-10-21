@@ -2,6 +2,8 @@
 
 Base URL: `http://localhost:3001` (default)
 
+Interactive documentation (Swagger UI) is served at `GET /api-docs`, backed by an OpenAPI 3.1 spec at `GET /api-docs/openapi.json` — generated from the routes and Zod validation schemas in `src/openapi.ts`. Run `npm run docs:generate` after changing a route or schema to regenerate `openapi.json` and the TypeScript types in `src/generated/api-types.ts`; `npm run docs:check` (run in CI) fails if `openapi.json` is stale or if this file is missing a section for an endpoint in the spec.
+
 ## Authentication
 
 Write endpoints require a relayer auth token (minimum 32 characters). The token is passed via one of two headers:
@@ -21,23 +23,72 @@ Unauthenticated requests to protected endpoints receive:
 
 ## Rate Limits
 
-All rate limiters use a 1-minute sliding window keyed by hashed IP address. Standard `RateLimit-*` headers are included in responses.
+All rate limiters use a 1-minute sliding window keyed by hashed IP address. Every response includes both the modern `RateLimit-*` (draft-6) headers and the legacy `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` headers.
 
-| Limiter          | Max Requests / min | Applied To                                     |
-|------------------|--------------------|-------------------------------------------------|
-| `voteLimiter`    | 10                 | `POST /vote`                                    |
-| `commentLimiter` | 20                 | `POST /comment/anonymous`, `/comment/edit`, `/comment/delete` |
-| `queryLimiter`   | 60                 | All GET endpoints (except IPFS reads)            |
-| `ipfsUploadLimiter` | 10              | `POST /ipfs/image`, `POST /ipfs/metadata`       |
-| `ipfsReadLimiter`| 200                | `GET /ipfs/:cid`, `GET /ipfs/image/:cid`         |
+| Limiter             | Max Requests / min | Applied To                                                    |
+| ------------------- | ------------------ | ------------------------------------------------------------- |
+| `voteLimiter`       | 10                 | `POST /vote`                                                  |
+| `commentLimiter`    | 20                 | `POST /comment/anonymous`, `/comment/edit`, `/comment/delete` |
+| `queryLimiter`      | 60                 | All GET endpoints (except IPFS reads)                         |
+| `ipfsUploadLimiter` | 10                 | `POST /ipfs/image`, `POST /ipfs/metadata`                     |
+| `ipfsReadLimiter`   | 200                | `GET /ipfs/:cid`, `GET /ipfs/image/:cid`                      |
 
-Rate limit exceeded response:
+Before a client hits a hard limit above, a global graduated-throttling layer adds an increasing delay (100ms per request past 40/min, capped at 3s) to every request. This gives well-behaved clients a chance to back off before being blocked outright.
+
+Rate limit exceeded response includes a `Retry-After` header (seconds) and structured info in the body:
 
 ```json
-{ "error": "Too many requests, please try again later" }
+{
+  "error": "Too many requests, please try again later",
+  "limiter": "query",
+  "limit": 60,
+  "remaining": 0,
+  "retryAfter": 42,
+  "resetTime": "2026-07-28T13:38:09.690Z"
+}
 ```
 
 **Status:** `429 Too Many Requests`
+
+The frontend's `relayerFetch` (`frontend/src/lib/api.ts`) already reads the `Retry-After` header and backs off automatically before retrying.
+
+Per-limiter request/block counters are available to authenticated callers via `GET /health` (`rateLimits` field).
+
+## Errors
+
+All endpoints return a structured error response when a request fails.
+
+```json
+{
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable error message",
+    "details": { "optional": "additional context" },
+    "requestId": "abc123456789",
+    "timestamp": "2026-07-28T13:38:09.690Z"
+  }
+}
+```
+
+When the `RELAYER_GENERIC_ERRORS` environment variable is set to `true`, the `details` field is omitted to prevent leaking sensitive information.
+
+### Error Codes
+
+| Code                   | Description                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------- |
+| `VOTE_ALREADY_CAST`    | The voter has already cast a vote on the given proposal.                                |
+| `VOTING_PERIOD_CLOSED` | The proposal is no longer accepting votes.                                              |
+| `INVALID_PROOF`        | The ZK proof is invalid or malformed.                                                   |
+| `NOT_ELIGIBLE`         | The voter's root does not match the DAO's state, meaning they are not eligible to vote. |
+| `PROPOSAL_NOT_FOUND`   | The specified proposal does not exist.                                                  |
+| `DAO_NOT_FOUND`        | The specified DAO does not exist.                                                       |
+| `RATE_LIMITED`         | The client has exceeded the rate limit.                                                 |
+| `UNAUTHORIZED`         | The request lacks a valid authentication token.                                         |
+| `VALIDATION_ERROR`     | The request payload or parameters are invalid.                                          |
+| `SERVICE_UNAVAILABLE`  | An external dependency (e.g., Soroban RPC) is unreachable.                              |
+| `TIMEOUT`              | The request took too long to complete.                                                  |
+| `NOT_FOUND`            | The requested resource does not exist.                                                  |
+| `INTERNAL_ERROR`       | An unexpected server error occurred.                                                    |
 
 ## CORS
 
@@ -136,6 +187,128 @@ Returns public configuration for the frontend. No sensitive data is exposed.
 
 ---
 
+### GET /db/stats
+
+Database diagnostics (query metrics, table stats, cache stats). Full detail requires auth; unauthenticated callers get aggregate DB status only.
+
+**Authentication:** Optional (gates detail level)
+**Rate Limit:** None
+
+#### Response (200) -- Authenticated
+
+```json
+{
+  "queries": {},
+  "tables": [],
+  "cache": {},
+  "config": {},
+  "partitions": 0,
+  "largeDaos": 0
+}
+```
+
+#### Response (200) -- Unauthenticated
+
+```json
+{
+  "status": "unauthorized",
+  "db": { "totalEvents": 0, "daoCount": 0, "lastLedger": 0 }
+}
+```
+
+---
+
+## Transactions
+
+### GET /tx/:hash
+
+Confirmation status for a transaction hash. Serves as the polling fallback for frontends that do not (or cannot) use the WebSocket confirmation feed. The backend answers from its confirmation queue state (pending / cached outcome) and falls back to a single `getTransaction` lookup for hashes it has never seen.
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Path Parameters
+
+| Field  | Type     | Required | Description                         |
+|--------|----------|----------|-------------------------------------|
+| `hash` | `string` | Yes      | 64-character lowercase hex Stellar transaction hash |
+
+#### Example Request
+
+```bash
+curl http://localhost:3001/tx/a1b2c3d4e5f6...64hex
+```
+
+#### Response (200)
+
+`state` is one of `PENDING`, `CONFIRMED`, `FAILED`, `EXPIRED`, or `UNKNOWN`:
+
+```json
+{
+  "hash": "a1b2c3d4e5f6...64hex",
+  "state": "PENDING",
+  "status": "NOT_FOUND",
+  "attempts": 1,
+  "elapsedMs": 2500,
+  "enqueuedAt": "2026-08-31T00:00:00.000Z"
+}
+```
+
+Once resolved, `state` is `CONFIRMED`/`FAILED` (with the raw `getTransaction` result) or `EXPIRED` (never confirmed within the wait budget):
+
+```json
+{
+  "hash": "a1b2c3d4e5f6...64hex",
+  "state": "CONFIRMED",
+  "status": "SUCCESS",
+  "attempts": 2,
+  "elapsedMs": 4200,
+  "confirmedAt": "2026-08-31T00:00:05.000Z"
+}
+```
+
+#### Error Responses
+
+| Status | Error                                        | Cause                      |
+|--------|----------------------------------------------|----------------------------|
+| 400    | `"Invalid transaction hash (expected 64 hex characters)"` | Malformed hash  |
+| 500    | `"Failed to resolve transaction status"`    | Internal error             |
+
+---
+
+### GET /tx/stats
+
+Diagnostics for the confirmation queue and WebSocket hub: aggregate counters only (no per-hash data), matching the `/health` pattern.
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Example Request
+
+```bash
+curl http://localhost:3001/tx/stats
+```
+
+#### Response (200)
+
+```json
+{
+  "queue": {
+    "running": true,
+    "pending": 3,
+    "cached": 5
+  },
+  "websocket": {
+    "attached": true,
+    "connectedClients": 2,
+    "path": "/ws/confirmations",
+    "enabled": true
+  }
+}
+```
+
+---
+
 ## Voting
 
 ### POST /vote
@@ -147,22 +320,22 @@ Submit an anonymous vote with a ZK proof. The backend relayer signs and submits 
 
 #### Request Body
 
-| Field        | Type     | Required | Description                                      |
-|--------------|----------|----------|--------------------------------------------------|
-| `daoId`      | `number` | Yes      | Non-negative integer DAO identifier               |
-| `proposalId` | `number` | Yes      | Non-negative integer proposal identifier          |
-| `choice`     | `boolean`| Yes      | `true` for yes, `false` for no                    |
-| `nullifier`  | `string` | Yes      | Hex string (with optional `0x` prefix), must be < BN254 field modulus |
-| `root`       | `string` | Yes      | Merkle root hex string, must be < BN254 field modulus |
-| `proof`      | `object` | Yes      | Groth16 proof (see below)                         |
+| Field        | Type      | Required | Description                                                           |
+| ------------ | --------- | -------- | --------------------------------------------------------------------- |
+| `daoId`      | `number`  | Yes      | Non-negative integer DAO identifier                                   |
+| `proposalId` | `number`  | Yes      | Non-negative integer proposal identifier                              |
+| `choice`     | `boolean` | Yes      | `true` for yes, `false` for no                                        |
+| `nullifier`  | `string`  | Yes      | Hex string (with optional `0x` prefix), must be < BN254 field modulus |
+| `root`       | `string`  | Yes      | Merkle root hex string, must be < BN254 field modulus                 |
+| `proof`      | `object`  | Yes      | Groth16 proof (see below)                                             |
 
 **Proof object:**
 
-| Field | Type     | Description                                                      |
-|-------|----------|------------------------------------------------------------------|
-| `a`   | `string` | G1 point, up to 128 hex chars (64 bytes: X \|\| Y, big-endian). Must not be all zeros. |
+| Field | Type     | Description                                                                                                       |
+| ----- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `a`   | `string` | G1 point, up to 128 hex chars (64 bytes: X \|\| Y, big-endian). Must not be all zeros.                            |
 | `b`   | `string` | G2 point, up to 256 hex chars (128 bytes: X_c1 \|\| X_c0 \|\| Y_c1 \|\| Y_c0, big-endian). Must not be all zeros. |
-| `c`   | `string` | G1 point, up to 128 hex chars (64 bytes: X \|\| Y, big-endian). Must not be all zeros. |
+| `c`   | `string` | G1 point, up to 128 hex chars (64 bytes: X \|\| Y, big-endian). Must not be all zeros.                            |
 
 #### Example Request
 
@@ -184,7 +357,7 @@ curl -X POST http://localhost:3001/vote \
   }'
 ```
 
-#### Response (200) -- Success
+#### Response (200) -- Success (new submission)
 
 ```json
 {
@@ -194,20 +367,49 @@ curl -X POST http://localhost:3001/vote \
 }
 ```
 
+#### Response (200) -- Already confirmed (idempotent replay)
+
+Returned when the same `nullifier` was used in a previous request that already landed on-chain. Safe to treat identically to a fresh success.
+
+```json
+{
+  "success": true,
+  "txHash": "abc123...64hex",
+  "status": "SUCCESS",
+  "replayed": true
+}
+```
+
+#### Response (202) -- Submission in progress
+
+Returned when the same `nullifier` is already in-flight from a previous request (e.g. a browser tab that closed mid-request and retried). The client **must** wait and retry after the indicated delay.
+
+**Headers:**
+
+| Header        | Value | Meaning                 |
+| ------------- | ----- | ----------------------- |
+| `Retry-After` | `5`   | Seconds before retrying |
+
+```json
+{
+  "success": false,
+  "txHash": null,
+  "status": "PENDING"
+}
+```
+
+The client should poll `GET /proposal/:daoId/:proposalId` or retry `POST /vote` with the same nullifier after `Retry-After` seconds to confirm the final outcome.
+
 #### Error Responses
 
-| Status | Error                          | Cause                                 |
-|--------|--------------------------------|---------------------------------------|
-| 400    | Validation error details       | Invalid request body (Zod validation) |
-| 400    | `"You have already voted on this proposal"` | Duplicate nullifier             |
-| 400    | `"Voting period has ended"`    | Proposal is closed                    |
-| 400    | `"Invalid vote proof"`         | Proof verification failed             |
-| 400    | `"You are not eligible to vote on this proposal"` | Root mismatch           |
-| 400    | `"Proposal not found"`         | Unknown proposal                      |
-| 500    | `"Transaction failed"`         | On-chain transaction failed           |
-| 500    | `"Transaction submission failed"` | RPC submission error               |
-| 503    | `"Blockchain RPC temporarily unavailable - please retry"` | RPC down       |
-| 504    | `"Request timeout - please try again"` | Operation timed out              |
+| Status | Error                                                     | Cause                                                                                                                    |
+| ------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 400    | Validation error details                                  | Invalid request body (Zod validation)                                                                                    |
+| 400    | `"VOTE_REJECTED"`                                         | Proof invalid, ineligible voter, closed period, or duplicate — all unified under one code to prevent enumeration attacks |
+| 500    | `"Transaction failed"`                                    | On-chain transaction failed                                                                                              |
+| 500    | `"Transaction submission failed"`                         | RPC submission error                                                                                                     |
+| 503    | `"Blockchain RPC temporarily unavailable - please retry"` | RPC down                                                                                                                 |
+| 504    | `"Request timeout - please try again"`                    | Operation timed out                                                                                                      |
 
 ---
 
@@ -220,9 +422,9 @@ Get vote results for a specific proposal.
 
 #### Path Parameters
 
-| Parameter    | Type     | Description              |
-|--------------|----------|--------------------------|
-| `daoId`      | `string` | DAO identifier (integer) |
+| Parameter    | Type     | Description                   |
+| ------------ | -------- | ----------------------------- |
+| `daoId`      | `string` | DAO identifier (integer)      |
 | `proposalId` | `string` | Proposal identifier (integer) |
 
 #### Example Request
@@ -245,9 +447,9 @@ curl http://localhost:3001/proposal/0/1
 
 #### Error Responses
 
-| Status | Error                            | Cause                 |
-|--------|----------------------------------|-----------------------|
-| 404    | `"Proposal not found"`           | Unknown DAO/proposal  |
+| Status | Error                                | Cause                |
+| ------ | ------------------------------------ | -------------------- |
+| 404    | `"Proposal not found"`               | Unknown DAO/proposal |
 | 500    | `"Failed to fetch proposal results"` | RPC or parsing error |
 
 ---
@@ -262,7 +464,7 @@ Get the current Merkle root for a DAO's membership tree.
 #### Path Parameters
 
 | Parameter | Type     | Description              |
-|-----------|----------|--------------------------|
+| --------- | -------- | ------------------------ |
 | `daoId`   | `string` | DAO identifier (integer) |
 
 #### Example Request
@@ -282,14 +484,29 @@ curl http://localhost:3001/root/0
 
 #### Error Responses
 
-| Status | Error                                     | Cause                   |
-|--------|-------------------------------------------|-------------------------|
-| 404    | `"DAO not found or tree not initialized"` | Unknown DAO or no tree  |
-| 500    | `"Failed to fetch Merkle root"`           | RPC error               |
+| Status | Error                                     | Cause                  |
+| ------ | ----------------------------------------- | ---------------------- |
+| 404    | `"DAO not found or tree not initialized"` | Unknown DAO or no tree |
+| 500    | `"Failed to fetch Merkle root"`           | RPC error              |
 
 ---
 
 ## Comments
+
+### GET /comment/challenge/:commitment
+
+Get a proof-of-work challenge for a commitment, required before submitting an anonymous comment or flag (anti-spam).
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Response (200)
+
+```json
+{ "serverId": "abc123", "difficulty": 20, "expiresAt": 1785200000000 }
+```
+
+---
 
 ### POST /comment/anonymous
 
@@ -300,16 +517,16 @@ Submit an anonymous comment with a ZK proof. The relayer submits the transaction
 
 #### Request Body
 
-| Field        | Type             | Required | Description                                      |
-|--------------|------------------|----------|--------------------------------------------------|
-| `daoId`      | `number`         | Yes      | Non-negative integer DAO identifier               |
-| `proposalId` | `number`         | Yes      | Non-negative integer proposal identifier          |
+| Field        | Type             | Required | Description                                                            |
+| ------------ | ---------------- | -------- | ---------------------------------------------------------------------- |
+| `daoId`      | `number`         | Yes      | Non-negative integer DAO identifier                                    |
+| `proposalId` | `number`         | Yes      | Non-negative integer proposal identifier                               |
 | `contentCid` | `string`         | Yes      | IPFS CID of comment content (CIDv0 `Qm...` or CIDv1 `bafy.../bafk...`) |
-| `parentId`   | `number \| null` | No       | Parent comment ID for replies (null for top-level)|
-| `voteChoice` | `boolean`        | Yes      | Vote alignment (`true` = yes, `false` = no)       |
-| `nullifier`  | `string`         | Yes      | Hex string < BN254 field modulus                  |
-| `root`       | `string`         | Yes      | Merkle root hex string < BN254 field modulus      |
-| `proof`      | `object`         | Yes      | Groth16 proof object (same format as vote proof)  |
+| `parentId`   | `number \| null` | No       | Parent comment ID for replies (null for top-level)                     |
+| `voteChoice` | `boolean`        | Yes      | Vote alignment (`true` = yes, `false` = no)                            |
+| `nullifier`  | `string`         | Yes      | Hex string < BN254 field modulus                                       |
+| `root`       | `string`         | Yes      | Merkle root hex string < BN254 field modulus                           |
+| `proof`      | `object`         | Yes      | Groth16 proof object (same format as vote proof)                       |
 
 #### Example Request
 
@@ -345,48 +562,48 @@ curl -X POST http://localhost:3001/comment/anonymous \
 
 #### Error Responses
 
-| Status | Error                                                   | Cause                     |
-|--------|---------------------------------------------------------|---------------------------|
-| 400    | Validation error details                                | Invalid request body      |
-| 400    | `"Failed to add anonymous comment (proof verification failed or invalid membership)"` | Simulation failed |
-| 500    | `"Transaction submission failed"`                       | RPC submission error      |
-| 503    | `"Blockchain RPC temporarily unavailable - please retry"` | RPC down               |
-| 504    | `"Request timeout - please try again"`                  | Operation timed out       |
+| Status | Error                                                                                 | Cause                |
+| ------ | ------------------------------------------------------------------------------------- | -------------------- |
+| 400    | Validation error details                                                              | Invalid request body |
+| 400    | `"Failed to add anonymous comment (proof verification failed or invalid membership)"` | Simulation failed    |
+| 500    | `"Transaction submission failed"`                                                     | RPC submission error |
+| 503    | `"Blockchain RPC temporarily unavailable - please retry"`                             | RPC down             |
+| 504    | `"Request timeout - please try again"`                                                | Operation timed out  |
 
 ---
 
 ### GET /comments/:daoId/:proposalId
 
-Get comments for a proposal with pagination.
+Get comments for a proposal with limit/offset pagination.
 
 **Authentication:** No
 **Rate Limit:** 60/min (queryLimiter)
 
 #### Path Parameters
 
-| Parameter    | Type     | Description              |
-|--------------|----------|--------------------------|
-| `daoId`      | `string` | DAO identifier (integer) |
+| Parameter    | Type     | Description                   |
+| ------------ | -------- | ----------------------------- |
+| `daoId`      | `string` | DAO identifier (integer)      |
 | `proposalId` | `string` | Proposal identifier (integer) |
 
 #### Query Parameters
 
-| Parameter | Type     | Default | Description                      |
-|-----------|----------|---------|----------------------------------|
-| `limit`   | `string` | `"50"` | Max comments to return (capped at 100) |
-| `offset`  | `string` | `"0"`  | Number of comments to skip       |
+| Parameter | Type     | Default | Description                          |
+| --------- | -------- | ------- | ------------------------------------ |
+| `limit`   | `number` | `100`   | Max comments per page (max `500`)    |
+| `cursor`  | `string` | none    | Opaque cursor for fetching next page |
 
 #### Example Request
 
 ```bash
-curl "http://localhost:3001/comments/0/1?limit=20&offset=0"
+curl "http://localhost:3001/comments/0/1?limit=20"
 ```
 
 #### Response (200)
 
 ```json
 {
-  "comments": [
+  "data": [
     {
       "id": 1,
       "daoId": 0,
@@ -403,16 +620,22 @@ curl "http://localhost:3001/comments/0/1?limit=20&offset=0"
       "isAnonymous": true
     }
   ],
-  "total": 1
+  "pagination": {
+    "cursor": "20",
+    "hasMore": true,
+    "total": 42
+  }
 }
 ```
 
+When `hasMore` is `false`, there are no additional pages.
+
 #### Error Responses
 
-| Status | Error                         | Cause              |
-|--------|-------------------------------|---------------------|
-| 400    | `"Failed to get comments"`    | Simulation failed   |
-| 500    | `"Failed to fetch comments"`  | RPC error           |
+| Status | Error                        | Cause             |
+| ------ | ---------------------------- | ----------------- |
+| 400    | `"Failed to get comments"`   | Simulation failed |
+| 500    | `"Failed to fetch comments"` | RPC error         |
 
 ---
 
@@ -425,11 +648,11 @@ Get a single comment by ID.
 
 #### Path Parameters
 
-| Parameter    | Type     | Description              |
-|--------------|----------|--------------------------|
-| `daoId`      | `string` | DAO identifier (integer) |
-| `proposalId` | `string` | Proposal identifier (integer) |
-| `commentId`  | `string` | Comment identifier (integer)  |
+| Parameter    | Type      | Description         | Format                |
+| ------------ | --------- | ------------------- | --------------------- |
+| `daoId`      | `integer` | DAO identifier      | Positive integer (1+) |
+| `proposalId` | `integer` | Proposal identifier | Positive integer (1+) |
+| `commentId`  | `integer` | Comment identifier  | Positive integer (1+) |
 
 #### Example Request
 
@@ -458,10 +681,10 @@ curl http://localhost:3001/comment/0/1/42
 
 #### Error Responses
 
-| Status | Error                        | Cause              |
-|--------|------------------------------|---------------------|
-| 404    | `"Comment not found"`        | Unknown comment     |
-| 500    | `"Failed to fetch comment"`  | RPC error           |
+| Status | Error                       | Cause           |
+| ------ | --------------------------- | --------------- |
+| 404    | `"Comment not found"`       | Unknown comment |
+| 500    | `"Failed to fetch comment"` | RPC error       |
 
 ---
 
@@ -474,16 +697,16 @@ Get the next comment nonce for a given commitment. Used by the frontend to const
 
 #### Path Parameters
 
-| Parameter    | Type     | Description              |
-|--------------|----------|--------------------------|
-| `daoId`      | `string` | DAO identifier (integer) |
+| Parameter    | Type     | Description                   |
+| ------------ | -------- | ----------------------------- |
+| `daoId`      | `string` | DAO identifier (integer)      |
 | `proposalId` | `string` | Proposal identifier (integer) |
 
 #### Query Parameters
 
-| Parameter    | Type     | Required | Description                          |
-|--------------|----------|----------|--------------------------------------|
-| `commitment` | `string` | Yes      | Hex string < BN254 field modulus     |
+| Parameter    | Type     | Required | Description                      |
+| ------------ | -------- | -------- | -------------------------------- |
+| `commitment` | `string` | Yes      | Hex string < BN254 field modulus |
 
 #### Example Request
 
@@ -503,9 +726,9 @@ Returns `{ "nonce": 0 }` if the commitment has not been used or on error (fails 
 
 #### Error Responses
 
-| Status | Error                                        | Cause                  |
-|--------|----------------------------------------------|------------------------|
-| 400    | `"commitment query parameter is required"`   | Missing commitment     |
+| Status | Error                                      | Cause              |
+| ------ | ------------------------------------------ | ------------------ |
+| 400    | `"commitment query parameter is required"` | Missing commitment |
 
 ---
 
@@ -518,13 +741,13 @@ Edit a public (non-anonymous) comment. Only the original author can edit their c
 
 #### Request Body
 
-| Field           | Type     | Required | Description                                      |
-|-----------------|----------|----------|--------------------------------------------------|
-| `daoId`         | `number` | Yes      | Non-negative integer DAO identifier               |
-| `proposalId`    | `number` | Yes      | Non-negative integer proposal identifier          |
-| `commentId`     | `number` | Yes      | Non-negative integer comment identifier           |
-| `newContentCid` | `string` | Yes      | New IPFS CID for the updated comment content      |
-| `author`        | `string` | Yes      | Stellar address of the comment author (`G...`)    |
+| Field           | Type     | Required | Description                                    |
+| --------------- | -------- | -------- | ---------------------------------------------- |
+| `daoId`         | `number` | Yes      | Non-negative integer DAO identifier            |
+| `proposalId`    | `number` | Yes      | Non-negative integer proposal identifier       |
+| `commentId`     | `number` | Yes      | Non-negative integer comment identifier        |
+| `newContentCid` | `string` | Yes      | New IPFS CID for the updated comment content   |
+| `author`        | `string` | Yes      | Stellar address of the comment author (`G...`) |
 
 #### Example Request
 
@@ -552,12 +775,14 @@ curl -X POST http://localhost:3001/comment/edit \
 
 #### Error Responses
 
-| Status | Error                              | Cause                      |
-|--------|------------------------------------|----------------------------|
-| 400    | `"Missing required fields"`        | Incomplete request body    |
-| 400    | `"Failed to edit comment"`         | Simulation failed          |
-| 500    | `"Transaction submission failed"`  | RPC submission error       |
-| 500    | `"Transaction failed"`            | On-chain failure           |
+| Status | Error                                                 | Cause                                                                                                                                              |
+| ------ | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `"Missing required fields"`                           | Incomplete request body                                                                                                                            |
+| 400    | `"Failed to edit comment"`                            | Simulation failed                                                                                                                                  |
+| 403    | `"Author is not a current DAO member"`                | Real-time membership check failed (only when `MEMBERSHIP_SBT_CONTRACT_ID` is configured — see [Membership Verification](#membership-verification)) |
+| 500    | `"Transaction submission failed"`                     | RPC submission error                                                                                                                               |
+| 500    | `"Transaction failed"`                                | On-chain failure                                                                                                                                   |
+| 503    | `"Membership verification unavailable, please retry"` | On-chain membership check itself failed (RPC error)                                                                                                |
 
 ---
 
@@ -570,12 +795,12 @@ Delete a public (non-anonymous) comment. Only the original author or a DAO admin
 
 #### Request Body
 
-| Field        | Type     | Required | Description                                      |
-|--------------|----------|----------|--------------------------------------------------|
-| `daoId`      | `number` | Yes      | Non-negative integer DAO identifier               |
-| `proposalId` | `number` | Yes      | Non-negative integer proposal identifier          |
-| `commentId`  | `number` | Yes      | Non-negative integer comment identifier           |
-| `author`     | `string` | Yes      | Stellar address of the requester (`G...`)         |
+| Field        | Type     | Required | Description                               |
+| ------------ | -------- | -------- | ----------------------------------------- |
+| `daoId`      | `number` | Yes      | Non-negative integer DAO identifier       |
+| `proposalId` | `number` | Yes      | Non-negative integer proposal identifier  |
+| `commentId`  | `number` | Yes      | Non-negative integer comment identifier   |
+| `author`     | `string` | Yes      | Stellar address of the requester (`G...`) |
 
 #### Example Request
 
@@ -602,12 +827,41 @@ curl -X POST http://localhost:3001/comment/delete \
 
 #### Error Responses
 
-| Status | Error                              | Cause                      |
-|--------|------------------------------------|----------------------------|
-| 400    | `"Missing required fields"`        | Incomplete request body    |
-| 400    | `"Failed to delete comment"`       | Simulation failed          |
-| 500    | `"Transaction submission failed"`  | RPC submission error       |
-| 500    | `"Transaction failed"`            | On-chain failure           |
+| Status | Error                                                 | Cause                                                                                                                                              |
+| ------ | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `"Missing required fields"`                           | Incomplete request body                                                                                                                            |
+| 400    | `"Failed to delete comment"`                          | Simulation failed                                                                                                                                  |
+| 403    | `"Author is not a current DAO member"`                | Real-time membership check failed (only when `MEMBERSHIP_SBT_CONTRACT_ID` is configured — see [Membership Verification](#membership-verification)) |
+| 500    | `"Transaction submission failed"`                     | RPC submission error                                                                                                                               |
+| 500    | `"Transaction failed"`                                | On-chain failure                                                                                                                                   |
+| 503    | `"Membership verification unavailable, please retry"` | On-chain membership check itself failed (RPC error)                                                                                                |
+
+---
+
+### POST /comment/flag
+
+Flag a comment as spam. Comments are auto-hidden once `flagCount` reaches `FLAG_THRESHOLD` (default 3). Requires a (lower-difficulty) proof-of-work challenge, same as anonymous comments.
+
+**Authentication:** Yes
+**Rate Limit:** 20/min (commentLimiter)
+
+#### Request Body
+
+| Field               | Type     | Required | Description                              |
+| ------------------- | -------- | -------- | ---------------------------------------- |
+| `daoId`             | `number` | Yes      | Non-negative integer DAO identifier      |
+| `proposalId`        | `number` | Yes      | Non-negative integer proposal identifier |
+| `commentId`         | `number` | Yes      | Non-negative integer comment identifier  |
+| `flaggerCommitment` | `string` | Yes      | BN254 field element                      |
+| `flaggerNullifier`  | `string` | Yes      | BN254 field element                      |
+| `serverId`          | `string` | Yes      | PoW challenge server ID                  |
+| `workNonce`         | `string` | Yes      | PoW solution nonce                       |
+
+#### Response (200)
+
+```json
+{ "success": true, "hidden": false, "flagCount": 1, "threshold": 3 }
+```
 
 ---
 
@@ -615,16 +869,18 @@ curl -X POST http://localhost:3001/comment/delete \
 
 ### GET /daos
 
-Get all cached DAOs. Optionally include the requesting user's membership role for each DAO.
+Get cached DAOs with limit/offset pagination. Optionally include the requesting user's membership role for each DAO.
 
 **Authentication:** No
 **Rate Limit:** 60/min (queryLimiter)
 
 #### Query Parameters
 
-| Parameter | Type     | Required | Description                                      |
-|-----------|----------|----------|--------------------------------------------------|
+| Parameter | Type     | Required | Description                                                                |
+| --------- | -------- | -------- | -------------------------------------------------------------------------- |
 | `user`    | `string` | No       | Stellar address (`G...`). When provided, each DAO includes a `role` field. |
+| `limit`   | `number` | No       | Max DAOs per page (max `500`, default `100`)                               |
+| `cursor`  | `string` | No       | Opaque cursor for fetching next page                                       |
 
 #### Example Request
 
@@ -634,13 +890,16 @@ curl http://localhost:3001/daos
 
 # With user membership info
 curl "http://localhost:3001/daos?user=GABCDEF..."
+
+# Paginated request
+curl "http://localhost:3001/daos?limit=20"
 ```
 
-#### Response (200) -- Without user
+#### Response (200)
 
 ```json
 {
-  "daos": [
+  "data": [
     {
       "id": 0,
       "name": "My DAO",
@@ -652,37 +911,20 @@ curl "http://localhost:3001/daos?user=GABCDEF..."
       "updated_at": "2025-01-01T00:00:00Z"
     }
   ],
-  "total": 1,
+  "pagination": {
+    "cursor": "100",
+    "hasMore": true,
+    "total": 150
+  },
   "lastSync": "2025-01-01T00:00:00Z",
   "cached": true
 }
 ```
 
-#### Response (200) -- With user
+When `hasMore` is `false`, there are no additional pages. The `cursor` value should be passed as the `cursor` query parameter on the next request.
 
-Each DAO includes a `role` field:
+The `role` field (when `user` is provided) can be:
 
-```json
-{
-  "daos": [
-    {
-      "id": 0,
-      "name": "My DAO",
-      "creator": "GABCDEF...",
-      "membership_open": true,
-      "members_can_propose": true,
-      "metadata_cid": null,
-      "member_count": 12,
-      "role": "admin"
-    }
-  ],
-  "total": 1,
-  "lastSync": "2025-01-01T00:00:00Z",
-  "cached": true
-}
-```
-
-The `role` field can be:
 - `"admin"` -- User is the DAO admin
 - `"member"` -- User holds a membership SBT
 - `null` -- User is not a member
@@ -690,7 +932,7 @@ The `role` field can be:
 #### Error Responses
 
 | Status | Error                              | Cause                      |
-|--------|------------------------------------|----------------------------|
+| ------ | ---------------------------------- | -------------------------- |
 | 400    | `"Invalid Stellar address format"` | Malformed `user` parameter |
 | 500    | `"Failed to get DAOs"`             | Internal error             |
 
@@ -706,7 +948,7 @@ Get a single DAO by ID from the cache.
 #### Path Parameters
 
 | Parameter | Type     | Description              |
-|-----------|----------|--------------------------|
+| --------- | -------- | ------------------------ |
 | `daoId`   | `string` | DAO identifier (integer) |
 
 #### Example Request
@@ -734,10 +976,10 @@ curl http://localhost:3001/dao/0
 
 #### Error Responses
 
-| Status | Error                         | Cause              |
-|--------|-------------------------------|---------------------|
-| 404    | `"DAO not found in cache"`    | Unknown DAO ID      |
-| 500    | `"Failed to get DAO"`         | Internal error      |
+| Status | Error                      | Cause          |
+| ------ | -------------------------- | -------------- |
+| 404    | `"DAO not found in cache"` | Unknown DAO ID |
+| 500    | `"Failed to get DAO"`      | Internal error |
 
 ---
 
@@ -766,9 +1008,163 @@ curl -X POST http://localhost:3001/daos/sync \
 
 #### Error Responses
 
-| Status | Error                     | Cause              |
-|--------|---------------------------|---------------------|
-| 500    | `"Failed to sync DAOs"`   | Sync error          |
+| Status | Error                   | Cause      |
+| ------ | ----------------------- | ---------- |
+| 500    | `"Failed to sync DAOs"` | Sync error |
+
+---
+
+## Membership Verification
+
+Two models are used, depending on whether an operation is a read or a write:
+
+- **Cached (periodic sync)** — `daoMembersCache` / `daoAdminsCache`, refreshed every `MEMBERSHIP_SYNC_INTERVAL_MS` (default 10 min) or on-demand when a membership-related event is observed (`POST /events/notify`). Used for non-critical reads such as `GET /daos?user=`, where a few minutes of staleness is an acceptable tradeoff for not hitting the RPC on every request.
+- **Real-time (on-chain)** — `verifyMembership(daoId, address)` in `services/sync.ts` calls the Membership SBT contract's `has(dao_id, of)` directly via a read-only simulate call, so a just-revoked member is rejected immediately rather than after the next periodic sync. The result is cached for 30 seconds (short enough to stay accurate, long enough to absorb request bursts). Used to gate `POST /comment/edit` and `POST /comment/delete`, which identify the caller by an explicit `author` address.
+
+Anonymous voting (`POST /vote`) and anonymous commenting (`POST /comment/anonymous`) don't use either cache — membership is proven per-request via a ZK merkle-root proof that the voting/comments contract verifies on-chain, which is already both real-time and stronger than an address-based lookup.
+
+Every real-time check that disagrees with the periodic cache logs a `membership_cache_mismatch` warning (useful for spotting drift or a sync interval that's too long). Verification latency and hit-rate metrics are available to authenticated callers via `GET /health` (`membershipVerification` field).
+
+The real-time check only runs when `MEMBERSHIP_SBT_CONTRACT_ID` is configured; deployments without the SBT contract keep the previous behavior (no membership gate on comment edit/delete).
+
+---
+
+## Audit Log
+
+Every authenticated call to a privileged endpoint — `POST /daos/sync`, `POST /events`, `POST /events/notify`, `POST /ipfs/image`, `POST /ipfs/metadata`, `POST /vote`, `POST /comment/anonymous` — is recorded to an append-only `audit_log` table, separate from the general request/response logging (`requestLogger`). Each entry contains:
+
+- Timestamp, action name, and endpoint (`METHOD path`)
+- A hashed auth token identifier (`authTokenId`) — since the relayer currently has one shared token rather than per-user credentials, this identifies "a valid token was presented", not a specific user
+- A hashed client IP (`ipHash`)
+- The request context ID (`requestId`, same value logged by `requestLogger`)
+- Redacted request params (the same sensitive-field redaction as the general logger — proofs, nullifiers, tokens, etc. are never stored)
+- The response status code
+
+Each row's `hash` covers its own fields plus the previous row's `hash` (a hash chain), so editing, deleting, or reordering a past entry is detectable via chain verification. Two SQLite triggers enforce this at the database level: core fields can never be `UPDATE`d, and a row can't be `DELETE`d until it has been archived.
+
+Rows older than `AUDIT_LOG_RETENTION_DAYS` (default 90) are rotated out automatically every `AUDIT_LOG_ROTATION_INTERVAL_MS` (default 24h): exported to a compressed, timestamped `.jsonl.gz` file under `AUDIT_LOG_ARCHIVE_DIR` (default `./data/audit-archive`), marked `archived_at`, then removed from the hot table.
+
+### POST /remediation/action
+
+Creates an authenticated remediation action with an idempotency key. Duplicate keys are rejected so incident response actions cannot be replayed accidentally.
+
+**Authentication:** Yes
+
+### GET /remediation/log
+
+Returns remediation action log entries. Supports filtering by actor, action, target, limit, and offset.
+
+**Authentication:** Yes
+
+### GET /audit/logs
+
+Queries redacted audit entries from the append-only audit trail. Supports action, actor, method, time range, limit, and offset filters.
+
+**Authentication:** Yes
+
+### GET /audit/export
+
+Exports audit logs in JSON or CSV format.
+
+**Authentication:** Yes
+
+### GET /audit/stats
+
+Returns audit trail statistics for operational review.
+
+**Authentication:** Yes
+
+### GET /admin/audit-log
+
+Paginated audit log review.
+
+**Authentication:** Yes
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Query Parameters
+
+| Param    | Type      | Default | Description                                         |
+| -------- | --------- | ------- | --------------------------------------------------- |
+| `limit`  | `number`  | 50      | Max rows to return (capped at 500)                  |
+| `offset` | `number`  | 0       | Pagination offset                                   |
+| `action` | `string`  | -       | Filter by action name                               |
+| `format` | `string`  | `json`  | `json` or `cef` (Common Event Format, `text/plain`) |
+| `verify` | `boolean` | `false` | If `true`, include a hash-chain integrity check     |
+
+#### Response (200) -- JSON
+
+```json
+{
+  "logs": [
+    {
+      "id": 42,
+      "timestamp": "2026-07-28T13:58:22.956Z",
+      "action": "daos_sync",
+      "endpoint": "POST /daos/sync",
+      "auth_token_id": "8584ec0ca90c2c45",
+      "ip_hash": "3e48ef9d22e096da",
+      "request_id": "d9086a6822af",
+      "params": null,
+      "status_code": 200,
+      "prev_hash": "genesis",
+      "hash": "7d5058b5b68cfc845b8e4a026fc4e60747f325d16a129c9573ec37e92b9e2056",
+      "archived_at": null
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "chainVerification": { "valid": true, "checkedCount": 1 }
+}
+```
+
+### GET /admin/sbt-transfer-attempts
+
+Review flagged membership-SBT transfer/approval attempts for a DAO (#357).
+
+The membership-sbt contract always rejects `transfer`/`transfer_from`/`approve`
+(soulbound). `services/sbt-guard.ts` detects the attempt from the transaction
+envelope regardless of on-chain success/failure and records it as an
+`sbt_transfer_attempt` event.
+
+**Authentication:** Yes
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Query Parameters
+
+| Param    | Type     | Default | Description                        |
+| -------- | -------- | ------- | ---------------------------------- |
+| `daoId`  | `number` | -       | Required. The DAO to review.       |
+| `limit`  | `number` | 50      | Max rows to return (capped at 500) |
+| `offset` | `number` | 0       | Pagination offset                  |
+
+#### Response (200)
+
+```json
+{
+  "daoId": 1,
+  "attempts": [
+    {
+      "id": 7,
+      "dao_id": 1,
+      "type": "sbt_transfer_attempt",
+      "data": { "functionNames": ["transfer"], "successful": false },
+      "ledger": 123456,
+      "tx_hash": "abcd...",
+      "timestamp": "2026-08-30T00:00:00.000Z",
+      "verified": true
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+#### Errors
+
+- `400` - `daoId` is missing or not a positive integer
+- `401` - Missing/invalid auth token
 
 ---
 
@@ -820,9 +1216,9 @@ Upload an image file to IPFS via Pinata.
 
 `Content-Type: multipart/form-data`
 
-| Field   | Type   | Required | Description                                |
-|---------|--------|----------|--------------------------------------------|
-| `image` | `file` | Yes      | Image file (max 5MB)                       |
+| Field   | Type   | Required | Description          |
+| ------- | ------ | -------- | -------------------- |
+| `image` | `file` | Yes      | Image file (max 5MB) |
 
 **Allowed MIME types:** `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/svg+xml`, `image/heic`, `image/heif`, `image/avif`, `image/bmp`, `image/tiff`, and any `image/*` type.
 
@@ -846,13 +1242,13 @@ curl -X POST http://localhost:3001/ipfs/image \
 
 #### Error Responses
 
-| Status | Error                                | Cause                |
-|--------|--------------------------------------|----------------------|
-| 400    | `"File too large. Maximum size is 5MB."` | File exceeds 5MB |
-| 400    | `"Unsupported file type: ..."` | Invalid MIME type    |
-| 400    | `"No image file provided"`           | Missing file         |
-| 500    | `"Failed to upload image to IPFS"`   | Pinata error         |
-| 503    | `"IPFS service not configured"`      | IPFS not enabled     |
+| Status | Error                                    | Cause             |
+| ------ | ---------------------------------------- | ----------------- |
+| 400    | `"File too large. Maximum size is 5MB."` | File exceeds 5MB  |
+| 400    | `"Unsupported file type: ..."`           | Invalid MIME type |
+| 400    | `"No image file provided"`               | Missing file      |
+| 500    | `"Failed to upload image to IPFS"`       | Pinata error      |
+| 503    | `"IPFS service not configured"`          | IPFS not enabled  |
 
 ---
 
@@ -865,12 +1261,12 @@ Upload JSON metadata to IPFS via Pinata. The metadata is sanitized before pinnin
 
 #### Request Body
 
-| Field      | Type     | Required | Description                                              |
-|------------|----------|----------|----------------------------------------------------------|
-| `version`  | `number` | Yes      | Metadata version (must be a number)                      |
-| `body`     | `string` | No       | Content body (max 100KB for proposals, 10KB for comments)|
-| `videoUrl` | `string` | No       | YouTube or Vimeo URL only                                |
-| ...        | any      | No       | Additional fields are allowed (passthrough)              |
+| Field      | Type     | Required | Description                                               |
+| ---------- | -------- | -------- | --------------------------------------------------------- |
+| `version`  | `number` | Yes      | Metadata version (must be a number)                       |
+| `body`     | `string` | No       | Content body (max 100KB for proposals, 10KB for comments) |
+| `videoUrl` | `string` | No       | YouTube or Vimeo URL only                                 |
+| ...        | any      | No       | Additional fields are allowed (passthrough)               |
 
 Maximum total metadata size: 100KB.
 
@@ -897,13 +1293,13 @@ curl -X POST http://localhost:3001/ipfs/metadata \
 
 #### Error Responses
 
-| Status | Error                                        | Cause                       |
-|--------|----------------------------------------------|-----------------------------|
-| 400    | `"Metadata too large: ... bytes (max 102400)"` | Exceeds 100KB            |
-| 400    | `"metadata.version is required and must be a number"` | Missing/invalid version |
-| 400    | `"Invalid video URL. Only YouTube and Vimeo URLs are allowed."` | Bad video URL |
-| 500    | `"Failed to upload metadata to IPFS"`        | Pinata error                |
-| 503    | `"IPFS service not configured"`              | IPFS not enabled            |
+| Status | Error                                                           | Cause                   |
+| ------ | --------------------------------------------------------------- | ----------------------- |
+| 400    | `"Metadata too large: ... bytes (max 102400)"`                  | Exceeds 100KB           |
+| 400    | `"metadata.version is required and must be a number"`           | Missing/invalid version |
+| 400    | `"Invalid video URL. Only YouTube and Vimeo URLs are allowed."` | Bad video URL           |
+| 500    | `"Failed to upload metadata to IPFS"`                           | Pinata error            |
+| 503    | `"IPFS service not configured"`                                 | IPFS not enabled        |
 
 ---
 
@@ -916,8 +1312,8 @@ Fetch JSON content from IPFS. Results are cached in-memory (LRU, max 500 entries
 
 #### Path Parameters
 
-| Parameter | Type     | Description                       |
-|-----------|----------|-----------------------------------|
+| Parameter | Type     | Description                                         |
+| --------- | -------- | --------------------------------------------------- |
 | `cid`     | `string` | IPFS CID (CIDv0 `Qm...` or CIDv1 `bafy.../bafk...`) |
 
 #### Example Request
@@ -946,11 +1342,11 @@ curl http://localhost:3001/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3ocl
 
 #### Error Responses
 
-| Status | Error                                   | Cause             |
-|--------|-----------------------------------------|-------------------|
-| 400    | `"Invalid CID format"`                  | Malformed CID     |
-| 500    | `"Failed to fetch content from IPFS"`   | Fetch error       |
-| 503    | `"IPFS service not configured"`         | IPFS not enabled  |
+| Status | Error                                 | Cause            |
+| ------ | ------------------------------------- | ---------------- |
+| 400    | `"Invalid CID format"`                | Malformed CID    |
+| 500    | `"Failed to fetch content from IPFS"` | Fetch error      |
+| 503    | `"IPFS service not configured"`       | IPFS not enabled |
 
 ---
 
@@ -963,8 +1359,8 @@ Fetch a raw image from IPFS. Returns the binary image data with appropriate `Con
 
 #### Path Parameters
 
-| Parameter | Type     | Description                       |
-|-----------|----------|-----------------------------------|
+| Parameter | Type     | Description                                         |
+| --------- | -------- | --------------------------------------------------- |
 | `cid`     | `string` | IPFS CID (CIDv0 `Qm...` or CIDv1 `bafy.../bafk...`) |
 
 #### Example Request
@@ -977,17 +1373,18 @@ curl http://localhost:3001/ipfs/image/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqa
 #### Response (200)
 
 Binary image data with headers:
+
 - `Content-Type: image/png` (or detected type)
 - `Cache-Control: public, max-age=31536000, immutable`
 - `Cross-Origin-Resource-Policy: cross-origin`
 
 #### Error Responses
 
-| Status | Error                                   | Cause             |
-|--------|-----------------------------------------|-------------------|
-| 400    | `"Invalid CID format"`                  | Malformed CID     |
-| 500    | `"Failed to fetch image from IPFS"`     | Fetch error       |
-| 503    | `"IPFS service not configured"`         | IPFS not enabled  |
+| Status | Error                               | Cause            |
+| ------ | ----------------------------------- | ---------------- |
+| 400    | `"Invalid CID format"`              | Malformed CID    |
+| 500    | `"Failed to fetch image from IPFS"` | Fetch error      |
+| 503    | `"IPFS service not configured"`     | IPFS not enabled |
 
 ---
 
@@ -995,9 +1392,45 @@ Binary image data with headers:
 
 The event indexer polls Soroban contract events and maintains an in-memory event store. Events can also be manually submitted or reported via frontend notifications.
 
+### GET /events/archived
+
+List historical event archives (events for closed/archived proposals get compressed out of the live event store — see `services/archival.ts`).
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Query Parameters
+
+| Param   | Type     | Description                       |
+| ------- | -------- | --------------------------------- |
+| `daoId` | `number` | Optional — filter archives by DAO |
+
+#### Response (200)
+
+```json
+{ "archives": [], "total": 0 }
+```
+
+---
+
+### GET /events/archived/:archiveId
+
+Retrieve events from a specific historical archive.
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Response (200)
+
+```json
+{ "archiveId": "archive_dao_0_1785200000000", "events": [], "total": 0 }
+```
+
+---
+
 ### GET /events/:daoId
 
-Get indexed events for a DAO with pagination and optional type filtering.
+Get indexed events for a DAO with cursor-based pagination and optional type filtering.
 
 **Authentication:** No
 **Rate Limit:** 60/min (queryLimiter)
@@ -1005,43 +1438,81 @@ Get indexed events for a DAO with pagination and optional type filtering.
 #### Path Parameters
 
 | Parameter | Type     | Description              |
-|-----------|----------|--------------------------|
+| --------- | -------- | ------------------------ |
 | `daoId`   | `string` | DAO identifier (integer) |
 
 #### Query Parameters
 
-| Parameter | Type     | Default | Description                                      |
-|-----------|----------|---------|--------------------------------------------------|
-| `limit`   | `string` | `"50"` | Max events to return (capped at 100)             |
-| `offset`  | `string` | `"0"`  | Number of events to skip                         |
+| Parameter | Type     | Default | Description                                                              |
+| --------- | -------- | ------- | ------------------------------------------------------------------------ |
+| `limit`   | `number` | `100`   | Max events per page (max `500`)                                          |
+| `cursor`  | `string` | none    | Opaque cursor for fetching next page                                     |
 | `types`   | `string` | none    | Comma-separated event type filter (e.g., `"vote_cast,proposal_created"`) |
 
 #### Example Request
 
 ```bash
+# First page
 curl "http://localhost:3001/events/0?limit=20&types=vote_cast,proposal_created"
+
+# Next page
+curl "http://localhost:3001/events/0?limit=20&cursor=eyJpIjoxMjN9"
 ```
 
 #### Response (200)
 
 ```json
 {
-  "events": [...],
-  "total": 42
+  "data": [...],
+  "pagination": {
+    "cursor": "eyJpIjoxMjN9",
+    "hasMore": true,
+    "total": 42
+  }
 }
 ```
 
+When `hasMore` is `false`, there are no additional pages. Pass the `cursor` value as the `cursor` query parameter to fetch the next page. The cursor is an opaque string encoding the last item's position.
+
 #### Error Responses
 
-| Status | Error                     | Cause              |
-|--------|---------------------------|---------------------|
-| 500    | `"Failed to get events"`  | Internal error      |
+| Status | Error                    | Cause          |
+| ------ | ------------------------ | -------------- |
+| 500    | `"Failed to get events"` | Internal error |
 
 ---
 
 ### GET /indexer/status
 
-Get the current status of the event indexer.
+Get the current status of the event indexer (polling state, checkpoint, lag).
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Example Request
+
+```bash
+curl http://localhost:3001/indexer/status
+```
+
+#### Response (200)
+
+```json
+{
+  "isRunning": true,
+  "indexerLag": 0,
+  "hasGap": false,
+  "catchUpMode": false,
+  "checkpoint": "2026-08-31T00:00:00.000Z",
+  "db": { "totalEvents": 0, "daoCount": 0, "lastLedger": 0 }
+}
+```
+
+---
+
+### GET /indexer/status
+
+Event indexer health/status.
 
 **Authentication:** No
 **Rate Limit:** 60/min (queryLimiter)
@@ -1057,9 +1528,7 @@ curl http://localhost:3001/indexer/status
 ```json
 {
   "running": true,
-  "lastPoll": "2025-01-01T00:00:00Z",
-  "eventsProcessed": 150,
-  "errors": 0
+  "lastLedger": 12345
 }
 ```
 
@@ -1098,7 +1567,7 @@ Manually add an event to the indexer. Admin use only.
 #### Request Body
 
 | Field   | Type     | Required | Description                      |
-|---------|----------|----------|----------------------------------|
+| ------- | -------- | -------- | -------------------------------- |
 | `daoId` | `number` | Yes      | DAO identifier                   |
 | `type`  | `string` | Yes      | Event type (e.g., `"vote_cast"`) |
 | `data`  | `object` | No       | Arbitrary event data             |
@@ -1126,10 +1595,10 @@ curl -X POST http://localhost:3001/events \
 
 #### Error Responses
 
-| Status | Error                              | Cause                    |
-|--------|------------------------------------|--------------------------|
-| 400    | `"daoId and type are required"`    | Missing required fields  |
-| 500    | `"Failed to add event"`           | Internal error           |
+| Status | Error                           | Cause                   |
+| ------ | ------------------------------- | ----------------------- |
+| 400    | `"daoId and type are required"` | Missing required fields |
+| 500    | `"Failed to add event"`         | Internal error          |
 
 ---
 
@@ -1142,12 +1611,12 @@ Frontend event notification endpoint. Used by the frontend to report on-chain ev
 
 #### Request Body
 
-| Field    | Type     | Required | Description                                |
-|----------|----------|----------|--------------------------------------------|
-| `daoId`  | `number` | Yes      | DAO identifier                             |
-| `type`   | `string` | Yes      | Event type                                 |
-| `data`   | `object` | No       | Arbitrary event data                       |
-| `txHash` | `string` | Yes      | Transaction hash (64 hex characters)       |
+| Field    | Type     | Required | Description                          |
+| -------- | -------- | -------- | ------------------------------------ |
+| `daoId`  | `number` | Yes      | DAO identifier                       |
+| `type`   | `string` | Yes      | Event type                           |
+| `data`   | `object` | No       | Arbitrary event data                 |
+| `txHash` | `string` | Yes      | Transaction hash (64 hex characters) |
 
 Membership event types that trigger a cache refresh: `sbt_mint`, `sbt_revoke`, `member_join`, `member_leave`, `self_join`.
 
@@ -1175,11 +1644,344 @@ curl -X POST http://localhost:3001/events/notify \
 
 #### Error Responses
 
-| Status | Error                                     | Cause                    |
-|--------|-------------------------------------------|--------------------------|
-| 400    | `"daoId, type, and txHash are required"`  | Missing required fields  |
-| 400    | `"Invalid txHash format"`                 | Not 64 hex characters    |
-| 500    | `"Failed to notify event"`                | Internal error           |
+| Status | Error                                    | Cause                   |
+| ------ | ---------------------------------------- | ----------------------- |
+| 400    | `"daoId, type, and txHash are required"` | Missing required fields |
+| 400    | `"Invalid txHash format"`                | Not 64 hex characters   |
+| 500    | `"Failed to notify event"`               | Internal error          |
+
+---
+
+## Bridge
+
+Cross-chain (EVM -> Soroban) vote relay. The Soroban `relay_vote` method does
+**not** verify a Groth16 proof, so this HTTP endpoint must: (1) authenticate the
+caller, (2) rate-limit, and (3) verify the bridge circuit proof off-chain before
+the relayer co-signs. Proof / eligibility failures always return `VOTE_REJECTED`
+without disclosing which check failed.
+
+### POST /bridge/vote
+
+Submit a cross-chain vote proof.
+
+**Authentication:** Yes (`X-Relayer-Auth` / Bearer token via `authGuard`)
+**Rate Limit:** `voteLimiter`
+**Body limit:** 5kb (`bodyLimit`)
+
+#### Request Body
+
+| Field             | Type     | Required | Description                                      |
+| ----------------- | -------- | -------- | ------------------------------------------------ |
+| `daoId`           | `number` | Yes      | Positive integer DAO identifier                  |
+| `proposalId`      | `number` | Yes      | Positive integer proposal identifier             |
+| `voteChoice`      | `number` | Yes      | `0` or `1`                                       |
+| `nullifier`       | `string` | Yes      | Hex string, max 64 chars                         |
+| `voteRoot`        | `string` | Yes      | Hex string, max 64 chars                         |
+| `sbtRoot`         | `string` | Yes      | Hex string, max 64 chars                         |
+| `sbtContractAddr` | `string` | Yes      | Hex field element (public signal 0)              |
+| `memberAddr`      | `string` | Yes      | Hex field element (public signal 1)              |
+| `proof`           | `object` | Yes      | `{ a, b, c }` Groth16 proof (hex) — verified     |
+
+#### Response (200)
+
+```json
+{ "success": true, "txHash": "abc123...64hex" }
+```
+
+#### Error Responses
+
+| Status | Error            | Cause                                      |
+| ------ | ---------------- | ------------------------------------------ |
+| 400    | `VOTE_REJECTED`  | Invalid, signal, or simulation failure  |
+| 401    | `Unauthorized`   | Missing/invalid relayer auth token         |
+| 429    | rate limited     | Too many submissions                       |
+
+
+### GET /bridge/nullifier/:daoId/:proposalId/:nullifier
+
+Check whether a nullifier has already been used (double-vote detection).
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Response (200)
+
+```json
+{ "daoId": 0, "proposalId": 1, "nullifier": "0x1234...", "used": false }
+```
+
+#### Error Responses
+
+| Status | Error                                | Cause             |
+| ------ | ------------------------------------ | ----------------- |
+| 404    | `"Bridge contract not found"`        | Simulation failed |
+| 500    | `"Failed to check nullifier status"` | Internal error    |
+
+---
+
+### POST /bridge/relay
+
+Manually trigger cross-chain event relay (admin only).
+
+**Authentication:** Yes
+**Rate Limit:** None
+
+#### Response (200)
+
+```json
+{ "success": true }
+```
+
+---
+
+## Circuits
+
+### GET /circuits/:dao/:type/status
+
+Get the active and available ZK circuit versions for a DAO (supports circuit migrations without downtime).
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Path Parameters
+
+| Parameter | Type     | Description              |
+| --------- | -------- | ------------------------ |
+| `dao`     | `string` | DAO identifier (integer) |
+| `type`    | `string` | `"comment"` or `"vote"`  |
+
+#### Response (200)
+
+```json
+{
+  "daoId": 0,
+  "circuitType": "Vote",
+  "currentCircuit": "vote_v1",
+  "availableCircuits": [],
+  "migration": null
+}
+```
+
+---
+
+## Randomness
+
+### POST /randomness/seed
+
+Seed the VDF computation for a DAO/proposal set. Admin action that binds randomness to a specific election and introduces the mandatory time delay.
+
+**Authentication:** Required
+**Rate Limit:** No
+
+#### Request Body
+
+```json
+{
+  "daoId": 0,
+  "proposalIds": [1, 2, 3]
+}
+```
+
+#### Response (200)
+
+```json
+{ "success": true, "nonce": "deadbeef..." }
+```
+
+---
+
+### POST /randomness/contribute
+
+Submit a 32-byte random share from an independent authority. Once `requiredShares` shares are received, the ordering can be finalized.
+
+**Authentication:** Required
+**Rate Limit:** No
+
+#### Request Body
+
+```json
+{
+  "daoId": 0,
+  "authorityId": "GABCDEF...",
+  "shareHex": "0x...64 hex chars"
+}
+```
+
+#### Response (200)
+
+```json
+{ "success": true, "received": 1, "requiredShares": 3 }
+```
+
+---
+
+### POST /randomness/finalize
+
+Finalize the ordering once the required number of shares have been received.
+
+**Authentication:** Required
+**Rate Limit:** No
+
+#### Request Body
+
+```json
+{
+  "daoId": 0
+}
+```
+
+#### Response (200)
+
+```json
+{ "success": true, "finalizedAt": 1722300000000 }
+```
+
+---
+
+### GET /randomness/ordering/:daoId
+
+Get the finalized ordering for a DAO along with data needed for independent verification.
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Path Parameters
+
+| Parameter | Type     | Description          |
+|-----------|----------|----------------------|
+| `daoId`   | `integer`| DAO identifier       |
+
+#### Response (200)
+
+```json
+{
+  "daoId": 0,
+  "finalizedAt": 1722300000000,
+  "ordering": []
+}
+```
+
+---
+
+### GET /randomness/verify/:daoId
+
+Verify a finalized ordering without re-running the full VDF computation.
+
+**Authentication:** No
+**Rate Limit:** 60/min (queryLimiter)
+
+#### Path Parameters
+
+| Parameter | Type     | Description          |
+|-----------|----------|----------------------|
+| `daoId`   | `integer`| DAO identifier       |
+
+#### Response (200)
+
+```json
+{
+  "daoId": 0,
+  "valid": true,
+  "checks": {
+    "vdfOutputValid": true,
+    "replayNonceValid": true,
+    "orderingValid": true
+  },
+  "replayNonce": "deadbeef...",
+  "finalizedAt": 1722300000000
+}
+```
+
+---
+
+## Route Parameter Validation
+
+All route parameters are validated using Zod schemas before processing. Invalid parameters return `400 Bad Request` with structured error details.
+
+### Parameter Types and Formats
+
+#### Integer Parameters (`:daoId`, `:proposalId`, `:commentId`, `:archiveId`)
+
+- **Format**: Positive integers only (1, 2, 3, ...)
+- **Range**: 1 to `Number.MAX_SAFE_INTEGER` (9,007,199,254,740,991)
+- **Conversion**: String route parameters are automatically converted to numbers
+- **Invalid values**: Negative numbers, zero, decimals, non-numeric strings
+
+**Examples:**
+
+- ✅ Valid: `/dao/123`, `/proposal/1/42`
+- ❌ Invalid: `/dao/0`, `/dao/-1`, `/dao/abc`, `/dao/123.45`
+
+#### IPFS CID Parameters (`:cid`)
+
+- **Format**: Valid IPFS Content Identifier
+- **CIDv0**: Starts with `Qm`, minimum 46 characters (Base58 encoded)
+- **CIDv1**: Starts with `bafy` or `bafk`, minimum 59 characters
+
+**Examples:**
+
+- ✅ Valid CIDv0: `QmYjtig7VJQ6XsnUjqqJvj7QaMcCAwtrgNdahSiFofrE7o`
+- ✅ Valid CIDv1: `bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku`
+- ❌ Invalid: `invalid-cid`, `Qm123` (too short), `QmInvalidChars0`
+
+#### Hex String Parameters (`:nullifier`, `:commitment`)
+
+**Nullifier (`:nullifier`)**:
+
+- **Format**: Hexadecimal string with optional `0x` prefix
+- **Length**: 1 to 64 hex characters (0.5 to 32 bytes)
+- **Character set**: `0-9`, `a-f`, `A-F`
+
+**Commitment (`:commitment`)**:
+
+- **Format**: Hexadecimal string with optional `0x` prefix
+- **Length**: Exactly 64 hex characters (32 bytes)
+- **Character set**: `0-9`, `a-f`, `A-F`
+
+**Examples:**
+
+- ✅ Valid nullifier: `0x1234abcd`, `1234567890abcdef...` (up to 64 chars)
+- ✅ Valid commitment: `1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef`
+- ❌ Invalid: `GHIJ1234` (invalid hex), `123` (commitment too short)
+
+### Parameter Validation Error Format
+
+When route parameters fail validation, the response includes structured error details:
+
+```json
+{
+  "error": "Invalid URL parameters",
+  "details": [
+    {
+      "field": "daoId",
+      "message": "Must be a positive integer"
+    },
+    {
+      "field": "cid",
+      "message": "Invalid IPFS CID format"
+    }
+  ]
+}
+```
+
+**Status:** `400 Bad Request`
+
+### Route Parameter Matrix
+
+| Route                                                 | Parameters                         | Validation Schema     |
+| ----------------------------------------------------- | ---------------------------------- | --------------------- |
+| `GET /dao/:daoId`                                     | `daoId`                            | Positive integer      |
+| `GET /proposal/:daoId/:proposalId`                    | `daoId`, `proposalId`              | Positive integers     |
+| `GET /root/:daoId`                                    | `daoId`                            | Positive integer      |
+| `GET /comments/:daoId/:proposalId`                    | `daoId`, `proposalId`              | Positive integers     |
+| `GET /comment/:daoId/:proposalId/:commentId`          | `daoId`, `proposalId`, `commentId` | Positive integers     |
+| `GET /comments/:daoId/:proposalId/nonce`              | `daoId`, `proposalId`              | Positive integers     |
+| `GET /comment/challenge/:commitment`                  | `commitment`                       | 64-char hex string    |
+| `GET /ipfs/:cid`                                      | `cid`                              | Valid IPFS CID        |
+| `GET /ipfs/image/:cid`                                | `cid`                              | Valid IPFS CID        |
+| `GET /bridge/nullifier/:daoId/:proposalId/:nullifier` | `daoId`, `proposalId`, `nullifier` | Integers + hex string |
+| `GET /events/:daoId`                                  | `daoId`                            | Positive integer      |
+| `GET /events/archived/:archiveId`                     | `archiveId`                        | Positive integer      |
 
 ---
 

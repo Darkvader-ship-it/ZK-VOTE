@@ -26,12 +26,18 @@ function poseidonHash(inputs) {
   return poseidon.F.toObject(hash);
 }
 
-// Generate identity commitment
+// Domain separation tag for commitment scheme
+// SHA-256("ZK-VOTE-COMMITMENT") reduced mod BN254 scalar field
+const DOMAIN_TAG = BigInt("19666041591797403834655481403982443037438503980743793537655983658411276515161");
+
+// Generate identity commitment with domain separation and blinding factor
+// commitment = Poseidon(DOMAIN_TAG, secret, salt, blindingFactor)
 function generateIdentity() {
   const secret = randomFieldElement();
   const salt = randomFieldElement();
-  const commitment = poseidonHash([secret, salt]);
-  return { secret, salt, commitment };
+  const blindingFactor = randomFieldElement();
+  const commitment = poseidonHash([DOMAIN_TAG, secret, salt, blindingFactor]);
+  return { secret, salt, blindingFactor, commitment };
 }
 
 // Compute nullifier for a proposal (domain-separated with daoId)
@@ -49,8 +55,8 @@ function buildMerkleTree(leaves) {
   const treeSize = Math.pow(2, depth);
   const paddedLeaves = [...leaves];
 
-  // Compute zero values for empty leaves
-  let zeroValue = BigInt(0);
+  // Compute zero values for empty leaves with domain separation
+  let zeroValue = poseidonHash([DOMAIN_TAG, BigInt(0), BigInt(0), BigInt(0)]);
   const zeros = [zeroValue];
   for (let i = 1; i <= depth; i++) {
     zeroValue = poseidonHash([zeroValue, zeroValue]);
@@ -97,8 +103,21 @@ function getMerkleProof(tree, leafIndex) {
   return { pathElements, pathIndices };
 }
 
-// Generate complete vote input
+// Generate complete vote input with input validation
 function generateVoteInput(memberSecrets, voterIndex, daoId, proposalId, voteChoice) {
+  if (!Array.isArray(memberSecrets) || memberSecrets.length === 0) {
+    throw new Error("memberSecrets must be a non-empty array");
+  }
+  if (voterIndex < 0 || voterIndex >= memberSecrets.length) {
+    throw new Error(`voterIndex ${voterIndex} out of bounds (0..${memberSecrets.length - 1})`);
+  }
+  if (daoId === undefined || daoId === null) {
+    throw new Error("daoId is required");
+  }
+  if (proposalId === undefined || proposalId === null) {
+    throw new Error("proposalId is required");
+  }
+
   // Get voter's identity
   const voter = memberSecrets[voterIndex];
 
@@ -124,6 +143,7 @@ function generateVoteInput(memberSecrets, voterIndex, daoId, proposalId, voteCho
     // Private inputs
     secret: voter.secret.toString(),
     salt: voter.salt.toString(),
+    blindingFactor: voter.blindingFactor.toString(),
     pathElements: proof.pathElements.map(e => e.toString()),
     pathIndices: proof.pathIndices.map(i => i.toString())
   };
@@ -185,6 +205,7 @@ if (require.main === module) {
     const secretsData = members.map(m => ({
       secret: m.secret.toString(),
       salt: m.salt.toString(),
+      blindingFactor: m.blindingFactor.toString(),
       commitment: m.commitment.toString()
     }));
     fs.writeFileSync(secretsFile, JSON.stringify(secretsData, null, 2));

@@ -9,10 +9,25 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { workspace = true }
 zkvote-groth16 = { path = "../zkvote-groth16" }
+vdf = { path = "../vdf" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-zkvote-groth16 = { path = "../zkvote-groth16", features = ["testutils"] }
 
 [features]
-testutils = ["soroban-sdk/testutils", "zkvote-groth16/testutils"]
+# NOTE: deliberately does NOT forward `zkvote-groth16/testutils`.
+# That feature replaces proof verification with `true`. Forwarding it
+# here would mean `cargo build --all-features` links a contract that
+# accepts every proof, so the stub is reachable from a deployable
+# build purely by asking for all features.
+testutils = ["soroban-sdk/testutils"]
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true

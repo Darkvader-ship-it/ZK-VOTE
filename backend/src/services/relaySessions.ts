@@ -1,0 +1,244 @@
+// @ts-nocheck
+/**
+ * Scoped relay session tokens and encrypted relay metadata support.
+ *
+ * The relay is assumed to be honest-but-curious, so the session token must be
+ * short-lived and bound to a specific DAO scope. Each token includes an Ed25519
+ * signature over its payload so the relay can authenticate a client without
+ * trusting a static shared secret alone.
+ */
+
+import crypto from "node:crypto";
+import { config } from "../config.js";
+
+export interface RelaySessionCapability {
+  daoId?: number;
+  actions?: string[];
+  nonce?: string;
+  issuedAt?: number;
+  expiresAt?: number;
+  scope?: string;
+}
+
+export interface RelaySessionTokenPayload {
+  jti: string;
+  clientId: string;
+  daoId?: number;
+  nonce: string;
+  issuedAt: number;
+  expiresAt: number;
+  capabilities: string[];
+  publicKeyPem: string;
+}
+
+const SESSION_TOKEN_PREFIX = "relay_session";
+
+function b64urlEncode(value: Buffer | string): string {
+  const source = typeof value === "string" ? Buffer.from(value) : value;
+  return source
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function b64urlDecode(input: string): Buffer {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const pad =
+    normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
+  return Buffer.from(normalized + pad, "base64");
+}
+
+export function createSignedSessionToken(
+  clientId: string,
+  _privateKeyPem?: string,
+  options: {
+    daoId?: number;
+    nonce?: string;
+    capabilities?: string[];
+    ttlMs?: number;
+  } = {},
+): string {
+  if (!clientId) {
+    throw new Error("clientId is required");
+  }
+
+  const serverSecret = config.relayerSecretKey;
+  if (!serverSecret) {
+    throw new Error("RELAYER_SECRET_KEY must be configured to issue session tokens");
+  }
+
+  const issuedAt = Date.now();
+  const expiresAt = issuedAt + (options.ttlMs ?? 5 * 60_000);
+  const payload: RelaySessionTokenPayload = {
+    jti: `sess_${crypto.randomBytes(8).toString("hex")}`,
+    clientId,
+    daoId: options.daoId,
+    nonce: options.nonce ?? crypto.randomBytes(16).toString("hex"),
+    issuedAt,
+    expiresAt,
+    capabilities: options.capabilities ?? ["relay:write"],
+    publicKeyPem: "", // No longer used for verification; kept for schema compat
+  };
+
+  const payloadJson = JSON.stringify(payload);
+  const payloadEncoded = b64urlEncode(payloadJson);
+  // HMAC with server secret — only the server can create valid tokens
+  const signature = crypto
+    .createHmac("sha256", serverSecret)
+    .update(payloadJson)
+    .digest();
+  const signatureEncoded = b64urlEncode(signature);
+  return `${SESSION_TOKEN_PREFIX}.${payloadEncoded}.${signatureEncoded}`;
+}
+
+export function verifySignedSessionToken(
+  sessionToken: string,
+  expectedDaoId?: number,
+): {
+  valid: boolean;
+  clientId?: string;
+  daoId?: number;
+  tokenId?: string;
+  reason?: string;
+} {
+  if (!sessionToken || typeof sessionToken !== "string") {
+    return { valid: false, reason: "missing_session_token" };
+  }
+
+  const parts = sessionToken.split(".");
+  if (parts.length !== 3 || parts[0] !== SESSION_TOKEN_PREFIX) {
+    return { valid: false, reason: "malformed_session_token" };
+  }
+
+  try {
+    const payloadJson = b64urlDecode(parts[1]).toString("utf-8");
+    const payload = JSON.parse(payloadJson) as RelaySessionTokenPayload;
+    const signature = b64urlDecode(parts[2]);
+
+    if (!payload.clientId || !payload.publicKeyPem) {
+      return { valid: false, reason: "session_missing_identity" };
+    }
+
+    if (payload.expiresAt <= Date.now()) {
+      return {
+        valid: false,
+        reason: "session_expired",
+        clientId: payload.clientId,
+        daoId: payload.daoId,
+        tokenId: payload.jti,
+      };
+    }
+
+    if (
+      expectedDaoId !== undefined &&
+      payload.daoId !== undefined &&
+      expectedDaoId !== payload.daoId
+    ) {
+      return {
+        valid: false,
+        reason: "dao_scope_mismatch",
+        clientId: payload.clientId,
+        daoId: payload.daoId,
+        tokenId: payload.jti,
+      };
+    }
+
+    if (expectedDaoId !== undefined && payload.daoId === undefined) {
+      return {
+        valid: false,
+        reason: "dao_scope_required",
+        clientId: payload.clientId,
+        tokenId: payload.jti,
+      };
+    }
+
+    if (!payload.capabilities || payload.capabilities.length === 0) {
+      return {
+        valid: false,
+        reason: "session_missing_capabilities",
+        clientId: payload.clientId,
+        daoId: payload.daoId,
+        tokenId: payload.jti,
+      };
+    }
+
+    // SECURITY: Do NOT use the public key embedded in the token payload
+    // for verification — an attacker can generate their own keypair,
+    // self-sign a forged token, and embed the matching public key.
+    // Instead, verify an HMAC over the payload using the server-side
+    // relay secret key so only the server can issue valid session tokens.
+    const serverSecret = config.relayerSecretKey;
+    if (!serverSecret) {
+      return {
+        valid: false,
+        reason: "session_signing_key_not_configured",
+        clientId: payload.clientId,
+        daoId: payload.daoId,
+        tokenId: payload.jti,
+      };
+    }
+
+    const expectedMac = crypto
+      .createHmac("sha256", serverSecret)
+      .update(payloadJson)
+      .digest();
+
+    if (signature.length !== expectedMac.length) {
+      return {
+        valid: false,
+        reason: "invalid_session_signature",
+        clientId: payload.clientId,
+        daoId: payload.daoId,
+        tokenId: payload.jti,
+      };
+    }
+
+    const ok = crypto.timingSafeEqual(signature, expectedMac);
+    if (!ok) {
+      return {
+        valid: false,
+        reason: "invalid_session_signature",
+        clientId: payload.clientId,
+        daoId: payload.daoId,
+        tokenId: payload.jti,
+      };
+    }
+
+    return {
+      valid: true,
+      clientId: payload.clientId,
+      daoId: payload.daoId,
+      tokenId: payload.jti,
+    };
+  } catch {
+    return { valid: false, reason: "session_token_parse_failed" };
+  }
+}
+
+export function getDefaultSessionSigningKey(): string | null {
+  const key =
+    config.relayerSecretKey ||
+    process.env.RELAY_SESSION_PRIVATE_KEY ||
+    process.env.RELAYER_SESSION_PRIVATE_KEY;
+  if (!key) return null;
+  try {
+    const keyObj = crypto.createPrivateKey(key);
+    return keyObj.export({ type: "pkcs8", format: "pem" }).toString();
+  } catch {
+    return null;
+  }
+}
+
+export function generateSessionSigningKeyPair(): {
+  privateKeyPem: string;
+  publicKeyPem: string;
+} {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+  return {
+    privateKeyPem: privateKey
+      .export({ type: "pkcs8", format: "pem" })
+      .toString(),
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
+  };
+}

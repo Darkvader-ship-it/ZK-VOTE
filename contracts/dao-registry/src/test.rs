@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{testutils::Address as _, Env, String};
+use soroban_sdk::{testutils::Address as _, Bytes, BytesN, Env, String};
 
 #[test]
 fn test_create_dao() {
@@ -408,4 +408,345 @@ fn test_set_proposal_mode_non_admin_fails() {
 
     // Non-admin tries to change proposal mode - should fail with NotAdmin error (code #3)
     client.set_proposal_mode(&dao_id, &false, &non_admin);
+}
+
+#[test]
+fn test_propose_contract_upgrade_records_timelock_metadata() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Upgrade DAO"),
+        &admin,
+        &false,
+        &false,
+        &None,
+    );
+    let target_contract = Address::generate(&env);
+    let wasm_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let rollback_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
+    let eta = env.ledger().timestamp() + 86_400;
+    let expires_at = eta + 86_400;
+    let migration_payload = Bytes::from_array(&env, b"migrate:v2");
+
+    let proposal_id = client.propose_contract_upgrade(
+        &dao_id,
+        &target_contract,
+        &wasm_hash,
+        &rollback_wasm_hash,
+        &1u32,
+        &2u32,
+        &2u32,
+        &migration_payload,
+        &eta,
+        &expires_at,
+        &admin,
+    );
+
+    let proposal = client.get_contract_upgrade_proposal(&dao_id, &proposal_id);
+    assert_eq!(proposal.dao_id, dao_id);
+    assert_eq!(proposal.target_contract, target_contract);
+    assert_eq!(proposal.wasm_hash, wasm_hash);
+    assert_eq!(proposal.rollback_wasm_hash, rollback_wasm_hash);
+    assert_eq!(proposal.from_version, 1);
+    assert_eq!(proposal.to_version, 2);
+    assert_eq!(proposal.storage_version, 2);
+    assert_eq!(proposal.migration_payload, migration_payload);
+    assert_eq!(proposal.eta, eta);
+    assert_eq!(proposal.expires_at, expires_at);
+    assert!(!proposal.executed);
+    assert!(!proposal.rolled_back);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_propose_contract_upgrade_requires_min_timelock() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Upgrade DAO"),
+        &admin,
+        &false,
+        &false,
+        &None,
+    );
+    let target_contract = Address::generate(&env);
+    let wasm_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let rollback_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
+    let eta = env.ledger().timestamp() + 60;
+    let expires_at = eta + 86_400;
+    let migration_payload = Bytes::new(&env);
+
+    client.propose_contract_upgrade(
+        &dao_id,
+        &target_contract,
+        &wasm_hash,
+        &rollback_wasm_hash,
+        &1u32,
+        &2u32,
+        &2u32,
+        &migration_payload,
+        &eta,
+        &expires_at,
+        &admin,
+    );
+}
+
+// ============================================
+// ROLE MANAGEMENT TESTS
+// ============================================
+
+#[test]
+fn test_assign_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Test DAO"),
+        &admin,
+        &false,
+        &true,
+        &None,
+    );
+
+    // Assign member role
+    client.assign_role(&dao_id, &member, &1u32, &admin);
+
+    // Verify role was assigned
+    let role = client.get_member_role(&dao_id, &member);
+    assert_eq!(role, Some(1u32));
+}
+
+#[test]
+fn test_revoke_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let member = Address::generate(&env);
+
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Test DAO"),
+        &admin,
+        &false,
+        &true,
+        &None,
+    );
+
+    // Assign and then revoke role
+    client.assign_role(&dao_id, &member, &1u32, &admin);
+    client.revoke_role(&dao_id, &member, &admin);
+
+    // Verify role was revoked
+    let role = client.get_member_role(&dao_id, &member);
+    assert_eq!(role, None);
+}
+
+#[test]
+fn test_assign_auditor_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let auditor = Address::generate(&env);
+
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Test DAO"),
+        &admin,
+        &false,
+        &true,
+        &None,
+    );
+
+    // Assign auditor role (2)
+    client.assign_role(&dao_id, &auditor, &2u32, &admin);
+
+    // Verify auditor role was assigned
+    let role = client.get_member_role(&dao_id, &auditor);
+    assert_eq!(role, Some(2u32));
+}
+
+// ============================================
+// MULTISIG TESTS
+// ============================================
+
+#[test]
+fn test_init_multisig() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Test DAO"),
+        &admin,
+        &false,
+        &true,
+        &None,
+    );
+
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone(), signer3.clone()];
+    client.init_multisig(&dao_id, &signers, &2u32, &admin);
+
+    // Verify multisig config
+    let config = client.get_multisig(&dao_id);
+    assert!(config.is_some());
+    let config = config.unwrap();
+    assert_eq!(config.threshold, 2u32);
+    assert_eq!(config.signers.len(), 3);
+}
+
+#[test]
+fn test_create_multisig_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Test DAO"),
+        &admin,
+        &false,
+        &true,
+        &None,
+    );
+
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+    client.init_multisig(&dao_id, &signers, &2u32, &admin);
+
+    // Create proposal
+    let action_data = Bytes::new(&env);
+    let proposal_id = client.create_multisig_proposal(
+        &dao_id,
+        &String::from_str(&env, "Transfer Admin"),
+        &String::from_str(&env, "Transfer admin rights"),
+        &String::from_str(&env, "TransferAdmin"),
+        &action_data,
+        &signer1,
+    );
+
+    assert_eq!(proposal_id, 1u64);
+
+    // Verify proposal
+    let proposal = client.get_multisig_proposal(&dao_id, &proposal_id);
+    assert!(proposal.is_some());
+    assert_eq!(proposal.unwrap().signatures.len(), 1); // Proposer auto-signs
+}
+
+#[test]
+fn test_sign_multisig_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Test DAO"),
+        &admin,
+        &false,
+        &true,
+        &None,
+    );
+
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+    client.init_multisig(&dao_id, &signers, &2u32, &admin);
+
+    // Create and sign proposal
+    let action_data = Bytes::new(&env);
+    let proposal_id = client.create_multisig_proposal(
+        &dao_id,
+        &String::from_str(&env, "Transfer Admin"),
+        &String::from_str(&env, "Transfer admin rights"),
+        &String::from_str(&env, "TransferAdmin"),
+        &action_data,
+        &signer1,
+    );
+
+    // Second signer adds signature
+    client.sign_multisig_proposal(&dao_id, &proposal_id, &signer2);
+
+    // Verify signatures
+    let proposal = client.get_multisig_proposal(&dao_id, &proposal_id);
+    assert_eq!(proposal.unwrap().signatures.len(), 2);
+}
+
+#[test]
+fn test_execute_multisig_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(DaoRegistry, ());
+    let client = DaoRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+
+    let dao_id = client.create_dao(
+        &String::from_str(&env, "Test DAO"),
+        &admin,
+        &false,
+        &true,
+        &None,
+    );
+
+    let signers = soroban_sdk::vec![&env, signer1.clone(), signer2.clone()];
+    client.init_multisig(&dao_id, &signers, &2u32, &admin);
+
+    // Create proposal with both signers
+    let action_data = Bytes::new(&env);
+    let proposal_id = client.create_multisig_proposal(
+        &dao_id,
+        &String::from_str(&env, "Transfer Admin"),
+        &String::from_str(&env, "Transfer admin rights"),
+        &String::from_str(&env, "TransferAdmin"),
+        &action_data,
+        &signer1,
+    );
+
+    client.sign_multisig_proposal(&dao_id, &proposal_id, &signer2);
+
+    // Execute proposal
+    client.execute_multisig_proposal(&dao_id, &proposal_id, &signer1);
+
+    // Verify executed
+    let proposal = client.get_multisig_proposal(&dao_id, &proposal_id);
+    assert!(proposal.unwrap().executed);
 }

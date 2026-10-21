@@ -10,7 +10,7 @@
 import 'dotenv/config';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initPinata, pinJSON, pinFile, fetchContent, isValidCid, isHealthy } from '../src/services/ipfs.ts';
+import { initPinata, pinJSON, pinFile, fetchContent, isValidCid, isHealthy, sanitizeCid, isPrivateIP, isAllowedGatewayUrl } from '../src/services/ipfs.ts';
 
 // Skip tests if no JWT configured
 const PINATA_JWT = process.env.PINATA_JWT;
@@ -151,6 +151,42 @@ test('fetchContent throws for invalid CID', skipIfNoJwt, async () => {
     () => fetchContent('invalid-cid'),
     /Invalid CID format/
   );
+});
+
+test('SSRF Protection: sanitizeCid rejects path traversal and query injection', () => {
+  assert.throws(() => sanitizeCid('../../../etc/passwd'), /forbidden characters|Invalid CID/);
+  assert.throws(() => sanitizeCid('QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/../etc/passwd'), /forbidden characters|Invalid CID/);
+  assert.throws(() => sanitizeCid('QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG?redirect=http://internal-service'), /forbidden characters|Invalid CID/);
+  assert.throws(() => sanitizeCid('QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG#fragment'), /forbidden characters|Invalid CID/);
+  assert.throws(() => sanitizeCid('QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG\0'), /forbidden characters|Invalid CID/);
+});
+
+test('SSRF Protection: isPrivateIP detects internal and loopback IP addresses', () => {
+  assert.equal(isPrivateIP('127.0.0.1'), true, 'Loopback IPv4');
+  assert.equal(isPrivateIP('127.0.1.1'), true, 'Loopback range');
+  assert.equal(isPrivateIP('10.0.0.1'), true, '10.x private');
+  assert.equal(isPrivateIP('172.16.0.1'), true, '172.16.x private');
+  assert.equal(isPrivateIP('172.31.255.255'), true, '172.31.x private');
+  assert.equal(isPrivateIP('192.168.1.1'), true, '192.168.x private');
+  assert.equal(isPrivateIP('169.254.169.254'), true, 'Cloud metadata service (169.254.x)');
+  assert.equal(isPrivateIP('localhost'), true, 'Localhost domain');
+  assert.equal(isPrivateIP('::1'), true, 'IPv6 loopback');
+  assert.equal(isPrivateIP('fe80::1'), true, 'IPv6 link-local');
+
+  // Public IP
+  assert.equal(isPrivateIP('8.8.8.8'), false, 'Public IPv4');
+});
+
+test('SSRF Protection: isAllowedGatewayUrl validates gateway URLs strictly', () => {
+  // Public gateways
+  assert.equal(isAllowedGatewayUrl('https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'), true);
+  assert.equal(isAllowedGatewayUrl('https://dweb.link/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'), true);
+
+  // Private IPs / internal services blocked
+  assert.equal(isAllowedGatewayUrl('http://127.0.0.1:8080/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'), false);
+  assert.equal(isAllowedGatewayUrl('http://169.254.169.254/latest/meta-data/'), false);
+  assert.equal(isAllowedGatewayUrl('http://localhost:3000/'), false);
+  assert.equal(isAllowedGatewayUrl('https://untrusted-domain.com/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG'), false);
 });
 
 test('fetchContent handles non-existent CID gracefully', skipIfNoJwt, async () => {

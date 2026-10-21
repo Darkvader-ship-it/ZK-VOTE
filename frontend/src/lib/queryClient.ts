@@ -11,8 +11,9 @@ export const queryClient = new QueryClient({
       retry: 2,
       // Refetch on window focus for fresh data
       refetchOnWindowFocus: true,
-      // Don't refetch on reconnect by default (can be expensive for contract calls)
-      refetchOnReconnect: false,
+      // Refetch on reconnect so optimistic state (e.g. a queued vote shown as
+      // voted) is reconciled against server truth after going offline (#755).
+      refetchOnReconnect: true,
     },
     mutations: {
       // Retry mutations once
@@ -65,5 +66,19 @@ export const queryKeys = {
     all: ["comments"] as const,
     list: (daoId: number, proposalId: number) =>
       ["comments", "list", daoId, proposalId] as const,
+  },
+
+  // Claim queries (Vote-to-Earn)
+  claim: {
+    status: (daoId: number, proposalId: number, claimNullifier: string) =>
+      ["claim", "status", daoId, proposalId, claimNullifier] as const,
+    treasury: (daoId: number) => ["claim", "treasury", daoId] as const,
+  },
+
+  // Privacy-preserving analytics (#306)
+  analytics: {
+    all: ["analytics"] as const,
+    state: (daoId: number) => ["analytics", "state", daoId] as const,
+    budget: (daoId: number) => ["analytics", "budget", daoId] as const,
   },
 } as const;

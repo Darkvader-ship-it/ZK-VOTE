@@ -9,12 +9,26 @@ import {
 } from "@creit.tech/stellar-wallets-kit";
 import type { ISupportedWallet } from "@creit.tech/stellar-wallets-kit";
 import { NETWORK_CONFIG } from "../config/contracts";
+import {
+  getFreighterNetworkDetails,
+  listenToAccountChange,
+  listenToNetworkChange,
+  persistConnectionIntent,
+} from "../services/freighter";
+import { clearAllStores } from "../store";
+import {
+  APP_NETWORK_PASSPHRASE,
+  networkLabel,
+  resolveWalletPassphrase,
+  walletSession,
+} from "../lib/walletSession";
 
 export interface WalletState {
   publicKey: string | null;
   isConnected: boolean;
   isInitializing: boolean;
   kit: StellarWalletsKit | null;
+  networkWarning?: string | null;
 }
 
 let globalKit: StellarWalletsKit | null = null;
@@ -51,6 +65,21 @@ const safeLocalStorageRemove = (key: string): void => {
   }
 };
 
+/**
+ * Read the wallet's network and fold it into the wallet session (#750).
+ * Returns the warning to show, or null when the networks match.
+ */
+async function syncWalletNetwork(account: string | null): Promise<string | null> {
+  const passphrase = resolveWalletPassphrase(await getFreighterNetworkDetails());
+  walletSession.sync(account, passphrase);
+  return networkWarningFor(passphrase);
+}
+
+function networkWarningFor(passphrase: string | null): string | null {
+  if (!passphrase || passphrase === APP_NETWORK_PASSPHRASE) return null;
+  return `Your wallet is on ${networkLabel(passphrase)}, but this app uses ${networkLabel(APP_NETWORK_PASSPHRASE)}. Voting and payments are blocked until you switch networks in your wallet.`;
+}
+
 const inferWalletNetwork = (passphrase: string): WalletNetwork | null => {
   if (passphrase === "Public Global Stellar Network ; September 2015")
     return WalletNetwork.PUBLIC;
@@ -68,7 +97,56 @@ export function useWallet() {
     isConnected: false,
     isInitializing: true,
     kit: null,
+    networkWarning: null,
   });
+
+  useEffect(() => {
+    let unlistenAccount: (() => void) | null = null;
+    let unlistenNetwork: (() => void) | null = null;
+
+    if (wallet.isConnected) {
+      unlistenAccount = listenToAccountChange((newAccount) => {
+        // The wallet session bumps its generation and clears the query
+        // caches, so data for the previous account cannot leak (#755, #750).
+        walletSession.sync(newAccount);
+        if (!newAccount) {
+          setWallet((prev) => ({
+            ...prev,
+            publicKey: null,
+            isConnected: false,
+          }));
+        } else {
+          setWallet((prev) => ({
+            ...prev,
+            publicKey: newAccount,
+            isConnected: true,
+          }));
+        }
+      });
+
+      // Compare passphrases, not names: Freighter reports "TESTNET", which no
+      // passphrase contains, so the old substring check warned on the right
+      // network and was dismissed as noise (#750).
+      unlistenNetwork = listenToNetworkChange((net) => {
+        void (async () => {
+          const details = await getFreighterNetworkDetails();
+          const passphrase = resolveWalletPassphrase(
+            details ?? (net ? { network: net } : null),
+          );
+          walletSession.sync(walletSession.getState().account, passphrase);
+          setWallet((prev) => ({
+            ...prev,
+            networkWarning: networkWarningFor(passphrase),
+          }));
+        })();
+      });
+    }
+
+    return () => {
+      if (unlistenAccount) unlistenAccount();
+      if (unlistenNetwork) unlistenNetwork();
+    };
+  }, [wallet.isConnected]);
 
   useEffect(() => {
     // Initialize kit only once
@@ -118,11 +196,13 @@ export function useWallet() {
               address,
               "isInitializing -> false",
             );
+          const networkWarning = await syncWalletNetwork(address);
           setWallet({
             publicKey: address,
             isConnected: true,
             isInitializing: false,
             kit: globalKit,
+            networkWarning,
           });
         }
       } catch {
@@ -152,12 +232,15 @@ export function useWallet() {
 
           // Store wallet selection in localStorage for persistence
           safeLocalStorageSet("selectedWalletId", option.id);
+          persistConnectionIntent(true);
+          const networkWarning = await syncWalletNetwork(address);
 
           setWallet({
             publicKey: address,
             isConnected: true,
             isInitializing: false,
             kit: globalKit,
+            networkWarning,
           });
         },
       });
@@ -170,19 +253,34 @@ export function useWallet() {
   const disconnect = useCallback(() => {
     // Clear stored wallet selection
     safeLocalStorageRemove("selectedWalletId");
+    persistConnectionIntent(false);
+    // Ends the session: revokes the relayer session and clears query caches.
+    walletSession.end();
+    clearAllStores();
+
+    // Clear all identity and cryptographic secrets from localStorage
+    const secretKeyPatterns = [
+      "zkvote_hd_master_secret",
+      "identity_secret",
+      "private_key",
+      "secret",
+      "mnemonic",
+    ];
 
     // Clear all Stellar Wallets Kit localStorage entries
     // The library stores data with keys prefixed with "SWK" or containing "stellar"
     try {
       if (typeof window !== "undefined" && window.localStorage) {
         Object.keys(localStorage).forEach((key) => {
+          const keyLower = key.toLowerCase();
           if (
             key.startsWith("SWK") ||
-            key.toLowerCase().includes("stellar") ||
-            key.toLowerCase().includes("wallet") ||
-            key.toLowerCase().includes("freighter") ||
-            key.toLowerCase().includes("albedo") ||
-            key.toLowerCase().includes("xbull")
+            keyLower.includes("stellar") ||
+            keyLower.includes("wallet") ||
+            keyLower.includes("freighter") ||
+            keyLower.includes("albedo") ||
+            keyLower.includes("xbull") ||
+            secretKeyPatterns.some((pattern) => keyLower.includes(pattern.toLowerCase()))
           ) {
             localStorage.removeItem(key);
           }

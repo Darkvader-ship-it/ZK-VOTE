@@ -12,7 +12,7 @@
 //! - Concurrent operations: Tests parallel member/proposal operations
 //! - Tree operations: Tests Merkle tree under load
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, U256};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, U256};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -20,6 +20,9 @@ use membership_sbt::MembershipSbtClient;
 use membership_tree::MembershipTreeClient;
 use voting::{VerificationKey, VoteMode, VotingClient};
 
+// `set_vk` needs an MPC attestation source; without one it panics before
+// the test asserts anything. See zkvote_integration_tests::test_support.
+use zkvote_integration_tests::test_support::attach_transcript_registry;
 fn zero_g1(env: &Env) -> BytesN<64> {
     BytesN::from_array(env, &[0u8; 64])
 }
@@ -30,8 +33,8 @@ fn zero_g2(env: &Env) -> BytesN<128> {
 
 fn dummy_vk(env: &Env) -> VerificationKey {
     let mut ic = soroban_sdk::Vec::new(env);
-    // IC needs 6 elements for 5 public signals (commitment is now private)
-    for _ in 0..6 {
+    // IC needs 7 elements for 6 public signals (commitment is now private, numCandidates added)
+    for _ in 0..7 {
         ic.push_back(zero_g1(env));
     }
     VerificationKey {
@@ -76,7 +79,16 @@ fn setup_dao_with_options(
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(env, &voting_id);
+
+    // Attestation source for `set_vk` (see test_support module docs).
+    attach_transcript_registry(env.clone(), &voting_id);
 
     let registry = DaoRegistryClient::new(env, &registry_id);
     let sbt = MembershipSbtClient::new(env, &sbt_id);
@@ -91,7 +103,7 @@ fn setup_dao_with_options(
         &true,
         &None,
     );
-    tree.init_tree(&dao_id, &18, &admin);
+    tree.init_tree(&dao_id, &18, &Symbol::new(env, "BN254"), &admin);
     sbt.mint(&dao_id, &admin, &admin, &None);
     voting.set_vk(&dao_id, &dummy_vk(env), &admin);
 
@@ -165,7 +177,13 @@ fn stress_many_daos() {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(&env, &voting_id);
 
     let registry = DaoRegistryClient::new(&env, &registry_id);
     let sbt = MembershipSbtClient::new(&env, &sbt_id);
@@ -179,7 +197,7 @@ fn stress_many_daos() {
         let dao_id = registry.create_dao(&name, &admin, &false, &true, &None);
 
         // Initialize each DAO
-        tree.init_tree(&dao_id, &18, &admin);
+        tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
         sbt.mint(&dao_id, &admin, &admin, &None);
         voting.set_vk(&dao_id, &dummy_vk(&env), &admin);
 
@@ -323,7 +341,13 @@ fn stress_mixed_operations() {
         membership_tree::MembershipTree,
         (sbt_id.clone(), registry_id.clone()),
     );
-    let voting_id = env.register(voting::Voting, (tree_id.clone(), registry_id.clone()));
+    let guardian = Address::generate(&env);
+    let voting_id = env.register(
+        voting::Voting,
+        (tree_id.clone(), registry_id.clone(), guardian),
+    );
+    // `set_vk` is fail-closed without a transcript registry (#662).
+    zkvote_integration_tests::testkit::install_permissive_transcript_registry(&env, &voting_id);
 
     let registry = DaoRegistryClient::new(&env, &registry_id);
     let sbt = MembershipSbtClient::new(&env, &sbt_id);
@@ -338,7 +362,7 @@ fn stress_mixed_operations() {
         let name = String::from_str(&env, &format!("Mixed DAO {}", i));
         let dao_id = registry.create_dao(&name, &admin, &true, &true, &None); // open_membership=true for self_register
 
-        tree.init_tree(&dao_id, &18, &admin);
+        tree.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
         sbt.mint(&dao_id, &admin, &admin, &None);
         voting.set_vk(&dao_id, &dummy_vk(&env), &admin);
 

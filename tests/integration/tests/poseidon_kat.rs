@@ -5,7 +5,7 @@
 //
 // This test MUST pass before any production deployment.
 
-use soroban_sdk::{testutils::Address as _, Address, Bytes, Env, String, U256};
+use soroban_sdk::{testutils::Address as _, Address, Bytes, Env, String, Symbol, U256};
 
 // Import actual contract clients from crates (not WASM)
 use dao_registry::DaoRegistryClient;
@@ -65,7 +65,7 @@ fn test_poseidon_kat_single_commitment() {
     );
 
     // Initialize tree with depth 18
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Mint SBT for admin
     sbt_client.mint(&dao_id, &admin, &admin, &None);
@@ -144,7 +144,7 @@ fn test_poseidon_kat_multiple_commitments() {
     );
 
     // Initialize tree with depth 18
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Create two members
     let member1 = Address::generate(&env);
@@ -229,7 +229,7 @@ fn test_poseidon_zero_leaf_consistency() {
     );
 
     // Initialize tree with depth 18
-    tree_client.init_tree(&dao_id, &18, &admin);
+    tree_client.init_tree(&dao_id, &18, &Symbol::new(&env, "BN254"), &admin);
 
     // Get initial root (should be root of empty tree)
     let empty_root = tree_client.current_root(&dao_id);

@@ -207,7 +207,7 @@ export default function DAOList({
             <h2 className="text-lg font-semibold mb-4">
               Your DAOs ({userDaos.length})
             </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {userDaos.map((dao) => (
                 <DAOCard
                   key={dao.id}
@@ -234,7 +234,7 @@ export default function DAOList({
             <h2 className="text-lg font-semibold mb-4">
               {otherDaosTitle} ({otherDaos.length})
             </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {otherDaos.map((dao) => (
                 <DAOCard
                   key={dao.id}

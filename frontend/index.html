@@ -4,10 +4,39 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
     <link rel="shortcut icon" href="/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Zero-knowledge governance for decentralized organizations on Stellar. Vote anonymously with cryptographic proofs." />
     <title>ZKVote - Anonymous Governance</title>
 
+    <!-- Anti-clickjacking Frame Busting Fallback with Soroswap Allowlist -->
+    <script>
+      if (window.top !== window.self) {
+        var allowedAncestors = [
+          "https://app.soroswap.finance",
+          "https://api.soroswap.finance",
+          "https://soroswap.finance"
+        ];
+        var isAllowed = false;
+        try {
+          if (document.referrer) {
+            var refOrigin = new URL(document.referrer).origin;
+            if (allowedAncestors.indexOf(refOrigin) !== -1 || refOrigin === window.location.origin) {
+              isAllowed = true;
+            }
+          }
+        } catch (e) {}
+        if (!isAllowed) {
+          try {
+            if (window.top) {
+              window.top.location = window.self.location;
+            }
+          } catch {
+            document.documentElement.innerHTML = "";
+            document.documentElement.innerText = "Clickjacking protection: framing is disabled.";
+          }
+        }
+      }
+    </script>
     <!-- Google Fonts for Stellar Design System -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

@@ -1,0 +1,134 @@
+name: Formal Model Check
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+    paths:
+      - "formal-model/**"
+      - ".github/workflows/formal-model.yml"
+
+jobs:
+  tlc-check:
+    name: TLC Model Checker (required)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: formal-model
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      # Pinned to the stable v1.7.4 release. v1.8.0 is a prerelease that
+      # upstream re-publishes in place, which silently changes its checksum
+      # and broke this job for every PR (2026-10-15).
+      - name: Download TLA+ tools with checksum verification
+        run: |
+          curl -sfL -o tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tla2tools.jar" | sha256sum -c -
+
+      - name: Verify TLA+ files exist
+        run: |
+          if [ ! -f "ZKVote.tla" ]; then
+            echo "::error::ZKVote.tla not found"
+            exit 1
+          fi
+          if [ ! -f "ZKVote.ci.cfg" ]; then
+            echo "Error: ZKVote.ci.cfg not found"
+            exit 1
+          fi
+
+      - name: Run TLC model checker (fail on invariant violations)
+        run: |
+          java -XX:+UseParallelGC -cp tla2tools.jar tlc2.TLC \
+            ZKVote.tla \
+            -config ZKVote.ci.cfg \
+            -simulate num=10000 \
+            -depth 20 \
+            -workers auto \
+            -cleanup
+
+      - name: Display TLC output summary
+        if: always()
+        run: |
+          echo "TLC Model Check Summary:"
+          echo "- Configuration: ZKVote.ci.cfg"
+          echo "- Depth: 20"
+          echo "- Traces: 10000 per worker"
+          echo "- Status: Check logs above for results"
+
+  apalache-typecheck:
+    name: Apalache Type Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    defaults:
+      run:
+        working-directory: formal-model
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Apalache (via Docker with pinned version)
+        run: |
+          docker pull ghcr.io/apalache-mc/apalache:v0.58.3
+
+      - name: Run Apalache type check (fail on errors)
+        run: |
+          docker run --rm \
+            -e USER_ID="$(id -u)" \
+            -e GROUP_ID="$(id -g)" \
+            -v "$(pwd):/var/apalache" \
+            ghcr.io/apalache-mc/apalache:v0.58.3 \
+            --features=no-rows --out-dir=/tmp/apalache-out typecheck ZKVote.tla
+
+      - name: Display Apalache summary
+        if: always()
+        run: |
+          echo "Apalache Type Check Summary:"
+          echo "- Model: ZKVote.tla"
+          echo "- Status: Check logs above for results"
+
+  lean-compile:
+    name: Lean Proofs Compilation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: formal-model/groth16
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lean 4
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain leanprover/lean4:v4.34.1
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+
+      - name: Verify Lean files exist
+        run: |
+          if [ ! -f "BN254_Groth16.lean" ]; then
+            echo "Error: BN254_Groth16.lean not found"
+            exit 1
+          fi
+          if [ ! -f "Proofs.lean" ]; then
+            echo "Error: Proofs.lean not found"
+            exit 1
+          fi
+
+      - name: Compile Lean proofs
+        run: |
+          source "$HOME/.elan/env"
+          lean -o BN254_Groth16.olean BN254_Groth16.lean
+          LEAN_PATH=. lean Proofs.lean
+
+      - name: Display Lean summary
+        if: always()
+        run: |
+          echo "Lean Compilation Summary:"
+          echo "- Files: BN254_Groth16.lean, Proofs.lean"
+          echo "- Status: Check logs above for results"

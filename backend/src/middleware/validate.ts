@@ -5,7 +5,7 @@
  */
 
 import type { Request, Response, NextFunction } from "express";
-import type { ZodSchema, ZodError } from "zod";
+import type { ZodError, ZodType } from "zod";
 import { config } from "../config.js";
 import { log } from "../services/logger.js";
 
@@ -22,7 +22,7 @@ function formatZodError(error: ZodError): { field: string; message: string }[] {
 /**
  * Create validation middleware for request body
  */
-export function validateBody<T>(schema: ZodSchema<T>) {
+export function validateBody<T>(schema: ZodType<T, any, any>) {
   return (req: Request, res: Response, next: NextFunction) => {
     // Handle stripped request bodies in test mode
     if (config.stripRequestBodies) {
@@ -44,7 +44,7 @@ export function validateBody<T>(schema: ZodSchema<T>) {
       });
     }
 
-    // Replace body with validated/transformed data
+    // Replace body with validated/transformeed data
     req.body = result.data;
     next();
   };
@@ -53,7 +53,7 @@ export function validateBody<T>(schema: ZodSchema<T>) {
 /**
  * Create validation middleware for query parameters
  */
-export function validateQuery<T>(schema: ZodSchema<T>) {
+export function validateQuery<T>(schema: ZodType<T, any, any>) {
   return (req: Request, res: Response, next: NextFunction) => {
     const result = schema.safeParse(req.query);
 
@@ -70,7 +70,18 @@ export function validateQuery<T>(schema: ZodSchema<T>) {
       });
     }
 
-    // Replace query with validated/transformed data
+    // Replace query with validated/transformed data.
+    // Express 5 makes req.query a getter-only property on the prototype, so a
+    // plain assignment silently no-ops in sloppy mode and never reaches the
+    // catch block — req.query stays unmodified. Always use defineProperty so
+    // the validated data is visible on both req.query and req.validatedQuery.
+    Object.defineProperty(req, "query", {
+      value: result.data,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req as any).validatedQuery = result.data;
     next();
   };
@@ -79,7 +90,7 @@ export function validateQuery<T>(schema: ZodSchema<T>) {
 /**
  * Create validation middleware for URL parameters
  */
-export function validateParams<T>(schema: ZodSchema<T>) {
+export function validateParams<T>(schema: ZodType<T, any, any>) {
   return (req: Request, res: Response, next: NextFunction) => {
     const result = schema.safeParse(req.params);
 
@@ -91,6 +102,18 @@ export function validateParams<T>(schema: ZodSchema<T>) {
       });
     }
 
+    // Replace params with validated/transformed data
+    try {
+      (req as any).params = result.data;
+    } catch {
+      Object.defineProperty(req, "params", {
+        value: result.data,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (req as any).validatedParams = result.data;
     next();
   };

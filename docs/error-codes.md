@@ -40,6 +40,13 @@ All contract errors are numeric codes. This reference provides human-readable ex
 | 13 | `RootNotFound` | Merkle root not in history | Root was evicted or invalid |
 | 14 | `AlreadyInitialized` | Tree already initialized | Constructor already called |
 | 15 | `MemberNotRevoked` | Member has not been revoked | Can only reinstate revoked members |
+| 16 | `CommitmentAlreadyUsed` | Commitment already bound to a different address | Commitment collision |
+| 17 | `RateLimited` | Call rate-limited | Too many calls in one window |
+| 18 | `MaxRootsOutOfRange` | Requested root history size is out of range | Configure fewer roots |
+| 19 | `RootPinnedByProposal` | Root is pinned by an in-flight proposal | Wait for proposals to close |
+| 20 | `Sha3TreeNotInitialized` | Post-quantum tree not initialized for DAO | Initialize the PQ tree first |
+| 21 | `PqCommitmentExists` | C_PQ commitment already stored | Commitment collision |
+| 22 | `InvalidField` | Poseidon field symbol is not `BN254` or `BLS12_381` | Typo in the field passed to `init_tree` |
 
 ## Voting Contract Errors
 
@@ -125,6 +132,20 @@ try {
   }
 }
 ```
+
+## Token Errors
+
+| Code | Name | Description | Common Cause |
+|------|------|-------------|--------------|
+| 1 | `AlreadyInitialized` | Contract already initialized | Constructor called twice |
+| 2 | `InsufficientBalance` | Not enough tokens to transfer/burn | Check sender balance |
+| 3 | `InsufficientAllowance` | Spender has insufficient allowance | Check allowance or increase it |
+| 4 | `Unauthorized` | Caller not authorized for action | Use correct signer |
+| 5 | `InvalidAmount` | Amount cannot be negative | Pass non-negative amount |
+| 6 | `Overflow` | Arithmetic overflow in add/sub | Allowance near i128::MAX |
+| 7 | `AllowanceRaceRejected` | `approve` rejected non-zero to different non-zero | Use `increase_allowance` / `decrease_allowance` |
+| 8 | `NotAdmin` | Caller is not the token admin | Use admin account |
+| 9 | `NegativeAllowance` | Negative amount passed to increase/decrease | Pass non-negative amount |
 
 ### Backend (Node.js)
 

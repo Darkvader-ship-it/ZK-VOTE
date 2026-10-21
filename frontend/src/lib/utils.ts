@@ -23,6 +23,58 @@ export function truncateAddress(
 }
 
 /**
+ * Generate network-aware Stellar Expert link (testnet vs futurenet vs public)
+ */
+export function getExplorerUrl(
+  type: "tx" | "account" | "contract",
+  id: string,
+  networkName?: string,
+): string {
+  const envNet = (import.meta.env.VITE_STELLAR_NETWORK || import.meta.env.VITE_NETWORK_PASSPHRASE || "").toLowerCase();
+  const net = (networkName || envNet || "testnet").toLowerCase();
+  const pathNet = net.includes("future")
+    ? "futurenet"
+    : net.includes("main") || net.includes("public")
+      ? "public"
+      : "testnet";
+  return `https://stellar.expert/explorer/${pathNet}/${type}/${id}`;
+}
+
+export type StellarNetworkName = "testnet" | "futurenet" | "public";
+
+/** Normalise a network name/passphrase to the short form used in links. */
+export function normalizeNetworkName(net: string | null | undefined): StellarNetworkName {
+  const n = (net || "testnet").toLowerCase();
+  if (n.includes("future")) return "futurenet";
+  if (n.includes("main") || n.includes("public")) return "public";
+  return "testnet";
+}
+
+/**
+ * Qualify a shareable path with the network it was created on (#758), so a
+ * testnet link opened on a futurenet frontend can be detected instead of
+ * silently resolving the same ID on the wrong chain.
+ */
+export function withNetworkParam(path: string, network: string): string {
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}network=${normalizeNetworkName(network)}`;
+}
+
+/**
+ * Returns the link's network when it differs from the app's network, or null
+ * when they agree or the link carries no network (legacy links stay valid).
+ */
+export function getLinkNetworkMismatch(
+  search: string,
+  appNetwork: string,
+): StellarNetworkName | null {
+  const raw = new URLSearchParams(search).get("network");
+  if (!raw) return null;
+  const linkNet = normalizeNetworkName(raw);
+  return linkNet === normalizeNetworkName(appNetwork) ? null : linkNet;
+}
+
+/**
  * Truncate text to a maximum length
  * @param text Text to truncate
  * @param maxLength Maximum length before truncation (default: 30)

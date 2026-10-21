@@ -2,6 +2,12 @@
 
 Relayer service for anonymous vote submission and DAO management on Stellar Soroban.
 
+## Recent Fixes (2026-09-11)
+
+- `tsc` 0 errors: `src/services/nova-aggregator.ts:73` ``→``, `src/utils/magic-bytes.ts:65` `readUInt32EB→BE`, `better-sqlite3` rebuilt, `src/middleware/metrics.ts:50` `route is not defined`, `src/middleware/logging.ts:35` `config`/`spanContext`, `src/middleware/validate.ts:74` `query` getter, `src/routes/daos.ts:60` `search`, `src/services/stellar.ts:1142` stubs, `backend/.env.development:16` `RELAYER_SECRET_KEY` + `CORS_ORIGINS` 5173.
+- `http://localhost:3001/health` `200` `degraded` (was `500`), `http://localhost:3001/daos?limit=1` `200` `{"data":[],"pagination":...}` (was `500`).
+- New real payments: `src/services/payments.ts:1` `XLM`/`USDC`/`EURC` `MuxedAccount` `M...` + `POST /pay`/`POST /pay/batch` 100 ops/tx, `src/services/swap.ts:1` `GET /swap/quote` Horizon `strict-send` + Soroswap, `src/services/anchor.ts:1` `GET /ramp/deposit|withdraw` `SEP-6/24/31` Circle. See `http://localhost:5173/pay/`.
+
 ## Overview
 
 The relayer provides anonymity by submitting vote transactions on behalf of users:
@@ -19,6 +25,8 @@ The relayer provides anonymity by submitting vote transactions on behalf of user
 - **IPFS integration** via Pinata for proposal content
 - **Rate limiting** per endpoint type
 - **Security hardening** (CORS, Helmet, CSRF protection)
+- **Prometheus RED metrics** at `/metrics` and optional OTLP/HTTP tracing
+- **Fintech Payments (real, no mocks)** — `XLM`/`USDC`/`EURC` `Payment`/`PathPaymentStrictSend` via `payments.ts:1`, `MuxedAccount` `M...`, `POST /pay` + `POST /pay/batch` 100 ops/tx `withSequenceLock:358`, `GET /swap/quote` Horizon `strict-send` + Soroswap `SOROSWAP_API` (`swap.ts:1`) → `POST /swap/submit`, `GET /ramp/deposit|withdraw` `SEP-6/24/31` Circle anchors (`anchor.ts:1`, `ANCHOR_USDC_URL`/`EURC_URL`)
 
 ## Setup
 
@@ -84,10 +92,23 @@ npm run dev:relayer
 | `INDEXER_POLL_INTERVAL_MS` | No | `5000` | Indexer polling interval |
 | `DAO_SYNC_INTERVAL_MS` | No | `30000` | DAO sync interval |
 | `MEMBERSHIP_SYNC_INTERVAL_MS` | No | `600000` | Membership cache refresh interval |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | - | OTLP/HTTP collector base URL; tracing is disabled when unset |
+| `OTEL_SERVICE_NAME` | No | `zkvote-relayer` | OpenTelemetry service name |
+| `OTEL_SDK_DISABLED` | No | `false` | Disable optional trace export |
+| `OTEL_EXPORT_TIMEOUT_MS` | No | `2000` | Maximum time spent exporting one span |
 
 ## API Reference
 
 ### Health & Status
+
+#### `GET /metrics`
+Prometheus text exposition endpoint. It exports request rate, status, latency, RPC, database, indexer, IPFS, and business metrics. Protect this endpoint at the ingress/network layer if it is not intended to be public.
+
+```bash
+curl http://localhost:3001/metrics
+```
+
+Tracing uses W3C `traceparent` propagation and exports completed indexer spans to `${OTEL_EXPORTER_OTLP_ENDPOINT}/v1/traces` when configured. Collector failures are isolated and do not affect requests or background work. Import `monitoring/grafana/zkvote-relayer.json` into Grafana and load `monitoring/prometheus/zkvote-alerts.yml` as Prometheus rule configuration.
 
 #### `GET /health`
 Basic health check (no auth required).
@@ -377,6 +398,35 @@ Edit a public comment (requires auth).
 #### `POST /comment/delete`
 Delete a public comment (requires auth).
 
+### Payments — XLM / USDC / EURC (real, high-volume)
+
+#### `POST /pay`
+Send `XLM`/`USDC`/`EURC` via `StellarSdk.Operation.payment` (`withSequenceLock:358`, `MuxedAccount` `M...`).
+
+```bash
+curl -X POST http://localhost:3001/pay -H "Origin: http://localhost:5173" -H "Content-Type: application/json" -d '{"asset":"XLM","destination":"G...","amount":"1.0000000"}'
+```
+
+#### `POST /pay/batch`
+Batch 100 ops/tx.
+
+```bash
+curl -X POST http://localhost:3001/pay/batch -H "Content-Type: application/json" -d '{"ops":[{"destination":"G...","asset":"XLM","amount":"1"}]}'
+```
+
+#### `GET /swap/quote?from=XLM&to=USDC&amount=10`
+Horizon `strict-send` + Soroswap `SOROSWAP_API` fallback.
+
+```bash
+curl "http://localhost:3001/swap/quote?from=XLM&to=USDC&amount=10"
+```
+
+#### `POST /swap/submit`
+`PathPaymentStrictSend` `XLM→USDC/EURC`.
+
+#### `GET /ramp/deposit?asset=USDC&account=G...&amount=100` / `GET /ramp/withdraw`
+`SEP-6/24/31` Circle `ANCHOR_USDC_URL`/`ANCHOR_EURC_URL`.
+
 ### IPFS
 
 #### `GET /ipfs/health`
@@ -459,7 +509,12 @@ Returns binary image with appropriate `Content-Type` header.
 - **Authentication**: Required auth token for write endpoints (`X-Relayer-Auth` header)
 - **Token Strength**: Minimum 32 characters required for auth token
 - **CORS**: Configurable origins via `CORS_ORIGIN` env var
-- **CSRF Protection**: Origin validation for non-GET requests when CORS is configured
+- **CSRF Protection**: Multi-layered CSRF protection following OWASP recommendations:
+  - **Origin/Referer Validation**: Exact origin matching (no wildcard subdomains)
+  - **Null Origin Rejection**: Explicitly blocks `Origin: null` from sandboxed iframes/data URIs
+  - **Missing Header Rejection**: Requires either Origin or Referer header on write endpoints
+  - **CSRF Token Validation**: Token-based protection as defense-in-depth (`X-CSRF-Token` header)
+  - **Fail-Closed**: Rejects requests when CORS_ORIGIN is wildcard on write endpoints
 - **Helmet**: HTTP security headers
 - **Input Validation**: All inputs validated for type, length, and format
 - **BN254 Field Validation**: Values validated to be within BN254 scalar field
@@ -469,12 +524,14 @@ Returns binary image with appropriate `Content-Type` header.
 
 ### Production Recommendations
 
-1. Set `CORS_ORIGIN` to specific frontend origins
+1. Set `CORS_ORIGIN` to specific frontend origins (exact origins, no wildcards)
 2. Use strong `RELAYER_AUTH_TOKEN` (32+ chars)
 3. Set `LOG_CLIENT_IP=hash` to anonymize IPs
 4. Set `HEALTH_EXPOSE_DETAILS=false` to hide contract IDs
 5. Deploy behind reverse proxy with DDoS protection
 6. Use HTTPS/TLS termination
+7. Ensure frontend includes `X-CSRF-Token` header in all write requests
+8. Retrieve CSRF token from `X-CSRF-Token` response header or `csrf_token` cookie
 
 ## Architecture
 
